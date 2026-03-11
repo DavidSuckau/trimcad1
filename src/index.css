@@ -698,3 +698,32 @@ body {
   color: #bbb;
   cursor: not-allowed;
 }
+
+/* DesignBar: untere Anzeige-Leiste im Arbeitsbereich */
+.design-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-height: 26px;
+  padding: 0 0.75rem;
+  border-top: 1px solid #e0e0e0;
+  background: #fafafa;
+  font-size: 0.75rem;
+  color: #444;
+  user-select: none;
+}
+.design-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.design-bar-item input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #1565c0;
+}

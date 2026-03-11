@@ -122,6 +122,11 @@ type Store = {
   // UI
   showGrid: boolean
   showPoints: boolean
+  showGrain: boolean
+  showNotches: boolean
+  showDrills: boolean
+  showInternalLines: boolean
+  showPieceNames: boolean
   rulerMode: boolean
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
@@ -145,6 +150,11 @@ type Store = {
   setTool: (t: Tool) => void
   setShowGrid: (v: boolean) => void
   setShowPoints: (v: boolean) => void
+  setShowGrain: (v: boolean) => void
+  setShowNotches: (v: boolean) => void
+  setShowDrills: (v: boolean) => void
+  setShowInternalLines: (v: boolean) => void
+  setShowPieceNames: (v: boolean) => void
   setRulerMode: (v: boolean) => void
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
@@ -272,6 +282,11 @@ export const useStore = create<Store>((set, get) => ({
   tool: 'select',
   showGrid: true,
   showPoints: true,
+  showGrain: true,
+  showNotches: true,
+  showDrills: true,
+  showInternalLines: true,
+  showPieceNames: true,
   rulerMode: false,
   rulerLine: null,
   pendingNahtzugabeClick: false,
@@ -337,6 +352,11 @@ export const useStore = create<Store>((set, get) => ({
   setTool: (t) => set({ tool: t }),
   setShowGrid: (v) => set({ showGrid: v }),
   setShowPoints: (v) => set({ showPoints: v }),
+  setShowGrain: (v) => set({ showGrain: v }),
+  setShowNotches: (v) => set({ showNotches: v }),
+  setShowDrills: (v) => set({ showDrills: v }),
+  setShowInternalLines: (v) => set({ showInternalLines: v }),
+  setShowPieceNames: (v) => set({ showPieceNames: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),

@@ -1,6 +1,7 @@
 import { Toolbar } from './components/Toolbar'
 import { Sidebar } from './components/Sidebar'
 import { WorkspaceCanvas } from './components/WorkspaceCanvas'
+import { DesignBar } from './components/DesignBar'
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
           <WorkspaceCanvas />
         </main>
       </div>
+      <DesignBar />
     </div>
   )
 }

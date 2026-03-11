@@ -171,6 +171,11 @@ function PieceGroup({
   onGrainArrowClick,
   notchIdBeingDragged,
   cutSeamSwapped,
+  showGrain,
+  showNotches,
+  showDrills,
+  showInternalLines,
+  showPieceNames,
 }: {
   piece: PatternPiece
   isSelected: boolean
@@ -181,10 +186,13 @@ function PieceGroup({
   onGrainArrowLeave?: () => void
   onGrainArrowMove?: (e: React.PointerEvent) => void
   onGrainArrowClick?: (e: React.MouseEvent) => void
-  /** Beim Verschieben: dieser Notch wird nur in der Vorschau gezeichnet, damit er direkt mitzieht. */
   notchIdBeingDragged?: string | null
-  /** Wenn true: Außenkontur durchgezogen, Kontur gestrichelt (statt umgekehrt). */
   cutSeamSwapped?: boolean
+  showGrain?: boolean
+  showNotches?: boolean
+  showDrills?: boolean
+  showInternalLines?: boolean
+  showPieceNames?: boolean
 }) {
   const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
   const tx = `translate(${transform.x},${transform.y}) rotate(${transform.rotation}) scale(${transform.mirrored ? -1 : 1},1)`
@@ -234,7 +242,7 @@ function PieceGroup({
       {cutLine.length === 0 && (
         <circle cx={0} cy={0} r={2} fill="none" stroke="#ccc" strokeWidth={0.5} pointerEvents="none" />
       )}
-      {internalLines.map((curve, i) => (
+      {showInternalLines !== false && internalLines.map((curve, i) => (
         <path
           key={`internal-${i}`}
           d={curveToPathD([curve])}
@@ -245,7 +253,7 @@ function PieceGroup({
           pointerEvents="none"
         />
       ))}
-      {notches.map((n) => {
+      {showNotches !== false && notches.map((n) => {
         if (notchIdBeingDragged === n.id) return null
         const depth = n.depth
         const width = n.width ?? 6
@@ -292,7 +300,7 @@ function PieceGroup({
           </g>
         )
       })}
-      {drills.map((d) => (
+      {showDrills !== false && drills.map((d) => (
         <circle
           key={d.id}
           cx={d.center.x}
@@ -304,7 +312,7 @@ function PieceGroup({
           pointerEvents="none"
         />
       ))}
-      {cutLine.length >= 3 && (() => {
+      {showGrain !== false && cutLine.length >= 3 && (() => {
         const bounds = curvesBounds(cutLine)
         if (!bounds) return null
         const cx = (bounds.minX + bounds.maxX) / 2
@@ -389,18 +397,20 @@ function PieceGroup({
                 />
               )}
             </g>
-            <text
-              x={cx + 10}
-              y={midY}
-              textAnchor="start"
-              dominantBaseline="middle"
-              fill="#333"
-              fontSize={3.5}
-              fontFamily="sans-serif"
-              pointerEvents="none"
-            >
-              {piece.name}
-            </text>
+            {showPieceNames !== false && (
+              <text
+                x={cx + 10}
+                y={midY}
+                textAnchor="start"
+                dominantBaseline="middle"
+                fill="#333"
+                fontSize={3.5}
+                fontFamily="sans-serif"
+                pointerEvents="none"
+              >
+                {piece.name}
+              </text>
+            )}
           </>
         )
       })()}
@@ -430,6 +440,11 @@ export function WorkspaceCanvas() {
     tool,
     showGrid,
     showPoints,
+    showGrain,
+    showNotches,
+    showDrills,
+    showInternalLines,
+    showPieceNames,
     rulerMode,
     rulerLine,
     setView,
@@ -2025,6 +2040,11 @@ export function WorkspaceCanvas() {
               hoveredSegmentCurveIndex={effectiveSegmentForHighlight?.pieceId === piece.id ? effectiveSegmentForHighlight.curveIndex : null}
               onPointerDown={handlePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
+              showGrain={showGrain}
+              showNotches={showNotches}
+              showDrills={showDrills}
+              showInternalLines={showInternalLines}
+              showPieceNames={showPieceNames}
               notchIdBeingDragged={
                 dragging?.kind === 'notchMove' &&
                 dragging.pieceId === piece.id &&
