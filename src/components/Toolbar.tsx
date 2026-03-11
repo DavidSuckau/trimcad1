@@ -571,15 +571,6 @@ export function Toolbar() {
           </span>
           <span className="toolbar-ruler-btn-label">Linial</span>
         </button>
-        <button
-          type="button"
-          className={`toolbar-points-toggle ${showPoints ? 'active' : ''}`}
-          onClick={() => setShowPoints(!showPoints)}
-          title={showPoints ? 'Punkte ausblenden' : 'Punkte einblenden'}
-          aria-pressed={showPoints}
-        >
-          Punkte {showPoints ? 'ein' : 'aus'}
-        </button>
         <div className="toolbar-zoom">
           <button type="button" className="toolbar-zoom-btn" onClick={handleZoomOut} aria-label="Verkleinern">
             −
