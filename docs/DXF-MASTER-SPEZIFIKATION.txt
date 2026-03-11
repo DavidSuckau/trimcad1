@@ -1,0 +1,639 @@
+================================================================================
+  DXF-MASTER-SPEZIFIKATION  –  TrimTex Projekt
+  Kompatible Ausgabedateien fuer CNC-Cutter (Zuend/Gerber/Lectra/Bullmer)
+================================================================================
+
+  Projekt:    TrimTex – Einheitliche DXF-Ausgabe mit geometrischen Notches
+  Erstellt:   SUCKAU David
+  Stand:      09.03.2026 – Version 2.0
+  Status:     VERBINDLICH – Einzige Wahrheitsquelle fuer den DXF-Export
+
+================================================================================
+  INHALTSVERZEICHNIS
+================================================================================
+
+   1.  Ziel und Geltungsbereich
+   2.  DXF-Formatvorgaben (AC1009 / R12 ASCII)
+   3.  HEADER-Sektion
+   4.  Erlaubte DXF-Sektionen und Aufbau
+   5.  Layer-Konzept
+   6.  POLYLINE-Struktur (zwingend)
+   7.  Schliessung von Konturen
+   8.  Bezier-Tessellierung (Kurven zu Punktketten)
+   9.  Notches: Geometrische Kodierung in der POLYLINE
+  10.  Notch-Erkennungsalgorithmus (Pseudocode)
+  11.  Drills (Bohrpunkte)
+  12.  Entity-Reihenfolge in der ENTITIES-Sektion
+  13.  Verbotene DXF-Entities und -Strukturen
+  14.  Numerische Regeln und Toleranzen
+  15.  Empfohlene Parameter-Tabelle
+  16.  Minimalbeispiel: Vollstaendiges DXF-Skelett
+  17.  Validierungs-Checkliste
+  18.  Delta zum aktuellen Code (dxfWriter.ts)
+
+
+================================================================================
+  1. ZIEL UND GELTUNGSBEREICH
+================================================================================
+
+  Dieses Dokument beschreibt die verbindliche Spezifikation fuer die Erzeugung
+  von DXF-Dateien, die von CNC-Schneidsystemen (Zuend, Gerber, Lectra, Bullmer
+  u. a.) zuverlaessig verarbeitet werden.
+
+  PRIO:  Der Cutter schneidet NUR die Kontur.
+         Exportiert wird die AUSSENLINIE (cutLine) als EINE geschlossene
+         POLYLINE pro Schnittteil. Notch-Kerben sind geometrische
+         Einbuchtungen direkt in dieser Polyline – keine separaten Entities.
+
+  Das DXF enthaelt pro Piece:
+  - EINE geschlossene POLYLINE auf Layer CUT (= Aussenlinie / Schnittkontur)
+  - Notches als V-Einbuchtungen (3 Vertices) in dieser Polyline
+  - Sonst nichts (kein DRILL, kein TEXT, kein GRAIN, kein SEAM)
+
+  Besonderer Fokus liegt auf:
+  - Kodierung von Notches (Knipse/Kerben) OHNE Metadaten – rein geometrisch
+    als Einbuchtungen innerhalb der POLYLINE.
+  - Reproduzierbarkeit: Die Software soll Dateien erzeugen, die mit
+    bestehenden Cutter-Workflows identisch funktionieren.
+  - Kompatibilitaet mit Gerber PDS, Optitex, Lectra, Tukatech, Audaces.
+
+  Geltungsbereich: Textil-/Schnittmuster-Daten (2D Pattern), NICHT
+  generisches CAD-DXF.
+
+
+================================================================================
+  2. DXF-FORMATVORGABEN (AC1009 / R12 ASCII)
+================================================================================
+
+  FORMAT:       AutoCAD R12 ASCII (Kennung: AC1009) ist VERPFLICHTEND.
+  BEGRUENDUNG:  Die Textilindustrie erwartet DXF R12 ASCII.
+                Neuere Versionen (AC1015, AC1021 ...) funktionieren NICHT
+                in Textilsystemen.
+
+  REGELN:
+  - Keine Splines
+  - Keine erweiterten Objekttypen
+  - Keine Bloecke mit Attributen fuer Notches
+  - ASCII-Kodierung (kein Binaer-DXF)
+  - Zeilenenden: CRLF (\r\n) fuer Windows-Kompatibilitaet
+
+
+================================================================================
+  3. HEADER-SEKTION
+================================================================================
+
+  Der HEADER muss minimal folgende Variablen enthalten:
+
+  $ACADVER    = AC1009          (AutoCAD R12)
+  $INSUNITS   = 5               (5 = Millimeter)
+  $EXTMIN     = X_min, Y_min    (Bounding Box Minimum)
+  $EXTMAX     = X_max, Y_max    (Bounding Box Maximum)
+
+  WICHTIG:  $INSUNITS = 5, NICHT 4.
+            In der DXF-Spezifikation ist:
+              4 = Zentimeter  (FALSCH fuer uns!)
+              5 = Millimeter  (RICHTIG)
+
+  Beispiel:
+
+    0
+    SECTION
+    2
+    HEADER
+    9
+    $ACADVER
+    1
+    AC1009
+    9
+    $INSUNITS
+    70
+    5
+    9
+    $EXTMIN
+    10
+    0.000000
+    20
+    0.000000
+    30
+    0
+    9
+    $EXTMAX
+    10
+    500.000000
+    20
+    300.000000
+    30
+    0
+    0
+    ENDSEC
+
+
+================================================================================
+  4. ERLAUBTE DXF-SEKTIONEN UND AUFBAU
+================================================================================
+
+  Die DXF-Datei besteht aus folgenden Sektionen in dieser Reihenfolge:
+
+    1. HEADER     – Pflicht (minimal: $ACADVER, $INSUNITS, $EXTMIN, $EXTMAX)
+    2. ENTITIES   – Pflicht (enthaelt die gesamte Geometrie)
+    3. EOF        – Pflicht (Dateiende-Markierung)
+
+  KEINE TABLES-Sektion (Gerber PDS erzeugt Dateien ohne TABLES).
+  KEINE BLOCKS-Sektion.
+
+  Struktur bewusst minimal – wie Gerber-PDS-Export.
+
+
+================================================================================
+  5. LAYER-KONZEPT
+================================================================================
+
+  Aktuell verwendeter Layer:
+
+    Layer       Bedeutung                       Status
+    -------     ----------------------------    ----------
+    CUT         Nahtlinie / Schnittkontur       EINZIGER LAYER
+
+  Alle Geometrie liegt auf Layer CUT. Pro Schnittteil gibt es genau EINE
+  POLYLINE auf diesem Layer. Notch-Kerben sind geometrische Einbuchtungen
+  innerhalb dieser Polyline – kein separater NOTCH-Layer.
+
+  Alternative Benennung (Gerber-Stil):
+
+    TxxxLyyy    z. B. T002L001 = Teil 2, Linie 1
+
+  Zukuenftig koennen weitere Layer hinzugefuegt werden (DRILL, GRAIN, TEXT),
+  falls die Zuschnittanlage diese benoetigt.
+
+
+================================================================================
+  6. POLYLINE-STRUKTUR (ZWINGEND)
+================================================================================
+
+  Alle Konturen muessen als alte POLYLINE + VERTEX + SEQEND aufgebaut sein.
+
+  PFLICHT-AUFBAU:
+
+    0
+    POLYLINE
+    8
+    LAYERNAME
+    66
+    1
+    70
+    0
+    0
+    VERTEX
+    8
+    LAYERNAME
+    10
+    X-Wert
+    20
+    Y-Wert
+    0
+    VERTEX
+    8
+    LAYERNAME
+    10
+    X-Wert
+    20
+    Y-Wert
+    ...
+    0
+    SEQEND
+
+  REGELN:
+  - 66 MUSS 1 sein (Vertices folgen)
+  - 70 = 0  (offene Polyline, Schliessung ueber Punkt-Wiederholung, s. Kap. 7)
+  - Nur X (Gruppencode 10) und Y (Gruppencode 20) – KEIN Z oder Z=0
+  - Kein 3D-Flag
+  - SEQEND darf NICHT fehlen
+
+  VERBOTEN:
+  - LWPOLYLINE (neueres Format, inkompatibel mit Textilsystemen!)
+  - LINE-Entities fuer die Aussenkontur (nur POLYLINE)
+  - ARC-Entities (muessen vorher in Liniensegmente zerlegt werden)
+  - SPLINE-Entities
+
+
+================================================================================
+  7. SCHLIESSUNG VON KONTUREN
+================================================================================
+
+  Methode: Letzter Punkt = Erster Punkt.
+
+  Die POLYLINE wird NICHT ueber das Flag 70=1 geschlossen, sondern dadurch,
+  dass der letzte VERTEX exakt die gleichen Koordinaten hat wie der erste.
+
+  Das Flag 70 bleibt auf 0 (offen).
+
+  So macht es Gerber PDS – und es funktioniert in allen Systemen.
+
+  Beispiel:
+    VERTEX  10  0.000  20  0.000    <-- Erster Punkt
+    VERTEX  10  100.0  20  0.000
+    VERTEX  10  100.0  20  50.00
+    VERTEX  10  0.000  20  50.00
+    VERTEX  10  0.000  20  0.000    <-- Letzter Punkt = Erster Punkt
+
+
+================================================================================
+  8. BEZIER-TESSELLIERUNG (KURVEN ZU PUNKTKETTEN)
+================================================================================
+
+  SVG und interne Modelle verwenden kubische Bezier-Kurven.
+  DXF R12 fuer Textil darf KEINE Splines enthalten.
+
+  ALLE Kurven muessen in Punktsequenzen (Polyline-Vertices) umgewandelt werden.
+
+  TESSELLIERUNGS-PARAMETER:
+  - Segmentlaenge:        5 – 8 mm (Ziel, ca. 6 mm empfohlen)
+  - Methode:              Bogenlaenge des Beziers berechnen, durch Segmentlaenge
+                          teilen, gleichmaessig in t samplen
+
+  BEGRUENDUNG:
+  Der CNC-Cutter faehrt gerade Linienstuecke ab. Segmente unter 5 mm bringen
+  keinen praktischen Vorteil, da die mechanische Aufloesung des Cutters
+  begrenzt ist. Zu feine Segmente (< 1 mm) blaehen die Datei unnoetig auf.
+  5–8 mm Segmente ergeben glatte Kurven bei praxistauglicher Dateigroesse.
+
+  Empfohlene Methode (Pseudocode):
+
+    function bezierToPoints(p0, cp1, cp2, p3, segmentMm=6):
+      arcLength = bogenlaenge(p0, cp1, cp2, p3)
+      n = max(2, ceil(arcLength / segmentMm))
+      points = []
+      for i = 0 to n:
+        t = i / n
+        points.append(bezierAt(t))
+      return points
+
+  REGELN:
+  - Segmente zu gross (> 10 mm) -> Kurve wird sichtbar eckig
+  - Segmente zu klein (< 2 mm)  -> Datei wird unnoetig gross
+  - Guter Kompromiss:             ~6 mm Segmentlaenge
+
+
+================================================================================
+  9. NOTCHES: GEOMETRISCHE KODIERUNG IN DER POLYLINE
+================================================================================
+
+  KERNPRINZIP:
+  Notches werden als kurze Einbuchtungen (geometrische Mini-Segmente)
+  DIREKT in die POLYLINE eingebettet. Keine separaten LINE-Entities,
+  keine Metadaten.
+
+  Der CNC-Cutter erkennt die Minigeometrie und wandelt sie in eine
+  Werkzeugbewegung (Knips) um – er faehrt die Geometrie NICHT 1:1 ab.
+
+  GEOMETRISCHE DEFINITION:
+  - Ein Notch besteht typisch aus 3 zusaetzlichen VERTEX-Punkten
+    in der POLYLINE (Einbuchtung nach aussen)
+  - Segmentlaengen innerhalb der Kerbe: < 2 – 5 mm (projektspezifisch)
+  - Winkelaenderung deutlich (> 45 Grad) gegenueber lokalem Konturverlauf
+  - Position: an der Aussenkontur (extern)
+
+  BEISPIEL (V-Notch als 3 Punkte in der Kontur):
+
+    ... regulaerer Konturpunkt ...
+    VERTEX  10  60.000  20  50.000    <-- Kontur vor Notch
+    VERTEX  10  62.000  20  46.000    <-- Notch-Spitze (Einbuchtung)
+    VERTEX  10  64.000  20  50.000    <-- Kontur nach Notch
+    ... regulaerer Konturpunkt ...
+
+  PARAMETER:
+  - Notch-Laenge (kurze Segmente):  Ziel 1.5 – 3.0 mm, max 5.0 mm
+  - Tiefe der Einbuchtung:          Typisch 2 – 4 mm
+  - Breite (entlang Kontur):        Typisch 2 – 5 mm
+
+  INTERPRETATION DURCH DEN CUTTER:
+  - Systeme erkennen die Mini-Geometrie (kurze Segmente + scharfer Winkel)
+  - Sie wandeln sie in einen Knips/Kerbe um
+  - Die exakte Geometrie wird NICHT 1:1 abgefahren
+
+  AKTUELLER CODE (UMGESETZT):
+  Notch-Einbuchtungen werden direkt in die POLYLINE auf Layer CUT
+  eingebettet. Die Funktion cutLineWithNotchCutouts() erzeugt die
+  V-Kerben als zusaetzliche Vertices in der Nahtlinien-Kontur.
+  Keine separaten LINE-Entities, keine Metadaten.
+
+
+================================================================================
+  10. NOTCH-ERKENNUNGSALGORITHMUS (PSEUDOCODE)
+================================================================================
+
+  Dieser Algorithmus dient der Validierung: Er prueft, ob eine erzeugte
+  DXF-Datei korrekte Notches enthaelt.
+
+    SHORT_THRESH = 3.0     // mm – max. Segmentlaenge fuer Notch-Erkennung
+    ANGLE_THRESH = 45      // Grad – min. Winkelaenderung
+
+    for i in range(1, len(vertices) - 1):
+        p_prev = vertices[i - 1]
+        p      = vertices[i]
+        p_next = vertices[i + 1]
+
+        seg1 = distance(p_prev, p)
+        seg2 = distance(p, p_next)
+        ang  = angle_between(vector(p_prev, p), vector(p, p_next))
+
+        if seg1 < SHORT_THRESH and seg2 < SHORT_THRESH and ang > ANGLE_THRESH:
+            if is_external_indentation(p_prev, p, p_next, contour_normal):
+                mark_as_notch(i)
+
+  PARAMETER-EMPFEHLUNGEN:
+  - SHORT_THRESH = 2.0 – 3.0 mm (projektspezifisch)
+  - ANGLE_THRESH = 45 – 110 Grad (abhaengig vom erwarteten Kerbtyp)
+
+
+================================================================================
+  11. DRILLS (BOHRPUNKTE) – DERZEIT NICHT EXPORTIERT
+================================================================================
+
+  Drills werden aktuell NICHT ins DXF exportiert.
+  Die DXF-Datei enthaelt nur die Kontur (Nahtlinie mit Notch-Kerben).
+
+  Falls zukuenftig benoetigt, Drills als CIRCLE auf Layer DRILL:
+
+    0
+    CIRCLE
+    8
+    DRILL
+    10
+    X-Mittelpunkt
+    20
+    Y-Mittelpunkt
+    30
+    0
+    40
+    Radius
+
+
+================================================================================
+  12. ENTITY-STRUKTUR IN DER ENTITIES-SEKTION
+================================================================================
+
+  Pro Schnittteil (Piece) wird genau EINE Entity exportiert:
+
+    1. CUT     – Nahtlinie als geschlossene POLYLINE (mit Notch-Kerben)
+
+  Notches sind geometrische Einbuchtungen IN der CUT-POLYLINE.
+  Es gibt keine separaten NOTCH-, SEAM-, DRILL-, TEXT- oder GRAIN-Entities.
+
+  Mehrere Pieces werden nacheinander in der ENTITIES-Sektion aufgelistet.
+
+
+================================================================================
+  13. VERBOTENE DXF-ENTITIES UND -STRUKTUREN
+================================================================================
+
+  Folgende Entities/Strukturen duerfen NICHT in der Ausgabedatei vorkommen:
+
+    VERBOTEN              GRUND
+    --------------------  -----------------------------------------------
+    SPLINE                Textilsysteme koennen keine Splines
+    LWPOLYLINE            Neueres Format, inkompatibel mit R12-Systemen
+    ELLIPSE               Nicht unterstuetzt in Textil-CAM
+    HATCH                 Flaechenfuellungen irrelevant
+    MTEXT                 Mehrzeiliger Text, nicht unterstuetzt
+    DIMENSION             Bemasstungen irrelevant fuer Cutter
+    TRACE                 Veraltete Entity
+    BLOCK + INSERT        Keine Bloecke mit Inserts fuer Notches/Geometrie
+    ATTRIB / ATTDEF       Keine Attribut-Bloecke
+
+  Alles muss vorher in einfache Linien/Polylinien zerlegt werden.
+
+
+================================================================================
+  14. NUMERISCHE REGELN UND TOLERANZEN
+================================================================================
+
+  EINHEIT:          Millimeter (alle Koordinaten in mm)
+  GENAUIGKEIT:      3 – 6 Dezimalstellen
+  FORMAT-FUNKTION:  Ganzzahlen ohne Dezimalpunkt, sonst toFixed(6)
+
+  DUPLIKAT-ENTFERNUNG:
+  - Aufeinanderfolgende Punkte mit Abstand < 0.01 mm zusammenfuehren
+  - Keine identischen Vertices hintereinander
+
+  SELBSTUEBERSCHNEIDUNGEN:
+  - POLYLINE darf sich NICHT selbst ueberschneiden
+  - Ausnahme: Notch-Einbuchtungen (die gehen bewusst nach innen/aussen)
+
+  BOUNDING BOX:
+  - $EXTMIN und $EXTMAX muessen korrekt berechnet werden
+  - Alle transformierten Koordinaten beruecksichtigen
+
+
+================================================================================
+  15. EMPFOHLENE PARAMETER-TABELLE
+================================================================================
+
+    Parameter                       Wert            Einheit
+    ----------------------------    -----------     -------
+    DXF-Version                     AC1009          -
+    $INSUNITS                       5               (mm)
+    Dezimalstellen                  3 – 6           -
+    Bezier-Segmentlaenge            5 – 8 (Ziel 6)  mm
+    Notch-Segmentlaenge             1.5 – 3.0       mm
+    Notch-Segmentlaenge max.        5.0             mm
+    Notch-Tiefe typisch             2 – 4           mm
+    Notch-Breite typisch            2 – 5           mm
+    Notch-Winkelaenderung min.      45              Grad
+    Min. Abstand zw. Notches        >= 10           mm
+    Duplikat-Schwelle               < 0.01          mm
+    Polyline-Flag 70                0               (offen)
+    Polyline-Flag 66                1               (Vertices)
+    Zeilenende                      CRLF            (\r\n)
+
+
+================================================================================
+  16. MINIMALBEISPIEL: VOLLSTAENDIGES DXF-SKELETT
+================================================================================
+
+  Rechteck 100x50mm mit einem V-Notch an der oberen Kante:
+
+    0
+    SECTION
+    2
+    HEADER
+    9
+    $ACADVER
+    1
+    AC1009
+    9
+    $INSUNITS
+    70
+    5
+    9
+    $EXTMIN
+    10
+    0.000000
+    20
+    0.000000
+    30
+    0
+    9
+    $EXTMAX
+    10
+    100.000000
+    20
+    50.000000
+    30
+    0
+    0
+    ENDSEC
+    0
+    SECTION
+    2
+    ENTITIES
+    0
+    POLYLINE
+    8
+    CUT
+    66
+    1
+    70
+    0
+    0
+    VERTEX
+    8
+    CUT
+    10
+    0.000000
+    20
+    0.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    100.000000
+    20
+    0.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    100.000000
+    20
+    50.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    60.000000
+    20
+    50.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    62.000000
+    20
+    46.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    64.000000
+    20
+    50.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    0.000000
+    20
+    50.000000
+    0
+    VERTEX
+    8
+    CUT
+    10
+    0.000000
+    20
+    0.000000
+    0
+    SEQEND
+    0
+    ENDSEC
+    0
+    EOF
+
+  ERLAEUTERUNG:
+  - Kein TABLES-Block (wie bei Gerber PDS)
+  - CUT-Polyline mit 8 Vertices
+  - Vertex 4-6 bilden den V-Notch (60,50 -> 62,46 -> 64,50)
+  - Letzter Vertex = erster Vertex (Schliessung)
+  - Keine Z-Koordinaten
+
+
+================================================================================
+  17. VALIDIERUNGS-CHECKLISTE
+================================================================================
+
+  GEOMETRIE-CHECKS:
+  [ ] POLYLINE vorhanden mit SEQEND
+  [ ] Keine LINE/ARC/SPLINE/LWPOLYLINE fuer Konturen
+  [ ] Einheiten Millimeter ($INSUNITS = 5)
+  [ ] $ACADVER = AC1009
+  [ ] $EXTMIN und $EXTMAX korrekt
+  [ ] Konturen geschlossen (letzter Punkt = erster Punkt)
+  [ ] Keine doppelten Vertices (Abstand < 0.01mm)
+  [ ] Keine Selbstueberschneidungen
+  [ ] 66 = 1 bei jeder POLYLINE
+  [ ] 70 = 0 bei jeder POLYLINE
+  [ ] Keine Z-Koordinaten (oder Z=0)
+
+  NOTCH-CHECKS:
+  [ ] Notches als Einbuchtung in CUT-POLYLINE (nicht separate Entities)
+  [ ] Kurze Segmente < Grenzwert (3 mm)
+  [ ] Winkelaenderung > Grenzwert (45 Grad)
+  [ ] Einbuchtung korrekt orientiert (nach aussen)
+  [ ] Notch-Tiefe im erwarteten Bereich (2-4 mm)
+
+  BEZIER-CHECKS:
+  [ ] Alle Bezier-Kurven tesselliert (keine Splines)
+  [ ] Segmentlaenge 5 – 8 mm (ca. 6 mm)
+  [ ] Kurven glatt genug fuer den Cutter (keine groben Knicke)
+
+  PROZESS-CHECKS:
+  [ ] Import im Cutter/CAM ohne Warnungen
+  [ ] Testzuschnitt: Notches an erwarteten Positionen
+  [ ] Pro Piece genau EINE POLYLINE auf Layer CUT
+  [ ] Keine separaten SEAM/NOTCH/DRILL/TEXT/GRAIN Entities
+  [ ] Zeilenenden CRLF
+
+
+================================================================================
+  18. AENDERUNGSPROTOKOLL (dxfWriter.ts)
+================================================================================
+
+  Alle Aenderungen wurden am 09.03.2026 umgesetzt:
+
+  NR  AENDERUNG                                                  STATUS
+  --  ---------------------------------------------------------  --------
+  1   $ACADVER AC1012 -> AC1009                                  ERLEDIGT
+  2   $INSUNITS 4 -> 5 (Millimeter)                              ERLEDIGT
+  3   POLYLINE 70=8 -> 70=0                                      ERLEDIGT
+  4   Bezier-Tessellierung ~6mm Segmente                         ERLEDIGT
+  5   Notch-Kerben in POLYLINE eingebettet (keine LINE-Entities) ERLEDIGT
+  6   Konturen geschlossen (letzter Punkt = erster Punkt)        ERLEDIGT
+  7   TABLES + BLOCKS Sektionen entfernt                         ERLEDIGT
+  8   Nur EINE POLYLINE pro Piece (Nahtlinie auf CUT-Layer)      ERLEDIGT
+  9   Separate SEAM/NOTCH/DRILL/TEXT/GRAIN Entities entfernt     ERLEDIGT
+  10  Duplikat-Entfernung (< 0.01mm)                             ERLEDIGT
+  11  Z-Koordinaten von VERTEX entfernt                          ERLEDIGT
+  12  Export-Kontur = cutLine (Aussenlinie) mit Notch-Kerben      ERLEDIGT
+  13  Dateiname: YYYY_MM_DD_N.dxf (Datum + laufende Nummer)      ERLEDIGT
+
+
+================================================================================
+  ENDE DER SPEZIFIKATION
+================================================================================

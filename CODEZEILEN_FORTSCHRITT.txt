@@ -1,0 +1,60 @@
+================================================================================
+  CODEZEILEN – FORTSCHRITT (nur für uns / AI-Info)
+  Einfach neue Einträge unten anhängen, dann sieht man im Laufe der Zeit,
+  wie viel Code dazukommt.
+================================================================================
+
+Datum: 05.03.2025
+
+Nach Sprache:
+  TypeScript (.ts)    1040
+  TSX (.tsx)          1899
+  JavaScript (.js)        0
+  JSX (.jsx)              0
+  Python (.py)            0
+  Java (.java)            0
+  CSS (.css)            488
+  HTML (.html)            12
+  (weitere Sprachen bei Bedarf ergänzen)
+
+  GESAMT:              3439  Zeilen
+
+--------------------------------------------------------------------------------
+
+Datum: 05.03.2025 (aktualisiert)
+
+Nach Sprache:
+  TypeScript (.ts)    1408
+  TSX (.tsx)          2505
+  JavaScript (.js)        0
+  JSX (.jsx)              0
+  Python (.py)            0
+  Java (.java)            0
+  CSS (.css)            496
+  HTML (.html)            12
+  (weitere Sprachen bei Bedarf ergänzen)
+
+  GESAMT:              4421  Zeilen
+
+--------------------------------------------------------------------------------
+
+Datum: 05.03.2025 (aktualisiert)
+
+Nach Sprache:
+  TypeScript (.ts)    1757
+  TSX (.tsx)          2887
+  JavaScript (.js)        0
+  JSX (.jsx)              0
+  Python (.py)            0
+  Java (.java)            0
+  CSS (.css)            521
+  HTML (.html)            12
+  (weitere Sprachen bei Bedarf ergänzen)
+
+  GESAMT:              5177  Zeilen
+
+  Mehr als beim ersten Eintrag (3439 Zeilen):  +50,5 %
+
+--------------------------------------------------------------------------------
+(Neuen Eintrag mit aktuellem Datum und neuen Zeilenzahlen hier darunter einfügen.)
+
