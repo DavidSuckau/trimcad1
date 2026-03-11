@@ -470,25 +470,19 @@ export const useStore = create<Store>((set, get) => ({
     const tgtNotches = getNotchesOnEdge(tgtPiece, tgtIndices)
     if (tgtNotches.length !== cumPositions.length) { set({ seamAdjustmentDialog: null }); return }
 
-    const newNotches = [...tgtPiece.notches]
+    const targetPoints: { notchId: string; point: Point }[] = []
     for (let i = 0; i < tgtNotches.length; i++) {
-      const desiredArcLen = cumPositions[i]
-      const result = pointAtPathLength(tgtSubCurves, desiredArcLen)
-      if (!result) continue
-      const nIdx = newNotches.findIndex((n) => n.id === tgtNotches[i].notchId)
-      if (nIdx < 0) continue
-      newNotches[nIdx] = { ...newNotches[nIdx], position: { ...result.point } }
+      const result = pointAtPathLength(tgtSubCurves, cumPositions[i])
+      if (result) targetPoints.push({ notchId: tgtNotches[i].notchId, point: result.point })
     }
+    if (targetPoints.length === 0) { set({ seamAdjustmentDialog: null }); return }
 
-    set((st) => ({
-      workspace: {
-        ...st.workspace,
-        pieces: st.workspace.pieces.map((p) =>
-          p.id === tgtPieceId ? { ...p, notches: newNotches } : p
-        ),
-      },
-      seamAdjustmentDialog: null,
-    }))
+    set({ seamAdjustmentDialog: null })
+
+    const { updateNotch } = get()
+    for (const tp of targetPoints) {
+      updateNotch(tgtPieceId, tp.notchId, { position: tp.point })
+    }
   },
 
   checkSeamAdjustment: () => {
