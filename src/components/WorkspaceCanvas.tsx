@@ -41,6 +41,12 @@ function pieceLocalToWorld(local: Point, piece: PatternPiece): Point {
   }
 }
 
+/** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe). */
+function isPointInsidePiece(local: Point, piece: PatternPiece): boolean {
+  if (piece.seamLine.length >= 3 && isPointInClosedCurves(local, piece.seamLine)) return true
+  return piece.cutLine.length >= 3 && isPointInClosedCurves(local, piece.cutLine)
+}
+
 /** Mittelpunkt eines Kurvensegments (Linie: Mitte; Bézier: Punkt bei t=0.5). */
 function curveMidpoint(c: Curve): Point {
   if (c.type === 'line') {
@@ -661,7 +667,7 @@ export function WorkspaceCanvas() {
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
-          if (p.cutLine.length >= 3 && isPointInClosedCurves(local, p.cutLine)) {
+          if (isPointInsidePiece(local, p)) {
             setNahtzugabeDialogPieceId(p.id)
             setPendingNahtzugabeClick(false)
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
@@ -833,7 +839,7 @@ export function WorkspaceCanvas() {
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
-          if (p.cutLine.length >= 3 && isPointInClosedCurves(local, p.cutLine)) {
+          if (isPointInsidePiece(local, p)) {
             selectPiece(p.id, e.shiftKey)
             setDragging({ kind: 'piece', pieceId: p.id, start: world })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
@@ -1226,7 +1232,7 @@ export function WorkspaceCanvas() {
           for (let i = pieces.length - 1; i >= 0; i--) {
             const p = pieces[i]
             const local = worldToPieceLocal(world, p)
-            if (p.cutLine.length >= 3 && isPointInClosedCurves(local, p.cutLine)) {
+            if (isPointInsidePiece(local, p)) {
               setHoveredPieceId(p.id)
               return
             }
