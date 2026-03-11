@@ -167,15 +167,13 @@ export function Toolbar() {
           {openMenu === 'datei' && (
             <ul className="menubar-dropdown">
               <li
-                className="menubar-dropdown-parent"
+                className="menubar-submenu-wrap"
                 onMouseEnter={() => setDateiSubmenu('exportieren')}
                 onMouseLeave={() => setDateiSubmenu(null)}
               >
-                <button type="button" className="menubar-dropdown-btn">
-                  Exportieren &#9656;
-                </button>
+                <span className="menubar-dropdown-btn menubar-dropdown-btn-submenu">Exportieren</span>
                 {dateiSubmenu === 'exportieren' && (
-                  <ul className="menubar-submenu">
+                  <ul className="menubar-dropdown menubar-submenu">
                     <li>
                       <button type="button" className="menubar-dropdown-btn" onClick={handleExportDxf}>
                         DXF (einfach)

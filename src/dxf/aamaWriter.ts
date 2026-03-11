@@ -1,7 +1,7 @@
 import type { Workspace, PatternPiece } from '../types/model'
 import {
   EOL, fmt,
-  curveToPolylinePoints, transformPoints,
+  curveToPolylinePoints,
   getExportContour, workspaceExtents,
   dxfPolyline, dxfPoint, dxfCircle, dxfLine, dxfText,
   sanitizeBlockName, makeExportFilename, downloadBlob,
