@@ -1470,11 +1470,12 @@ export function WorkspaceCanvas() {
         }
       }
       if (e.key === '5') {
-        if (!inInput && hoveredPieceId) {
+        const targetId = hoveredPieceId ?? (selectedPieceIds.length === 1 ? selectedPieceIds[0] : null)
+        if (!inInput && targetId) {
           setCutSeamSwappedSet((prev) => {
             const next = new Set(prev)
-            if (next.has(hoveredPieceId)) next.delete(hoveredPieceId)
-            else next.add(hoveredPieceId)
+            if (next.has(targetId)) next.delete(targetId)
+            else next.add(targetId)
             return next
           })
           e.preventDefault()
@@ -1572,6 +1573,7 @@ export function WorkspaceCanvas() {
     addInternalLine,
     closeSegmentMenu,
     hoveredPieceId,
+    selectedPieceIds,
     setPendingNahtzugabeClick,
     grainFlipHover,
     grainContextMenu,
