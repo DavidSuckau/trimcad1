@@ -1,9 +1,9 @@
 import type { Workspace, PatternPiece } from '../types/model'
 import {
   EOL, fmt,
-  curveToPolylinePoints,
-  getExportContour, workspaceExtents,
-  dxfPolyline, dxfPoint, dxfCircle, dxfLine, dxfText,
+  curveToPolylinePoints, workspaceExtents,
+  dxfPolyline, dxfCircle, dxfLine, dxfText,
+  dxfNotchGeometry,
   sanitizeBlockName, makeExportFilename, downloadBlob,
 } from './dxfShared'
 
@@ -12,7 +12,21 @@ import {
  *
  * Format:    DXF R12 (AC1009), Einheiten mm
  * Struktur:  HEADER -> BLOCKS (1 Block pro Piece) -> ENTITIES (INSERT pro Block) -> EOF
- * Layer:     Benannte Layer (CUT, SEAM, NOTCH, DRILL, GRAIN, TEXT, INTERNAL)
+ *
+ * Layer-Konvention (AAMA):
+ *   CUT      = Aussenkontour (Schnittlinie, aeussere Kante mit Nahtzugabe)
+ *   SEAM     = Nahtlinie (innere Linie, wo tatsaechlich genaehrt wird)
+ *              -> Gerber erkennt den Abstand CUT↔SEAM als Nahtzugabe
+ *   NOTCH    = Kerben als LINE/POLYLINE-Geometrie (nicht POINT!)
+ *   DRILL    = Bohrloecher als CIRCLE
+ *   GRAIN    = Fadenlauf als LINE
+ *   TEXT     = Beschriftung
+ *   INTERNAL = Interne Linien (Abnaeher, Taschenmarkierungen etc.)
+ *
+ * Wichtig:
+ *   - Boundary (CUT) ist die SAUBERE cutLine OHNE eingebettete Notch-Cutouts.
+ *     Notches werden als separate Entities auf dem NOTCH-Layer exportiert.
+ *   - Gerber AccuMark erkennt die Nahtzugabe am Vorhandensein von CUT + SEAM.
  *
  * Kompatibel mit: Gerber AccuMark, Lectra, Optitex, Tukatech, Audaces
  * Dateiendung: .aam
@@ -36,25 +50,31 @@ function pieceBlockName(piece: PatternPiece, index: number): string {
 function buildBlockContent(piece: PatternPiece, scale: number): string {
   const out: string[] = []
 
-  const cutContour = getExportContour(piece)
-  const cutPts = curveToPolylinePoints(cutContour)
+  // CUT layer: saubere Aussenkontour (cutLine) OHNE Notch-Cutouts
+  const cutPts = curveToPolylinePoints(piece.cutLine)
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
   out.push(dxfPolyline(AAMA_LAYERS.CUT, scaledCutPts, true))
 
+  // SEAM layer: Nahtlinie (wo genaehrt wird).
+  // Der Abstand zwischen CUT und SEAM IST die Nahtzugabe –
+  // Gerber/Lectra erkennen das automatisch.
   if (piece.seamLine.length > 0) {
     const seamPts = curveToPolylinePoints(piece.seamLine)
     const scaledSeamPts = seamPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
     out.push(dxfPolyline(AAMA_LAYERS.SEAM, scaledSeamPts, true))
   }
 
+  // NOTCH layer: Kerben als echte Geometrie (LINE fuer Slit, 2x LINE fuer V, POLYLINE fuer Castle)
   for (const notch of piece.notches) {
-    out.push(dxfPoint(AAMA_LAYERS.NOTCH, notch.position.x * scale, notch.position.y * scale))
+    out.push(dxfNotchGeometry(AAMA_LAYERS.NOTCH, notch, scale))
   }
 
+  // DRILL layer: Bohrloecher als CIRCLE
   for (const drill of piece.drills) {
     out.push(dxfCircle(AAMA_LAYERS.DRILL, drill.center.x * scale, drill.center.y * scale, drill.radius * scale))
   }
 
+  // GRAIN layer: Fadenlauf als LINE
   if (piece.grainLine) {
     out.push(dxfLine(
       AAMA_LAYERS.GRAIN,
@@ -63,12 +83,14 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
     ))
   }
 
+  // INTERNAL layer: Interne Linien (Abnaeher, Markierungen)
   if (piece.internalLines.length > 0) {
     const intPts = curveToPolylinePoints(piece.internalLines)
     const scaledIntPts = intPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
     out.push(dxfPolyline(AAMA_LAYERS.INTERNAL, scaledIntPts, false))
   }
 
+  // TEXT layer: Teilename/Nummer
   const label = piece.name || piece.number || ''
   if (label) {
     const firstCut = scaledCutPts[0]
@@ -94,7 +116,7 @@ export function exportWorkspaceToAamaDxf(workspace: Workspace, scale = 1): strin
   }
   out.push('0' + EOL + 'ENDSEC' + EOL)
 
-  // BLOCKS – one block per piece (geometry in piece-local coordinates)
+  // BLOCKS – ein Block pro Schnittteil (Geometrie in lokalen Koordinaten)
   out.push('0' + EOL + 'SECTION' + EOL + '2' + EOL + 'BLOCKS' + EOL)
   const blockNames: string[] = []
 
@@ -113,7 +135,7 @@ export function exportWorkspaceToAamaDxf(workspace: Workspace, scale = 1): strin
 
   out.push('0' + EOL + 'ENDSEC' + EOL)
 
-  // ENTITIES – INSERT per block, applying piece transform
+  // ENTITIES – INSERT pro Block mit Piece-Transform
   out.push('0' + EOL + 'SECTION' + EOL + '2' + EOL + 'ENTITIES' + EOL)
 
   for (let i = 0; i < workspace.pieces.length; i++) {

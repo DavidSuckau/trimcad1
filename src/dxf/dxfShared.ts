@@ -1,4 +1,4 @@
-import type { Workspace, PatternPiece, Curve, BezierCurve } from '../types/model'
+import type { Workspace, PatternPiece, Curve, BezierCurve, Notch } from '../types/model'
 import { cutLineWithNotchCutouts } from '../geometry/notchOnCurve'
 import { bezierAt, curveSegmentArcLength } from '../geometry/curveToPath'
 
@@ -189,4 +189,77 @@ export function downloadBlob(content: string, filename: string, mimeType = 'appl
  */
 export function sanitizeBlockName(name: string): string {
   return name.replace(/[^A-Za-z0-9_\-]/g, '_').replace(/^(\d)/, '_$1')
+}
+
+/* ------------------------------------------------------------------ */
+/*  Notch geometry for AAMA/ASTM export                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Slit notch (single): one LINE perpendicular to boundary, inward.
+ * Returns a DXF LINE entity from the boundary point to the tip.
+ */
+export function dxfNotchSlit(layer: string, notch: Notch, scale: number): string {
+  const rad = (notch.angle * Math.PI) / 180
+  const x1 = notch.position.x * scale
+  const y1 = notch.position.y * scale
+  const x2 = (notch.position.x + notch.depth * Math.cos(rad)) * scale
+  const y2 = (notch.position.y + notch.depth * Math.sin(rad)) * scale
+  return dxfLine(layer, x1, y1, x2, y2)
+}
+
+/**
+ * V-notch: two LINEs from base-left and base-right to a shared tip.
+ * Width is measured along the boundary, depth perpendicular inward.
+ */
+export function dxfNotchV(layer: string, notch: Notch, scale: number): string {
+  const rad = (notch.angle * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const w2 = (notch.width ?? 6) / 2
+
+  const tipX = (notch.position.x + notch.depth * cos) * scale
+  const tipY = (notch.position.y + notch.depth * sin) * scale
+  const leftX = (notch.position.x - w2 * sin) * scale
+  const leftY = (notch.position.y + w2 * cos) * scale
+  const rightX = (notch.position.x + w2 * sin) * scale
+  const rightY = (notch.position.y - w2 * cos) * scale
+
+  return dxfLine(layer, leftX, leftY, tipX, tipY)
+    + dxfLine(layer, rightX, rightY, tipX, tipY)
+}
+
+/**
+ * Castle/double notch: a rectangular U-shape (open POLYLINE).
+ * Opens at the boundary edge, extends inward.
+ */
+export function dxfNotchCastle(layer: string, notch: Notch, scale: number): string {
+  const rad = (notch.angle * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const w2 = (notch.width ?? 6) / 2
+  const d = notch.depth
+
+  const pts: Pt[] = [
+    { x: (notch.position.x - w2 * sin) * scale, y: (notch.position.y + w2 * cos) * scale },
+    { x: (notch.position.x - w2 * sin + d * cos) * scale, y: (notch.position.y + w2 * cos + d * sin) * scale },
+    { x: (notch.position.x + w2 * sin + d * cos) * scale, y: (notch.position.y - w2 * cos + d * sin) * scale },
+    { x: (notch.position.x + w2 * sin) * scale, y: (notch.position.y - w2 * cos) * scale },
+  ]
+  return dxfPolyline(layer, pts, false)
+}
+
+/**
+ * Export a notch as the correct DXF geometry for its type.
+ */
+export function dxfNotchGeometry(layer: string, notch: Notch, scale: number): string {
+  switch (notch.type) {
+    case 'v':
+      return dxfNotchV(layer, notch, scale)
+    case 'double':
+      return dxfNotchCastle(layer, notch, scale)
+    case 'single':
+    default:
+      return dxfNotchSlit(layer, notch, scale)
+  }
 }

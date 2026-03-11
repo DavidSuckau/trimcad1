@@ -1,9 +1,9 @@
 import type { Workspace, PatternPiece, NotchType } from '../types/model'
 import {
   EOL, fmt,
-  curveToPolylinePoints,
-  getExportContour, workspaceExtents,
-  dxfPolyline, dxfPoint, dxfCircle, dxfLine, dxfText,
+  curveToPolylinePoints, workspaceExtents,
+  dxfPolyline, dxfCircle, dxfLine, dxfText,
+  dxfNotchSlit, dxfNotchV, dxfNotchCastle,
   sanitizeBlockName, makeExportFilename, downloadBlob,
 } from './dxfShared'
 
@@ -15,17 +15,23 @@ import {
  *            Kein TABLES-Abschnitt, keine $MODEL_SPACE/$PAPER_SPACE Bloecke (Gerber-Parser).
  *
  * Layer (nummeriert nach ASTM D6673-10):
- *   1  = Piece Boundary (Aussenkontour)
- *   4  = Notches (V-Notch, Slit-Notch)
- *   7  = Grain Line
- *   8  = Internal Lines
- *  13  = Drill Holes
- *  14  = Sew Lines (Nahtlinie)
- *  15  = Annotation Text
- *  80  = T-Notch
- *  81  = Castle-Notch
+ *   1  = Piece Boundary (Aussenkontour / Schnittlinie mit Nahtzugabe)
+ *   4  = Notches – Slit-Notch (I-foermig, senkrecht zur Kante)
+ *   7  = Grain Line (Fadenlauf)
+ *   8  = Internal Lines (Abnaeher, Markierungen)
+ *  13  = Drill Holes (Bohrloecher)
+ *  14  = Sew Lines (Nahtlinie – wo genaehrt wird)
+ *        -> Gerber erkennt den Abstand Layer 1 ↔ Layer 14 als Nahtzugabe
+ *  15  = Annotation Text (Teilename/Nummer)
+ *  80  = T-Notch (T-foermig)
+ *  81  = Castle-Notch (rechteckig, U-foermig)
  *  82  = Check-Notch (V-foermig)
- *  83  = U-Notch
+ *  83  = U-Notch (U-foermig, halbrund)
+ *
+ * Wichtig:
+ *   - Boundary (Layer 1) ist die SAUBERE cutLine OHNE eingebettete Notch-Cutouts.
+ *   - Notches werden als eigene Geometrie (LINE/POLYLINE) auf Layer 4/80-83 exportiert.
+ *   - Gerber erkennt die Nahtzugabe an Layer 1 (cut) + Layer 14 (sew).
  */
 
 const ASTM_LAYER = {
@@ -49,12 +55,20 @@ const ASTM_LAYER = {
   U_NOTCH: '83',
 } as const
 
-function notchLayer(type: NotchType): string {
+/**
+ * ASTM weist verschiedenen Notch-Typen eigene Layer zu.
+ * Die Geometrie ist ebenfalls typ-spezifisch (Slit, V, Castle).
+ */
+function emitNotch(notch: PatternPiece['notches'][number], scale: number): string {
+  const type: NotchType = notch.type
   switch (type) {
-    case 'v': return ASTM_LAYER.CHECK_NOTCH
-    case 'double': return ASTM_LAYER.CASTLE_NOTCH
+    case 'v':
+      return dxfNotchV(ASTM_LAYER.CHECK_NOTCH, notch, scale)
+    case 'double':
+      return dxfNotchCastle(ASTM_LAYER.CASTLE_NOTCH, notch, scale)
     case 'single':
-    default: return ASTM_LAYER.NOTCH
+    default:
+      return dxfNotchSlit(ASTM_LAYER.NOTCH, notch, scale)
   }
 }
 
@@ -63,9 +77,6 @@ function pieceBlockName(piece: PatternPiece, index: number): string {
   return sanitizeBlockName(raw)
 }
 
-/**
- * Strip non-7-bit-ASCII characters (Gerber requirement).
- */
 function toAscii(s: string): string {
   return s.replace(/[^\x20-\x7E]/g, '_')
 }
@@ -73,23 +84,22 @@ function toAscii(s: string): string {
 function buildBlockContent(piece: PatternPiece, scale: number): string {
   const out: string[] = []
 
-  // Layer 1: Piece boundary (cut line with notch cutouts)
-  const cutContour = getExportContour(piece)
-  const cutPts = curveToPolylinePoints(cutContour)
+  // Layer 1: Piece boundary – saubere cutLine OHNE Notch-Cutouts
+  const cutPts = curveToPolylinePoints(piece.cutLine)
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY, scaledCutPts, true))
 
-  // Layer 14: Sew line (seam line)
+  // Layer 14: Sew line (Nahtlinie).
+  // Der Abstand zwischen Layer 1 und Layer 14 IST die Nahtzugabe.
   if (piece.seamLine.length > 0) {
     const seamPts = curveToPolylinePoints(piece.seamLine)
     const scaledSeamPts = seamPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
     out.push(dxfPolyline(ASTM_LAYER.SEW, scaledSeamPts, true))
   }
 
-  // Layer 4/80-83: Notches (layer depends on notch type)
+  // Layer 4/80-83: Notches als echte Geometrie (typ-abhaengig)
   for (const notch of piece.notches) {
-    const layer = notchLayer(notch.type)
-    out.push(dxfPoint(layer, notch.position.x * scale, notch.position.y * scale))
+    out.push(emitNotch(notch, scale))
   }
 
   // Layer 13: Drill holes
@@ -113,7 +123,7 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
     out.push(dxfPolyline(ASTM_LAYER.INTERNAL, scaledIntPts, false))
   }
 
-  // Layer 15: Annotation text (piece name/number)
+  // Layer 15: Annotation text
   const label = toAscii(piece.name || piece.number || '')
   if (label) {
     const firstCut = scaledCutPts[0]
@@ -129,7 +139,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, scale = 1): strin
   const out: string[] = []
   const ext = workspaceExtents(workspace, scale)
 
-  // Minimal HEADER – Gerber-kompatibel (kein TABLES, kein $MODEL_SPACE/$PAPER_SPACE)
+  // Minimaler HEADER – Gerber-kompatibel (kein TABLES, kein $MODEL_SPACE/$PAPER_SPACE)
   out.push('0' + EOL + 'SECTION' + EOL + '2' + EOL + 'HEADER' + EOL)
   out.push('9' + EOL + '$ACADVER' + EOL + '1' + EOL + 'AC1009' + EOL)
   out.push('9' + EOL + '$INSUNITS' + EOL + '70' + EOL + '5' + EOL)
@@ -139,7 +149,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, scale = 1): strin
   }
   out.push('0' + EOL + 'ENDSEC' + EOL)
 
-  // BLOCKS – one block per pattern piece, no $MODEL_SPACE/$PAPER_SPACE
+  // BLOCKS – ein Block pro Schnittteil, keine $MODEL_SPACE/$PAPER_SPACE
   out.push('0' + EOL + 'SECTION' + EOL + '2' + EOL + 'BLOCKS' + EOL)
   const blockNames: string[] = []
 
@@ -158,7 +168,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, scale = 1): strin
 
   out.push('0' + EOL + 'ENDSEC' + EOL)
 
-  // ENTITIES – INSERT per block
+  // ENTITIES – INSERT pro Block
   out.push('0' + EOL + 'SECTION' + EOL + '2' + EOL + 'ENTITIES' + EOL)
 
   for (let i = 0; i < workspace.pieces.length; i++) {
