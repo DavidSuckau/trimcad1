@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 
 export function Sidebar() {
-  const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, updatePiece } = useStore()
+  const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, updatePiece, removeSeamAllowance } = useStore()
   const { pieces } = workspace
   const selectedPiece = selectedPieceIds.length === 1 ? pieces.find((p) => p.id === selectedPieceIds[0]) : null
   const [editingNamePieceId, setEditingNamePieceId] = useState<string | null>(null)
@@ -78,6 +78,20 @@ export function Sidebar() {
               onChange={(e) => updatePiece(selectedPiece.id, { number: e.target.value })}
             />
           </label>
+          {selectedPiece.seamAllowanceMm != null && (
+            <div className="sidebar-label" style={{ flexDirection: 'row', alignItems: 'center', gap: '6px' }}>
+              <span>Nahtzugabe: {selectedPiece.seamAllowanceMm} mm</span>
+              <button
+                type="button"
+                className="piece-delete"
+                onClick={() => removeSeamAllowance(selectedPiece.id)}
+                aria-label="Nahtzugabe entfernen"
+                title="Nahtzugabe entfernen"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
       )}
     </aside>

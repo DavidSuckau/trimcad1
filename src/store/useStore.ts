@@ -188,6 +188,7 @@ type Store = {
   movePiece: (pieceId: string, dx: number, dy: number) => void
   setSelectedPoint: (v: Store['selectedPoint']) => void
   applyOffset: (pieceId: string, deltaMm: number) => void
+  removeSeamAllowance: (pieceId: string) => void
   insertPointOnCutLine: (pieceId: string, curveIndex: number, point: Point, t?: number) => void
   updateVertex: (pieceId: string, vertexIndex: number, point: Point, skipSeamRecalc?: boolean) => void
   replaceSegmentWithBezier: (pieceId: string, curveIndex: number, cp1: Point, cp2?: Point) => void
@@ -860,6 +861,16 @@ export const useStore = create<Store>((set, get) => ({
           const seamLine = offsetCurvesInwardForSeam(p.cutLine, deltaMm)
           return { ...p, seamLine, seamAllowanceMm: deltaMm }
         }),
+      },
+    })),
+
+  removeSeamAllowance: (pieceId) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === pieceId ? { ...p, seamLine: [], seamAllowanceMm: null } : p
+        ),
       },
     })),
 

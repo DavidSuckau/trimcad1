@@ -28,6 +28,7 @@ export function Toolbar() {
     setView,
     selectedPieceIds,
     applyOffset,
+    removeSeamAllowance,
     pendingNahtzugabeClick: _pendingNahtzugabeClick,
     setPendingNahtzugabeClick,
     nahtzugabeDialogPieceId,
@@ -425,6 +426,22 @@ export function Toolbar() {
                 <button
                   type="button"
                   className="menubar-dropdown-btn"
+                  disabled={!selectedPieceIds.some((id) => workspace.pieces.find((p) => p.id === id)?.seamAllowanceMm != null)}
+                  onClick={() => {
+                    selectedPieceIds.forEach((id) => {
+                      const p = workspace.pieces.find((pp) => pp.id === id)
+                      if (p?.seamAllowanceMm != null) removeSeamAllowance(id)
+                    })
+                    closeMenu()
+                  }}
+                >
+                  Nahtzugabe entfernen
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
                   onClick={() => {
                     setNahtzuordnungMode('first')
                     closeMenu()
@@ -577,6 +594,7 @@ export function Toolbar() {
       <SeamAdjustmentModal />
       {nahtzugabeDialogPieceId && (() => {
         const dialogPiece = workspace.pieces.find((p) => p.id === nahtzugabeDialogPieceId)
+        const hasExisting = dialogPiece?.seamAllowanceMm != null
         const mm = parseFloat(nahtzugabeMm)
         const validation = dialogPiece && Number.isFinite(mm) && mm > 0
           ? validateSeamAllowance(dialogPiece.cutLine, mm)
@@ -585,6 +603,11 @@ export function Toolbar() {
         <div className="nahtzugabe-dialog-overlay" onClick={() => setNahtzugabeDialogPieceId(null)}>
           <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()}>
             <h3 className="nahtzugabe-dialog-title">Nahtzugabe</h3>
+            {hasExisting && (
+              <p style={{ margin: '0 0 4px', fontSize: '12px', color: '#555' }}>
+                Aktuell: {dialogPiece!.seamAllowanceMm} mm
+              </p>
+            )}
             <p className="nahtzugabe-dialog-hint">
               Abstand der Nahtlinie zur Kontur (mm). Die gestrichelte Linie wird bei Konturänderung automatisch angepasst.
             </p>
@@ -611,6 +634,19 @@ export function Toolbar() {
               </p>
             )}
             <div className="nahtzugabe-dialog-actions">
+              {hasExisting && (
+                <button
+                  type="button"
+                  className="sidebar-btn"
+                  style={{ color: '#c62828' }}
+                  onClick={() => {
+                    removeSeamAllowance(nahtzugabeDialogPieceId)
+                    setNahtzugabeDialogPieceId(null)
+                  }}
+                >
+                  Entfernen
+                </button>
+              )}
               <button
                 type="button"
                 className="sidebar-btn"
