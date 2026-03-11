@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import { downloadDxf } from '../dxf/dxfWriter'
+import { downloadAamaDxf } from '../dxf/aamaWriter'
+import { downloadAstmDxf } from '../dxf/astmWriter'
 import { validateSeamAllowance } from '../geometry/offset'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
@@ -45,6 +47,7 @@ export function Toolbar() {
   const [erzeugenSubmenu, setErzeugenSubmenu] = useState<'interne-elemente' | null>(null)
   const [bearbeitenSubmenu, setBearbeitenSubmenu] = useState<'kante' | null>(null)
   const [nahtSubmenu, setNahtSubmenu] = useState<'nahtecken' | null>(null)
+  const [dateiSubmenu, setDateiSubmenu] = useState<'exportieren' | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -63,6 +66,7 @@ export function Toolbar() {
   }, [openMenu])
 
   useEffect(() => {
+    if (openMenu !== 'datei') setDateiSubmenu(null)
     if (openMenu !== 'erzeugen') setErzeugenSubmenu(null)
     if (openMenu !== 'bearbeiten') setBearbeitenSubmenu(null)
     if (openMenu !== 'naht') setNahtSubmenu(null)
@@ -72,6 +76,16 @@ export function Toolbar() {
 
   const handleExportDxf = () => {
     downloadDxf(workspace, dxfExportScale)
+    closeMenu()
+  }
+
+  const handleExportAama = () => {
+    downloadAamaDxf(workspace, dxfExportScale)
+    closeMenu()
+  }
+
+  const handleExportAstm = () => {
+    downloadAstmDxf(workspace, dxfExportScale)
     closeMenu()
   }
 
@@ -152,10 +166,33 @@ export function Toolbar() {
           </button>
           {openMenu === 'datei' && (
             <ul className="menubar-dropdown">
-              <li>
-                <button type="button" className="menubar-dropdown-btn" onClick={handleExportDxf}>
-                  DXF exportieren
+              <li
+                className="menubar-dropdown-parent"
+                onMouseEnter={() => setDateiSubmenu('exportieren')}
+                onMouseLeave={() => setDateiSubmenu(null)}
+              >
+                <button type="button" className="menubar-dropdown-btn">
+                  Exportieren &#9656;
                 </button>
+                {dateiSubmenu === 'exportieren' && (
+                  <ul className="menubar-submenu">
+                    <li>
+                      <button type="button" className="menubar-dropdown-btn" onClick={handleExportDxf}>
+                        DXF (einfach)
+                      </button>
+                    </li>
+                    <li>
+                      <button type="button" className="menubar-dropdown-btn" onClick={handleExportAama}>
+                        AAMA-DXF (.aam)
+                      </button>
+                    </li>
+                    <li>
+                      <button type="button" className="menubar-dropdown-btn" onClick={handleExportAstm}>
+                        ASTM-DXF (Gerber)
+                      </button>
+                    </li>
+                  </ul>
+                )}
               </li>
               <li>
                 <button

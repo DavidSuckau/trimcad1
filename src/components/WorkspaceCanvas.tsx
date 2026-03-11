@@ -1,6 +1,6 @@
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
-import { closedPathD, curveToPathD, bezierAt, curveSegmentArcLength, curvesBounds, outwardNormalAngleAt } from '../geometry/curveToPath'
+import { closedPathD, curveToPathD, bezierAt, curveSegmentArcLength, curvesBounds, outwardNormalAngleAt, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { offsetSegmentPoints } from '../geometry/offset'
 import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPositionAndAngleOnSeamLine, getNotchCurveIndexAndT, notchTriangleCorners, notchCutoutPoints, cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
@@ -2499,10 +2499,10 @@ export function WorkspaceCanvas() {
                   }
                 })
               }
-              const midIdxA = Math.floor(segsA.length / 2)
-              const midIdxB = Math.floor(segsB.length / 2)
-              const midALocal = curveMidpoint(segsA[midIdxA])
-              const midBLocal = curveMidpoint(segsB[midIdxB])
+              const midResultA = pointAtPathLength(segsA, lenA / 2)
+              const midResultB = pointAtPathLength(segsB, lenB / 2)
+              const midALocal = midResultA ? midResultA.point : curveMidpoint(segsA[Math.floor(segsA.length / 2)])
+              const midBLocal = midResultB ? midResultB.point : curveMidpoint(segsB[Math.floor(segsB.length / 2)])
               const midA = pieceLocalToWorld(midALocal, pieceA)
               const midB = pieceLocalToWorld(midBLocal, pieceB)
               const dx = midB.x - midA.x
