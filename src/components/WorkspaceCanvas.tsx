@@ -41,10 +41,21 @@ function pieceLocalToWorld(local: Point, piece: PatternPiece): Point {
   }
 }
 
-/** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe). */
+/** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe)
+ *  oder nah genug an der Konturlinie (cutLine/seamLine) ist. */
+const CONTOUR_HIT_MM = 3
 function isPointInsidePiece(local: Point, piece: PatternPiece): boolean {
   if (piece.seamLine.length >= 3 && isPointInClosedCurves(local, piece.seamLine)) return true
-  return piece.cutLine.length >= 3 && isPointInClosedCurves(local, piece.cutLine)
+  if (piece.cutLine.length >= 3 && isPointInClosedCurves(local, piece.cutLine)) return true
+  if (piece.cutLine.length > 0) {
+    const nr = nearestCurveIndexAndPoint(local, piece.cutLine)
+    if (nr && nr.distance <= CONTOUR_HIT_MM) return true
+  }
+  if (piece.seamLine.length > 0) {
+    const nr = nearestCurveIndexAndPoint(local, piece.seamLine)
+    if (nr && nr.distance <= CONTOUR_HIT_MM) return true
+  }
+  return false
 }
 
 /** Mittelpunkt eines Kurvensegments (Linie: Mitte; Bézier: Punkt bei t=0.5). */
