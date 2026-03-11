@@ -28,7 +28,7 @@ export function Toolbar() {
     setView,
     selectedPieceIds,
     applyOffset,
-    pendingNahtzugabeClick,
+    pendingNahtzugabeClick: _pendingNahtzugabeClick,
     setPendingNahtzugabeClick,
     nahtzugabeDialogPieceId,
     setNahtzugabeDialogPieceId,

@@ -50,7 +50,7 @@ function curveMidpoint(c: Curve): Point {
 }
 
 /** Projektion von p auf die Strecke [a, b]; Ergebnis bleibt auf der Linie. */
-function projectOntoSegment(p: Point, a: Point, b: Point): Point {
+function _projectOntoSegment(p: Point, a: Point, b: Point): Point {
   const dx = b.x - a.x
   const dy = b.y - a.y
   const lenSq = dx * dx + dy * dy
@@ -59,6 +59,7 @@ function projectOntoSegment(p: Point, a: Point, b: Point): Point {
   t = Math.max(0, Math.min(1, t))
   return { x: a.x + t * dx, y: a.y + t * dy }
 }
+void _projectOntoSegment
 
 /** Snap-Distanz für Linial (mm); Eckpunkte, normale Punkte, Kurvenpunkte */
 const RULER_SNAP_DISTANCE = 18
@@ -450,7 +451,7 @@ export function WorkspaceCanvas() {
     offsetSegment,
     addNotch,
     removeNotch,
-    removeNotchAnchor,
+    removeNotchAnchor: _removeNotchAnchor,
     toggleNotchAnchor,
     updateNotch,
     addDrill,
@@ -2495,7 +2496,7 @@ export function WorkspaceCanvas() {
                   onPointerEnter={() => setHoveredSeamAssignmentId(a.id)}
                   onPointerLeave={() => setHoveredSeamAssignmentId(null)}
                   style={{ cursor: hoveredSeamAssignmentId === a.id ? 'pointer' : 'default' }}
-                  title="Backspace oder Entf: Nahtverbindung entfernen"
+                  data-title="Backspace oder Entf: Nahtverbindung entfernen"
                 >
                   {/* Unsichtbare breite Linie für Hover-/Trefferfläche */}
                   <line x1={midA.x} y1={midA.y} x2={midB.x} y2={midB.y} stroke="transparent" strokeWidth={14} />
