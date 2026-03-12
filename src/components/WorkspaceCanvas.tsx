@@ -809,7 +809,9 @@ export function WorkspaceCanvas() {
                   perpX = -perpX
                   perpY = -perpY
                 }
-                const bulge = 0.2 * len
+                /* Bulge = Distanz von der Linie zur Maus, damit die Kurve exakt dorthin gebogen wird */
+                const distFromLine = Math.abs(side)
+                const bulge = Math.min(distFromLine, 0.5 * len)
                 const cp1 = {
                   x: start.x + dx / 3 + perpX * bulge,
                   y: start.y + dy / 3 + perpY * bulge,
