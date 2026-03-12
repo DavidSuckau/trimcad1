@@ -187,6 +187,7 @@ function PieceGroup({
   onGrainArrowMove,
   onGrainArrowClick,
   notchIdBeingDragged,
+  hoveredNotchId,
   cutSeamSwapped,
   showGrain,
   showNotches,
@@ -204,6 +205,7 @@ function PieceGroup({
   onGrainArrowMove?: (e: React.PointerEvent) => void
   onGrainArrowClick?: (e: React.MouseEvent) => void
   notchIdBeingDragged?: string | null
+  hoveredNotchId?: string | null
   cutSeamSwapped?: boolean
   showGrain?: boolean
   showNotches?: boolean
@@ -290,17 +292,21 @@ function PieceGroup({
           }
         }
         const isAnchored = n.vertexIndex != null
+        const isHovered = hoveredNotchId === n.id
+        const stroke = isHovered ? '#1565c0' : NOTCH_STROKE
+        const strokeW = isHovered ? 0.7 : 0.4
+        const circleR = isHovered ? 1 : 0.8
         return (
           <g key={n.id} pointerEvents="none">
             <path d={cutFillD} fill="#fff" stroke="none" />
-            <path d={cutEdgesD} fill="none" stroke={NOTCH_STROKE} strokeWidth={0.4} strokeLinejoin="round" />
+            <path d={cutEdgesD} fill="none" stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round" />
             <circle
               cx={cutPos.position.x}
               cy={cutPos.position.y}
-              r={0.8}
-              fill={isAnchored ? NOTCH_STROKE : 'none'}
-              stroke={NOTCH_STROKE}
-              strokeWidth={0.3}
+              r={circleR}
+              fill={isAnchored ? stroke : 'none'}
+              stroke={stroke}
+              strokeWidth={isHovered ? 0.5 : 0.3}
             />
             {seamFillD && (
               <path d={seamFillD} fill="#fff" stroke="none" />
@@ -309,8 +315,8 @@ function PieceGroup({
               <path
                 d={seamEdgesD}
                 fill="none"
-                stroke={NOTCH_STROKE}
-                strokeWidth={0.4}
+                stroke={stroke}
+                strokeWidth={strokeW}
                 strokeLinejoin="round"
               />
             )}
@@ -2075,6 +2081,9 @@ export function WorkspaceCanvas() {
                 notchPreview?.pieceId === piece.id
                   ? dragging.notchId
                   : null
+              }
+              hoveredNotchId={
+                hoveredDeletableNotch?.pieceId === piece.id ? hoveredDeletableNotch.notchId : null
               }
               onGrainArrowEnter={(e) =>
                 setGrainFlipHover({ pieceId: piece.id, clientX: e.clientX, clientY: e.clientY })

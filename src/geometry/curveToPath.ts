@@ -108,6 +108,30 @@ export function splitBezierAt(b: BezierCurve, t: number): [BezierCurve, BezierCu
   ]
 }
 
+/**
+ * Vereinigt zwei benachbarte kubische Bézier-Segmente (De-Casteljau-Rückführung).
+ * Voraussetzung: seg1.end === seg2.start. Gibt null zurück bei numerischer Instabilität.
+ */
+export function joinBezierSegments(seg1: BezierCurve, seg2: BezierCurve): BezierCurve | null {
+  const A = seg1.start
+  const B = seg1.cp1
+  const C = seg1.cp2
+  const D = seg1.end
+  const E = seg2.cp1
+  const F = seg2.cp2
+  const G = seg2.end
+  const dDC = Math.hypot(D.x - C.x, D.y - C.y)
+  const dED = Math.hypot(E.x - D.x, E.y - D.y)
+  const eps = 1e-6
+  if (dDC < eps || dED < eps) return null
+  const k = dED / dDC
+  if (k < eps || k > 1 / eps) return null
+  const k1 = 1 + k
+  const P = { x: k1 * B.x - k * A.x, y: k1 * B.y - k * A.y }
+  const Q = { x: (k1 / k) * F.x - (1 / k) * G.x, y: (k1 / k) * F.y - (1 / k) * G.y }
+  return { type: 'bezier', start: { ...A }, end: { ...G }, cp1: P, cp2: Q }
+}
+
 export function curveToPathD(curves: Curve[]): string {
   return curves.map((c) => (c.type === 'line' ? lineToD(c) : bezierToD(c))).join(' ')
 }

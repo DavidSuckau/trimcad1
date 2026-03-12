@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Workspace, PatternPiece, ViewState, Point, Curve, Notch, Drill, SeamAssignment, DigitizeNode, DigitizeState } from '../types/model'
 import { offsetCurvesInwardForSeam, offsetSegmentPoints } from '../geometry/offset'
-import { splitBezierAt, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
+import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
 
@@ -84,6 +84,18 @@ function repositionNotchesOnCutLine(notches: Notch[], cutLine: Curve[]): Notch[]
     if (!nr) return n
     return { ...n, position: { ...nr.point } }
   })
+}
+
+/** Fasst zwei benachbarte Segmente zu einem zusammen (evtl. Bezier-Erhalt statt Begradigung). */
+function mergeAdjacentSegments(prev: Curve, next: Curve): Curve {
+  if (prev.type === 'line' && next.type === 'line') {
+    return { type: 'line', start: { ...prev.start }, end: { ...next.end } }
+  }
+  if (prev.type === 'bezier' && next.type === 'bezier') {
+    const joined = joinBezierSegments(prev, next)
+    if (joined) return joined
+  }
+  return { type: 'line', start: { ...prev.start }, end: { ...next.end } }
 }
 
 function createDefaultPiece(id: string, number: string): PatternPiece {
@@ -622,11 +634,7 @@ export const useStore = create<Store>((set, get) => ({
         const oldN = piece.cutLine.length
         const prevIdx = (vi - 1 + oldN) % oldN
         const nextIdx = vi
-        const newSeg: Curve = {
-          type: 'line',
-          start: { ...piece.cutLine[prevIdx].start },
-          end: { ...piece.cutLine[nextIdx].end },
-        }
+        const newSeg = mergeAdjacentSegments(piece.cutLine[prevIdx], piece.cutLine[nextIdx])
         const cutLine = piece.cutLine.filter((_, j) => j !== prevIdx && j !== nextIdx)
         cutLine.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
         const seamLine =
@@ -664,11 +672,7 @@ export const useStore = create<Store>((set, get) => ({
       const oldN = piece.cutLine.length
       const prevIdx = (vi - 1 + oldN) % oldN
       const nextIdx = vi
-      const newSeg: Curve = {
-        type: 'line',
-        start: { ...piece.cutLine[prevIdx].start },
-        end: { ...piece.cutLine[nextIdx].end },
-      }
+      const newSeg = mergeAdjacentSegments(piece.cutLine[prevIdx], piece.cutLine[nextIdx])
       const cutLine = piece.cutLine.filter((_, j) => j !== prevIdx && j !== nextIdx)
       cutLine.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
       const seamLine =
@@ -704,11 +708,7 @@ export const useStore = create<Store>((set, get) => ({
         const oldN = piece.cutLine.length
         const prevIdx = (vi - 1 + oldN) % oldN
         const nextIdx = vi
-        const newSeg: Curve = {
-          type: 'line',
-          start: { ...piece.cutLine[prevIdx].start },
-          end: { ...piece.cutLine[nextIdx].end },
-        }
+        const newSeg = mergeAdjacentSegments(piece.cutLine[prevIdx], piece.cutLine[nextIdx])
         const cutLine = piece.cutLine.filter((_, j) => j !== prevIdx && j !== nextIdx)
         cutLine.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
         const seamLine =
@@ -800,11 +800,7 @@ export const useStore = create<Store>((set, get) => ({
         const oldN = piece.cutLine.length
         const prevIdx = (vi - 1 + oldN) % oldN
         const nextIdx = vi
-        const newSeg: Curve = {
-          type: 'line',
-          start: { ...piece.cutLine[prevIdx].start },
-          end: { ...piece.cutLine[nextIdx].end },
-        }
+        const newSeg = mergeAdjacentSegments(piece.cutLine[prevIdx], piece.cutLine[nextIdx])
         let cutLine = piece.cutLine.filter((_, j) => j !== prevIdx && j !== nextIdx)
         cutLine.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
         let sa = adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vi, oldN)
