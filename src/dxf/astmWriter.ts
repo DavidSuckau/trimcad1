@@ -1,4 +1,6 @@
 import type { Workspace, PatternPiece, NotchType } from '../types/model'
+import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import {
   EOL, fmt,
   curveToPolylinePoints, workspaceExtents,
@@ -58,17 +60,24 @@ const ASTM_LAYER = {
 /**
  * ASTM weist verschiedenen Notch-Typen eigene Layer zu.
  * Die Geometrie ist ebenfalls typ-spezifisch (Slit, V, Castle).
+ * Position und Winkel kommen von getNotchPositionAndAngleOnCutLine (projiziert auf die Kontur).
  */
-function emitNotch(notch: PatternPiece['notches'][number], scale: number): string {
+function emitNotch(
+  notch: PatternPiece['notches'][number],
+  piece: PatternPiece,
+  scale: number,
+): string {
+  const { position, angle } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+  const resolvedNotch = { ...notch, position, angle }
   const type: NotchType = notch.type
   switch (type) {
     case 'v':
-      return dxfNotchV(ASTM_LAYER.CHECK_NOTCH, notch, scale)
+      return dxfNotchV(ASTM_LAYER.CHECK_NOTCH, resolvedNotch, scale)
     case 'double':
-      return dxfNotchCastle(ASTM_LAYER.CASTLE_NOTCH, notch, scale)
+      return dxfNotchCastle(ASTM_LAYER.CASTLE_NOTCH, resolvedNotch, scale)
     case 'single':
     default:
-      return dxfNotchSlit(ASTM_LAYER.NOTCH, notch, scale)
+      return dxfNotchSlit(ASTM_LAYER.NOTCH, resolvedNotch, scale)
   }
 }
 
@@ -91,15 +100,22 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
 
   // Layer 14: Sew line (Nahtlinie).
   // Der Abstand zwischen Layer 1 und Layer 14 IST die Nahtzugabe.
-  if (piece.seamLine.length > 0) {
-    const seamPts = curveToPolylinePoints(piece.seamLine)
+  // Fallback: wenn seamAllowanceMm gesetzt aber seamLine leer, hier berechnen.
+  const seamCurves =
+    piece.seamLine.length > 0
+      ? piece.seamLine
+      : piece.seamAllowanceMm != null && piece.cutLine.length >= 3
+        ? offsetCurvesInwardForSeam(piece.cutLine, piece.seamAllowanceMm)
+        : []
+  if (seamCurves.length > 0) {
+    const seamPts = curveToPolylinePoints(seamCurves)
     const scaledSeamPts = seamPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
     out.push(dxfPolyline(ASTM_LAYER.SEW, scaledSeamPts, true))
   }
 
-  // Layer 4/80-83: Notches als echte Geometrie (typ-abhaengig)
+  // Layer 4/80-83: Notches mit korrekter Position/Winkel (projiziert auf cutLine)
   for (const notch of piece.notches) {
-    out.push(emitNotch(notch, scale))
+    out.push(emitNotch(notch, piece, scale))
   }
 
   // Layer 13: Drill holes

@@ -1,4 +1,6 @@
 import type { Workspace, PatternPiece } from '../types/model'
+import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import {
   EOL, fmt,
   curveToPolylinePoints, workspaceExtents,
@@ -58,15 +60,23 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
   // SEAM layer: Nahtlinie (wo genaehrt wird).
   // Der Abstand zwischen CUT und SEAM IST die Nahtzugabe –
   // Gerber/Lectra erkennen das automatisch.
-  if (piece.seamLine.length > 0) {
-    const seamPts = curveToPolylinePoints(piece.seamLine)
+  // Fallback: wenn seamAllowanceMm gesetzt aber seamLine leer, hier berechnen.
+  const seamCurves =
+    piece.seamLine.length > 0
+      ? piece.seamLine
+      : piece.seamAllowanceMm != null && piece.cutLine.length >= 3
+        ? offsetCurvesInwardForSeam(piece.cutLine, piece.seamAllowanceMm)
+        : []
+  if (seamCurves.length > 0) {
+    const seamPts = curveToPolylinePoints(seamCurves)
     const scaledSeamPts = seamPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
     out.push(dxfPolyline(AAMA_LAYERS.SEAM, scaledSeamPts, true))
   }
 
-  // NOTCH layer: Kerben als echte Geometrie (LINE fuer Slit, 2x LINE fuer V, POLYLINE fuer Castle)
+  // NOTCH layer: Kerben mit korrekter Position/Winkel (projiziert auf cutLine)
   for (const notch of piece.notches) {
-    out.push(dxfNotchGeometry(AAMA_LAYERS.NOTCH, notch, scale))
+    const { position, angle } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+    out.push(dxfNotchGeometry(AAMA_LAYERS.NOTCH, { ...notch, position, angle }, scale))
   }
 
   // DRILL layer: Bohrloecher als CIRCLE
