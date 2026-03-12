@@ -106,8 +106,8 @@ export function parseDxf(text: string): ParsedDxf {
         const headerEnd = groups.findIndex((x, j) => j > i && x.code === 0 && x.value === 'ENDSEC')
         const headerGroups = headerEnd >= 0 ? groups.slice(i, headerEnd) : []
         const ui = headerGroups.findIndex((x) => x.code === 9 && x.value === '$INSUNITS')
-        if (ui >= 0 && ui + 2 < headerGroups.length && headerGroups[ui + 1].code === 70) {
-          const v = parseInt(headerGroups[ui + 2].value, 10)
+        if (ui >= 0 && ui + 1 < headerGroups.length && headerGroups[ui + 1].code === 70) {
+          const v = parseInt(headerGroups[ui + 1].value, 10)
           if (!Number.isNaN(v)) insUnits = v
         }
         i = headerEnd >= 0 ? headerEnd + 1 : groups.length

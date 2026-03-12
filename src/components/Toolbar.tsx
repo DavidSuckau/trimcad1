@@ -99,22 +99,30 @@ export function Toolbar() {
 
   const handleDxfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
+    closeMenu()
     const reader = new FileReader()
+    reader.onerror = () => setToastMessage('error:Datei konnte nicht gelesen werden')
     reader.onload = () => {
-      const content = reader.result as string
-      const result = importDxfFromString(content)
-      if (result.error) {
-        setToastMessage(result.error)
-      } else if (result.pieces.length > 0) {
-        for (const piece of result.pieces) {
-          addPiece(piece)
+      try {
+        const content = reader.result as string
+        const result = importDxfFromString(content)
+        if (result.error) {
+          setToastMessage('error:' + result.error)
+        } else if (result.pieces.length > 0) {
+          for (const piece of result.pieces) {
+            addPiece(piece)
+          }
+          setToastMessage('success:' + result.pieces.length + ' Schnittteil(e) importiert')
+        } else {
+          setToastMessage('error:Keine Schnittteile in der DXF-Datei gefunden')
         }
-        setToastMessage(`${result.pieces.length} Schnittteil(e) importiert`)
+      } catch (err) {
+        setToastMessage('error:' + (err instanceof Error ? err.message : 'Import-Fehler'))
       }
     }
     reader.readAsText(file, 'UTF-8')
-    e.target.value = ''
   }
 
   const handleErzeugen = (
@@ -181,6 +189,13 @@ export function Toolbar() {
 
   return (
     <header className="menubar" ref={menuRef}>
+      <input
+        ref={dxfImportInputRef}
+        type="file"
+        accept=".dxf"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+        onChange={handleDxfFileChange}
+      />
       <img src="/logo-trimcad.png" alt="TrimCAD" className="menubar-logo" />
       <nav className="menubar-nav">
         <div className="menubar-item-wrap">
@@ -198,13 +213,6 @@ export function Toolbar() {
                 <button type="button" className="menubar-dropdown-btn" onClick={handleImportDxf}>
                   DXF importieren …
                 </button>
-                <input
-                  ref={dxfImportInputRef}
-                  type="file"
-                  accept=".dxf"
-                  style={{ display: 'none' }}
-                  onChange={handleDxfFileChange}
-                />
               </li>
               <li
                 className="menubar-submenu-wrap"

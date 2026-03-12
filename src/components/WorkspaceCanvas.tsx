@@ -2603,7 +2603,7 @@ export function WorkspaceCanvas() {
           bottom: 24,
           left: '50%',
           transform: 'translateX(-50%)',
-          background: '#d32f2f',
+          background: toastMessage.startsWith('success:') ? '#2e7d32' : '#d32f2f',
           color: '#fff',
           padding: '8px 20px',
           borderRadius: 6,
@@ -2614,7 +2614,11 @@ export function WorkspaceCanvas() {
           pointerEvents: 'none',
           whiteSpace: 'nowrap',
         }}>
-          {toastMessage}
+          {toastMessage.startsWith('success:')
+            ? toastMessage.slice(8)
+            : toastMessage.startsWith('error:')
+              ? toastMessage.slice(6)
+              : toastMessage}
         </div>
       )}
     </div>
