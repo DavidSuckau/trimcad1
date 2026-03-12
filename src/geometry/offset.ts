@@ -171,7 +171,7 @@ export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: num
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
   const raw = offsetCurves(cutLine, -seamAllowanceMm, {
     joinType: 'miter',
-    miterLimit: 10,
+    miterLimit: 50,
     simplifyTolerance: 0.06,
   })
   if (raw.length === 0) return []
