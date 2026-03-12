@@ -210,22 +210,26 @@ export function snapVertexToEdgeLength(
   if (segs.length === 0) return null
 
   if (vertexIndex === startVi) {
+    const seg0 = segs[0]
+    if (seg0.type === 'bezier') return null
     let fixed = 0
     for (let i = 1; i < segs.length; i++) {
       fixed += curveSegmentArcLength(segs[i], 0, 1)
     }
     const needFromEnd = Math.max(0, targetLength - fixed)
-    const seg0Len = curveSegmentArcLength(segs[0], 0, 1)
-    const distFromStart = Math.max(0, seg0Len - needFromEnd)
+    const seg0Len = curveSegmentArcLength(seg0, 0, 1)
+    const distFromStart = Math.max(0, Math.min(seg0Len, seg0Len - needFromEnd))
     const r = pointAtPathLength(segs.slice(0, 1), distFromStart)
     return r?.point ?? null
   }
   if (vertexIndex === endVi) {
+    const segLast = segs[segs.length - 1]
+    if (segLast.type === 'bezier') return null
     let fixed = 0
     for (let i = 0; i < segs.length - 1; i++) {
       fixed += curveSegmentArcLength(segs[i], 0, 1)
     }
-    const needLast = Math.max(0, targetLength - fixed)
+    const needLast = Math.max(0, Math.min(targetLength - fixed, curveSegmentArcLength(segLast, 0, 1)))
     const r = pointAtPathLength(segs.slice(-1), needLast)
     return r?.point ?? null
   }
