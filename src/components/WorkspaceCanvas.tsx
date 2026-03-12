@@ -383,7 +383,7 @@ function PieceGroup({
                 x2={cx}
                 y2={bottomY}
                 stroke="#333"
-                strokeWidth={0.8}
+                strokeWidth={0.35}
                 strokeDasharray="5 3"
                 pointerEvents="none"
               />
@@ -393,21 +393,21 @@ function PieceGroup({
                 x2={cx}
                 y2={midY}
                 stroke="#333"
-                strokeWidth={0.8}
+                strokeWidth={0.35}
                 pointerEvents="none"
               />
               <path
                 d={`M ${cx} ${topY} L ${cx - aw} ${topY + ah} L ${cx + aw} ${topY + ah} Z`}
                 fill="none"
                 stroke="#333"
-                strokeWidth={0.8}
+                strokeWidth={0.35}
                 pointerEvents="none"
               />
               <path
                 d={`M ${cx} ${bottomY} L ${cx - aw} ${bottomY - ah} L ${cx + aw} ${bottomY - ah} Z`}
                 fill="none"
                 stroke="#333"
-                strokeWidth={0.8}
+                strokeWidth={0.35}
                 pointerEvents="none"
               />
               {hasGrainHandlers && (
