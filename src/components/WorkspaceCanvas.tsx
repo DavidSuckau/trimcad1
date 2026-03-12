@@ -1217,7 +1217,7 @@ export function WorkspaceCanvas() {
         } else {
           setHoveredCurvepointSegment(null)
         }
-        if (tool === 'select') {
+        if (tool === 'select' && nahtzuordnungMode !== 'first' && nahtzuordnungMode !== 'second') {
           const world = toWorld(e.clientX, e.clientY)
           for (let i = pieces.length - 1; i >= 0; i--) {
             const p = pieces[i]
@@ -1779,7 +1779,7 @@ export function WorkspaceCanvas() {
         cursor: rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' ? 'crosshair' : 'default',
       }}
     >
-      {grainFlipHover && !grainContextMenu && (
+      {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"
           style={{
