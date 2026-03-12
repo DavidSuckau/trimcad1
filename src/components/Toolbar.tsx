@@ -3,6 +3,7 @@ import { useStore } from '../store/useStore'
 import { downloadDxf } from '../dxf/dxfWriter'
 import { downloadAamaDxf } from '../dxf/aamaWriter'
 import { downloadAstmDxf } from '../dxf/astmWriter'
+import { importDxfFromString } from '../dxf/dxfImporter'
 import { validateSeamAllowance } from '../geometry/offset'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
@@ -40,6 +41,7 @@ export function Toolbar() {
     setShowSettingsModal,
     dxfExportScale,
     startDigitize,
+    setToastMessage,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
@@ -49,6 +51,7 @@ export function Toolbar() {
   const [nahtSubmenu, setNahtSubmenu] = useState<'nahtecken' | null>(null)
   const [dateiSubmenu, setDateiSubmenu] = useState<'exportieren' | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const dxfImportInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -87,6 +90,31 @@ export function Toolbar() {
   const handleExportAstm = () => {
     downloadAstmDxf(workspace, dxfExportScale)
     closeMenu()
+  }
+
+  const handleImportDxf = () => {
+    dxfImportInputRef.current?.click()
+    closeMenu()
+  }
+
+  const handleDxfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const content = reader.result as string
+      const result = importDxfFromString(content)
+      if (result.error) {
+        setToastMessage(result.error)
+      } else if (result.pieces.length > 0) {
+        for (const piece of result.pieces) {
+          addPiece(piece)
+        }
+        setToastMessage(`${result.pieces.length} Schnittteil(e) importiert`)
+      }
+    }
+    reader.readAsText(file, 'UTF-8')
+    e.target.value = ''
   }
 
   const handleErzeugen = (
@@ -166,6 +194,18 @@ export function Toolbar() {
           </button>
           {openMenu === 'datei' && (
             <ul className="menubar-dropdown">
+              <li>
+                <button type="button" className="menubar-dropdown-btn" onClick={handleImportDxf}>
+                  DXF importieren …
+                </button>
+                <input
+                  ref={dxfImportInputRef}
+                  type="file"
+                  accept=".dxf"
+                  style={{ display: 'none' }}
+                  onChange={handleDxfFileChange}
+                />
+              </li>
               <li
                 className="menubar-submenu-wrap"
                 onMouseEnter={() => setDateiSubmenu('exportieren')}
