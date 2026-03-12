@@ -2142,48 +2142,52 @@ export function WorkspaceCanvas() {
               </g>
             )
           })()}
-          {/* Eckpunkte, normale Punkte, Kurvenpunkte: auf der aktiven Linie (Kontur wenn Naht=solid, Außenkontur wenn Cut=solid) */}
+          {/* Eckpunkte, normale Punkte, Kurvenpunkte: Größe zoom-invariant (bleiben klein beim Hereinfahren) */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
-            selectedPieceIds.flatMap((pieceId) => {
-              const piece = pieces.find((p) => p.id === pieceId)
-              if (!piece || piece.cutLine.length === 0) return []
-              const hasSeam = piece.seamLine.length >= 3
-              const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-              const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
-              const n = activeLine.length
-              return Array.from({ length: n }, (_, vi) => {
-                if (solidIsCut && piece.notches.some((no) => no.vertexIndex === vi)) return null
-                const v = vi === 0 ? activeLine[0].start : activeLine[vi - 1].end
-                const w = pieceLocalToWorld(v, piece)
-                const isSoft = (piece.softVertices ?? []).includes(vi)
-                const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
-                const eckSize = 3
-                return isSoft ? (
-                  <circle
-                    key={`${pieceId}-v-${vi}`}
-                    cx={w.x}
-                    cy={w.y}
-                    r={1.5}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={0.6}
-                    pointerEvents="none"
-                  />
-                ) : (
-                  <rect
-                    key={`${pieceId}-v-${vi}`}
-                    x={w.x - eckSize / 2}
-                    y={w.y - eckSize / 2}
-                    width={eckSize}
-                    height={eckSize}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={0.6}
-                    pointerEvents="none"
-                  />
-                )
+            (() => {
+              const ps = 1 / view.zoom
+              return selectedPieceIds.flatMap((pieceId) => {
+                const piece = pieces.find((p) => p.id === pieceId)
+                if (!piece || piece.cutLine.length === 0) return []
+                const hasSeam = piece.seamLine.length >= 3
+                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
+                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
+                const n = activeLine.length
+                return Array.from({ length: n }, (_, vi) => {
+                  if (solidIsCut && piece.notches.some((no) => no.vertexIndex === vi)) return null
+                  const v = vi === 0 ? activeLine[0].start : activeLine[vi - 1].end
+                  const w = pieceLocalToWorld(v, piece)
+                  const isSoft = (piece.softVertices ?? []).includes(vi)
+                  const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
+                  const eckSize = 3 * ps
+                  return isSoft ? (
+                    <circle
+                      key={`${pieceId}-v-${vi}`}
+                      cx={w.x}
+                      cy={w.y}
+                      r={1.5 * ps}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={0.6 * ps}
+                      pointerEvents="none"
+                    />
+                  ) : (
+                    <rect
+                      key={`${pieceId}-v-${vi}`}
+                      x={w.x - eckSize / 2}
+                      y={w.y - eckSize / 2}
+                      width={eckSize}
+                      height={eckSize}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={0.6 * ps}
+                      pointerEvents="none"
+                    />
+                  )
+                })
               })
-            })}
+            })()
+          }
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             selectedPieceIds.flatMap((pieceId) => {
               const piece = pieces.find((p) => p.id === pieceId)
@@ -2214,59 +2218,65 @@ export function WorkspaceCanvas() {
               })
             })}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
-            selectedPieceIds.flatMap((pieceId) => {
-              const piece = pieces.find((p) => p.id === pieceId)
-              if (!piece) return []
-              const hasSeam = piece.seamLine.length >= 3
-              const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-              const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
-              const [fill, stroke] = COLOR_KURVENPUNKT
-              return activeLine.flatMap((c, ci) => {
-                if (c.type !== 'bezier') return []
-                return (['cp1', 'cp2'] as const).map((key) => {
-                  const pt = c[key]
-                  const w = pieceLocalToWorld(pt, piece)
-                  return (
-                    <circle
-                      key={`${pieceId}-cp-${ci}-${key}`}
-                      cx={w.x}
-                      cy={w.y}
-                      r={1.2}
-                      fill={fill}
-                      stroke={stroke}
-                      strokeWidth={0.6}
-                      pointerEvents="none"
-                    />
-                  )
+            (() => {
+              const ps = 1 / view.zoom
+              return selectedPieceIds.flatMap((pieceId) => {
+                const piece = pieces.find((p) => p.id === pieceId)
+                if (!piece) return []
+                const hasSeam = piece.seamLine.length >= 3
+                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
+                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
+                const [fill, stroke] = COLOR_KURVENPUNKT
+                return activeLine.flatMap((c, ci) => {
+                  if (c.type !== 'bezier') return []
+                  return (['cp1', 'cp2'] as const).map((key) => {
+                    const pt = c[key]
+                    const w = pieceLocalToWorld(pt, piece)
+                    return (
+                      <circle
+                        key={`${pieceId}-cp-${ci}-${key}`}
+                        cx={w.x}
+                        cy={w.y}
+                        r={1.2 * ps}
+                        fill={fill}
+                        stroke={stroke}
+                        strokeWidth={0.6 * ps}
+                        pointerEvents="none"
+                      />
+                    )
+                  })
                 })
               })
-            })}
+            })()}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
-            selectedPieceIds.flatMap((pieceId) => {
-              const piece = pieces.find((p) => p.id === pieceId)
-              if (!piece) return []
-              const hasSeam = piece.seamLine.length >= 3
-              const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-              const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
-              const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
-              return activeLine.flatMap((c, ci) => {
-                if (c.type !== 'bezier') return []
-                const ptOnCurve = bezierAt(c, 0.5)
-                const w = pieceLocalToWorld(ptOnCurve, piece)
-                return [
-                  <circle
-                    key={`${pieceId}-oncurve-${ci}`}
-                    cx={w.x}
-                    cy={w.y}
-                    r={1.5}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={0.6}
-                    pointerEvents="none"
-                  />,
-                ]
+            (() => {
+              const ps = 1 / view.zoom
+              return selectedPieceIds.flatMap((pieceId) => {
+                const piece = pieces.find((p) => p.id === pieceId)
+                if (!piece) return []
+                const hasSeam = piece.seamLine.length >= 3
+                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
+                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
+                const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
+                return activeLine.flatMap((c, ci) => {
+                  if (c.type !== 'bezier') return []
+                  const ptOnCurve = bezierAt(c, 0.5)
+                  const w = pieceLocalToWorld(ptOnCurve, piece)
+                  return [
+                    <circle
+                      key={`${pieceId}-oncurve-${ci}`}
+                      cx={w.x}
+                      cy={w.y}
+                      r={1.5 * ps}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={0.6 * ps}
+                      pointerEvents="none"
+                    />,
+                  ]
+                })
               })
-            })}
+            })()}
           {/* Digitalisierung: Linien/Kurven, Punkte, Handles, Vorschau, Close-Indikator */}
           {tool === 'digitize' && digitizeState && digitizeState.nodes.length > 0 && (() => {
             const nodes = digitizeState.nodes
