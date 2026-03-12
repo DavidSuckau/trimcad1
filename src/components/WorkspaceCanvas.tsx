@@ -698,26 +698,19 @@ export function WorkspaceCanvas() {
       }
       const VERTEX_HIT = 8
       const POINT_ON_CURVE_HIT = 8
-      // Punkt auf Kurve (Mitte): ziehen verschiebt die Kurve glatt, ohne Ecke
+      // Punkt auf Kurve (Mitte): ziehen verschiebt die Kurve glatt. Immer cutLine für konsistente Indizes.
       if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
         for (const pieceId of [...selectedPieceIds].reverse()) {
           const p = pieces.find((x) => x.id === pieceId)
           if (!p || p.cutLine.length === 0) continue
-          const hasSeamP = p.seamLine.length >= 3
-          const solidIsCutP = !hasSeamP || cutSeamSwappedSet.has(p.id)
-          const activeLineP = solidIsCutP ? p.cutLine : p.seamLine
           const local = worldToPieceLocal(world, p)
-          for (let ci = 0; ci < activeLineP.length; ci++) {
-            const c = activeLineP[ci]
+          for (let ci = 0; ci < p.cutLine.length; ci++) {
+            const c = p.cutLine[ci]
             if (c.type !== 'bezier') continue
             const ptOnCurve = bezierAt(c, 0.5)
             const dist = Math.hypot(local.x - ptOnCurve.x, local.y - ptOnCurve.y)
             if (dist < POINT_ON_CURVE_HIT) {
-              let seamDrag: { startLocal: Point; cutCurveIndex: number; cutT: number } | undefined
-              if (!solidIsCutP) {
-                seamDrag = { startLocal: { ...ptOnCurve }, cutCurveIndex: ci, cutT: 0.5 }
-              }
-              setDragging({ kind: 'pointOnCurve', pieceId: p.id, curveIndex: ci, t: 0.5, seamDrag })
+              setDragging({ kind: 'pointOnCurve', pieceId: p.id, curveIndex: ci, t: 0.5 })
               ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
               return
             }
@@ -728,20 +721,13 @@ export function WorkspaceCanvas() {
         for (const pieceId of [...selectedPieceIds].reverse()) {
           const p = pieces.find((x) => x.id === pieceId)
           if (!p || p.cutLine.length === 0) continue
-          const hasSeamP = p.seamLine.length >= 3
-          const solidIsCutP = !hasSeamP || cutSeamSwappedSet.has(p.id)
-          const activeLineP = solidIsCutP ? p.cutLine : p.seamLine
           const local = worldToPieceLocal(world, p)
-          const n = activeLineP.length
+          const n = p.cutLine.length
           for (let vi = 0; vi < n; vi++) {
-            const v = vi === 0 ? activeLineP[0].start : activeLineP[vi - 1].end
+            const v = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
             const dist = Math.hypot(local.x - v.x, local.y - v.y)
             if (dist < VERTEX_HIT) {
-              let seamDrag: { startLocal: Point; cutVertexIndex: number } | undefined
-              if (!solidIsCutP) {
-                seamDrag = { startLocal: { ...v }, cutVertexIndex: vi }
-              }
-              setDragging({ kind: 'vertex', pieceId: p.id, vertexIndex: vi, seamDrag })
+              setDragging({ kind: 'vertex', pieceId: p.id, vertexIndex: vi })
               ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
               return
             }
@@ -752,43 +738,25 @@ export function WorkspaceCanvas() {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (piece && piece.cutLine.length > 0) {
-          const hasSeamCP = piece.seamLine.length >= 3
-          const solidIsCutCP = !hasSeamCP || cutSeamSwappedSet.has(pieceId)
-          const activeLineCP = solidIsCutCP ? piece.cutLine : piece.seamLine
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestCurveIndexAndPoint(local, activeLineCP)
+          const nearest = nearestCurveIndexAndPoint(local, piece.cutLine)
           if (nearest && nearest.distance < 15) {
-            const curve = activeLineCP[nearest.curveIndex]
+            const curve = piece.cutLine[nearest.curveIndex]
             if (curve.type === 'line') {
-              const cutIndex = solidIsCutCP
-                ? nearest.curveIndex
-                : (() => {
-                    const mid = { x: (curve.start.x + curve.end.x) / 2, y: (curve.start.y + curve.end.y) / 2 }
-                    const nr = nearestCurveIndexAndPoint(mid, piece.cutLine)
-                    return nr ? nr.curveIndex : nearest.curveIndex
-                  })()
-              const cutCurve = piece.cutLine[cutIndex]
-              if (cutCurve && cutCurve.type === 'line') {
+              const cutCurve = piece.cutLine[nearest.curveIndex]
+              if (cutCurve?.type === 'line') {
                 const { start, end } = cutCurve
                 const dx = end.x - start.x
                 const dy = end.y - start.y
-                /* Kontrolle auf der Linie: keine Bulge beim Erstellen, Kontur bleibt unverändert.
-                   Nutzer kann danach über den blauen Punkt die Kurve anpassen. */
                 const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
                 const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
-                replaceSegmentWithBezier(pieceId, cutIndex, cp1, cp2)
+                replaceSegmentWithBezier(pieceId, nearest.curveIndex, cp1, cp2)
               }
             } else if (curve.type === 'bezier' && nearest.t != null && nearest.t > 1e-6 && nearest.t < 1 - 1e-6) {
-              let cutIndex = nearest.curveIndex
-              let t = nearest.t
-              if (!solidIsCutCP) {
-                const cutNr = nearestCurveIndexAndPoint(nearest.point, piece.cutLine)
-                if (cutNr) { cutIndex = cutNr.curveIndex; t = cutNr.t ?? t }
-              }
-              const cutCurve = piece.cutLine[cutIndex]
-              if (cutCurve?.type === 'bezier' && t != null && t > 1e-6 && t < 1 - 1e-6) {
-                const pt = solidIsCutCP ? nearest.point : (bezierAt(cutCurve, t))
-                insertPointOnCutLine(pieceId, cutIndex, pt, t)
+              const cutCurve = piece.cutLine[nearest.curveIndex]
+              if (cutCurve?.type === 'bezier') {
+                const pt = nearest.point
+                insertPointOnCutLine(pieceId, nearest.curveIndex, pt, nearest.t)
               }
             }
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
@@ -1041,20 +1009,16 @@ export function WorkspaceCanvas() {
           for (const pieceId of selectedPieceIds) {
             const p = pieces.find((x) => x.id === pieceId)
             if (!p || p.cutLine.length === 0) continue
-            const hasSeamH = p.seamLine.length >= 3
-            const solidIsCutH = !hasSeamH || cutSeamSwappedSet.has(p.id)
-            const activeLineH = solidIsCutH ? p.cutLine : p.seamLine
             const local = worldToPieceLocal(world, p)
-            const n = activeLineH.length
             const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
-            for (let vi = 0; vi < n; vi++) {
+            for (let vi = 0; vi < p.cutLine.length; vi++) {
               if (notchVIs.has(vi)) continue
-              const v = vi === 0 ? activeLineH[0].start : activeLineH[vi - 1].end
+              const v = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
               const d = Math.hypot(local.x - v.x, local.y - v.y)
               if (d < best.dist) best = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
             }
-            for (let ci = 0; ci < activeLineH.length; ci++) {
-              const c = activeLineH[ci]
+            for (let ci = 0; ci < p.cutLine.length; ci++) {
+              const c = p.cutLine[ci]
               if (c.type !== 'bezier') continue
               const pt = bezierAt(c, 0.5)
               const d = Math.hypot(local.x - pt.x, local.y - pt.y)
@@ -1201,12 +1165,9 @@ export function WorkspaceCanvas() {
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
           if (p && p.cutLine.length > 0) {
-            const hasSeamHC = p.seamLine.length >= 3
-            const solidIsCutHC = !hasSeamHC || cutSeamSwappedSet.has(p.id)
-            const activeLineHC = solidIsCutHC ? p.cutLine : p.seamLine
             const local = worldToPieceLocal(world, p)
-            const r = nearestCurveIndexAndPoint(local, activeLineHC)
-            if (r && r.distance < HOVER_CURVEPOINT_HIT && activeLineHC[r.curveIndex]?.type === 'line') {
+            const r = nearestCurveIndexAndPoint(local, p.cutLine)
+            if (r && r.distance < HOVER_CURVEPOINT_HIT && p.cutLine[r.curveIndex]?.type === 'line') {
               setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: r.curveIndex })
             } else {
               setHoveredCurvepointSegment(null)
@@ -1256,36 +1217,14 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        const cutVi = dragging.seamDrag ? dragging.seamDrag.cutVertexIndex : dragging.vertexIndex
-        if (dragging.seamDrag) {
-          const { startLocal, cutVertexIndex } = dragging.seamDrag
-          const dx = local.x - startLocal.x
-          const dy = local.y - startLocal.y
-          const cutV = cutVertexIndex === 0 ? piece.cutLine[0].start : piece.cutLine[cutVertexIndex - 1].end
-          updateVertex(dragging.pieceId, cutVertexIndex, { x: cutV.x + dx, y: cutV.y + dy })
-          setDragging((d) => d && d.kind === 'vertex' && d.seamDrag ? { ...d, seamDrag: { ...d.seamDrag, startLocal: local } } : d)
-        } else {
-          updateVertex(dragging.pieceId, dragging.vertexIndex, local)
-        }
-        snapSeamEdgeToMatch(dragging.pieceId, cutVi)
+        updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+        snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        if (dragging.seamDrag) {
-          const { startLocal, cutCurveIndex, cutT } = dragging.seamDrag
-          const dx = local.x - startLocal.x
-          const dy = local.y - startLocal.y
-          const cutCurve = piece.cutLine[cutCurveIndex]
-          if (cutCurve?.type === 'bezier') {
-            const ptOnCut = bezierAt(cutCurve, cutT)
-            movePointOnCurve(dragging.pieceId, cutCurveIndex, cutT, { x: ptOnCut.x + dx, y: ptOnCut.y + dy })
-          }
-          setDragging((d) => d && d.kind === 'pointOnCurve' && d.seamDrag ? { ...d, seamDrag: { ...d.seamDrag, startLocal: local } } : d)
-        } else {
-          movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, local)
-        }
+        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, local)
       } else if (dragging.kind === 'line') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -1727,8 +1666,7 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'vertex') {
-      const cutVi = dragging.seamDrag ? dragging.seamDrag.cutVertexIndex : dragging.vertexIndex
-      snapSeamEdgeToMatch(dragging.pieceId, cutVi)
+      snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
     }
     setDragging(null)
     setHoveredPieceId(null)
@@ -2106,13 +2044,11 @@ export function WorkspaceCanvas() {
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece || piece.cutLine.length === 0) return []
-                const hasSeam = piece.seamLine.length >= 3
-                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
-                const n = activeLine.length
+                const cutLine = piece.cutLine
+                const n = cutLine.length
                 return Array.from({ length: n }, (_, vi) => {
-                  if (solidIsCut && piece.notches.some((no) => no.vertexIndex === vi)) return null
-                  const v = vi === 0 ? activeLine[0].start : activeLine[vi - 1].end
+                  if (piece.notches.some((no) => no.vertexIndex === vi)) return null
+                  const v = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
                   const w = pieceLocalToWorld(v, piece)
                   const isSoft = (piece.softVertices ?? []).includes(vi)
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
@@ -2151,11 +2087,8 @@ export function WorkspaceCanvas() {
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
-                const hasSeam = piece.seamLine.length >= 3
-                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
-                return activeLine.flatMap((c, ci) => {
+                return piece.cutLine.flatMap((c, ci) => {
                   if (c.type !== 'bezier') return []
                   const ptOnCurve = bezierAt(c, 0.5)
                   const w = pieceLocalToWorld(ptOnCurve, piece)
