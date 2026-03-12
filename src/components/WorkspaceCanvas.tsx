@@ -215,9 +215,10 @@ function PieceGroup({
 }) {
   const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
   const tx = `translate(${transform.x},${transform.y}) rotate(${transform.rotation}) scale(${transform.mirrored ? -1 : 1},1)`
-  const mergedCutLine = cutLineWithNotchCutouts(cutLine, notches, seamLine)
+  const notchesForCutouts = notchIdBeingDragged ? notches.filter((n) => n.id !== notchIdBeingDragged) : notches
+  const mergedCutLine = cutLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
   const cutPath = closedPathD(mergedCutLine)
-  const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notches, seamLine)
+  const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
   const seamPath = closedPathD(mergedSeamLine)
   const fillHellgelb = '#fef9c3'
   const hasSeam = !!(seamPath && seamLine.length >= 3)
@@ -561,6 +562,8 @@ export function WorkspaceCanvas() {
     t: number
     distanceMmLeft: number
     distanceMmRight: number
+    storePos: Point
+    storeAngle: number
   } | null>(null)
   const [hoveredSegment, setHoveredSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [hoveredSegmentPos, setHoveredSegmentPos] = useState<{ clientX: number; clientY: number } | null>(null)
@@ -1184,6 +1187,8 @@ export function WorkspaceCanvas() {
               t: r.t,
               distanceMmLeft,
               distanceMmRight,
+              storePos: r.point,
+              storeAngle: angle,
             })
           } else {
             setNotchPreview(null)
@@ -1374,11 +1379,6 @@ export function WorkspaceCanvas() {
               storeAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
             }
           }
-          updateNotch(dragging.pieceId, dragging.notchId, {
-            position: storePos,
-            angle: storeAngle,
-            vertexIndex: undefined,
-          })
           const notchesOnSegment = piece.notches.map((n) => {
             if (n.id === dragging.notchId) return t
             const ct = getNotchCurveIndexAndT(n, piece.cutLine, piece.seamLine)
@@ -1398,6 +1398,8 @@ export function WorkspaceCanvas() {
             t,
             distanceMmLeft,
             distanceMmRight,
+            storePos,
+            storeAngle,
           })
         } else {
           setNotchPreview(null)
@@ -1677,6 +1679,13 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'notchMove') {
+      if (notchPreview && notchPreview.pieceId === dragging.pieceId) {
+        updateNotch(dragging.pieceId, dragging.notchId, {
+          position: notchPreview.storePos,
+          angle: notchPreview.storeAngle,
+          vertexIndex: undefined,
+        })
+      }
       setNotchPreview(null)
       setDragging(null)
     } else if (dragging?.kind === 'notch') {
@@ -1777,7 +1786,7 @@ export function WorkspaceCanvas() {
     }
     setDragging(null)
     setHoveredPieceId(null)
-  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, setTool, finishDigitizeDrag, snapSeamEdgeToMatch])
+  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, updateNotch, notchPreview, setTool, finishDigitizeDrag, snapSeamEdgeToMatch])
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault()
