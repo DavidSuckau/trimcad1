@@ -778,6 +778,18 @@ export function WorkspaceCanvas() {
                 const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
                 replaceSegmentWithBezier(pieceId, cutIndex, cp1, cp2)
               }
+            } else if (curve.type === 'bezier' && nearest.t != null && nearest.t > 1e-6 && nearest.t < 1 - 1e-6) {
+              let cutIndex = nearest.curveIndex
+              let t = nearest.t
+              if (!solidIsCutCP) {
+                const cutNr = nearestCurveIndexAndPoint(nearest.point, piece.cutLine)
+                if (cutNr) { cutIndex = cutNr.curveIndex; t = cutNr.t ?? t }
+              }
+              const cutCurve = piece.cutLine[cutIndex]
+              if (cutCurve?.type === 'bezier' && t != null && t > 1e-6 && t < 1 - 1e-6) {
+                const pt = solidIsCutCP ? nearest.point : (bezierAt(cutCurve, t))
+                insertPointOnCutLine(pieceId, cutIndex, pt, t)
+              }
             }
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
