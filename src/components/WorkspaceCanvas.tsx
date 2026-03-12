@@ -1278,6 +1278,7 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
+        const cutVi = dragging.seamDrag ? dragging.seamDrag.cutVertexIndex : dragging.vertexIndex
         if (dragging.seamDrag) {
           const { startLocal, cutVertexIndex } = dragging.seamDrag
           const dx = local.x - startLocal.x
@@ -1288,6 +1289,7 @@ export function WorkspaceCanvas() {
         } else {
           updateVertex(dragging.pieceId, dragging.vertexIndex, local)
         }
+        snapSeamEdgeToMatch(dragging.pieceId, cutVi)
       } else if (dragging.kind === 'controlpoint') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -1430,6 +1432,7 @@ export function WorkspaceCanvas() {
       cutSeamSwappedSet,
       digitizeState,
       updateDigitizeDrag,
+      snapSeamEdgeToMatch,
     ]
   )
 
