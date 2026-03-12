@@ -159,8 +159,8 @@ function reverseCurves(curves: Curve[]): Curve[] {
   return out
 }
 
-const MITER_LIMIT = 2.0
-const MIN_COS_HALF = 1 / MITER_LIMIT // 0.5 — corresponds to ~60° half-angle
+const MITER_LIMIT = 1.4
+const MIN_COS_HALF = 1 / MITER_LIMIT
 
 /**
  * Offset-Vertex mit Miter-Join berechnen. Bei spitzen Ecken wird das
@@ -217,7 +217,8 @@ function fitOffsetBezierCPs(
   endV: Point
 ): { cp1: Point; cp2: Point } {
   const c = curves[segIdx] as import('../types/model').BezierCurve
-  const samples = [0.15, 0.3, 0.5, 0.7, 0.85]
+  /* Stärkere Abtastung an den Rändern (0.05, 0.95) verhindert Buckel/Ecken an Segmentgrenzen */
+  const samples = [0.05, 0.15, 0.3, 0.5, 0.7, 0.85, 0.95]
 
   let sumAA = 0, sumAB = 0, sumBB = 0
   let sumARx = 0, sumARy = 0, sumBRx = 0, sumBRy = 0
