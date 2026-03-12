@@ -772,27 +772,10 @@ export function WorkspaceCanvas() {
                 const { start, end } = cutCurve
                 const dx = end.x - start.x
                 const dy = end.y - start.y
-                const len = Math.hypot(dx, dy) || 1
-                const mx = (start.x + end.x) / 2
-                const my = (start.y + end.y) / 2
-                let perpX = -dy / len
-                let perpY = dx / len
-                const side = (local.x - mx) * perpX + (local.y - my) * perpY
-                if (side < 0) {
-                  perpX = -perpX
-                  perpY = -perpY
-                }
-                /* Bulge = Distanz von der Linie zur Maus, damit die Kurve exakt dorthin gebogen wird */
-                const distFromLine = Math.abs(side)
-                const bulge = Math.min(distFromLine, 0.5 * len)
-                const cp1 = {
-                  x: start.x + dx / 3 + perpX * bulge,
-                  y: start.y + dy / 3 + perpY * bulge,
-                }
-                const cp2 = {
-                  x: start.x + (2 * dx) / 3 + perpX * bulge,
-                  y: start.y + (2 * dy) / 3 + perpY * bulge,
-                }
+                /* Kontrolle auf der Linie: keine Bulge beim Erstellen, Kontur bleibt unverändert.
+                   Nutzer kann danach über den blauen Punkt die Kurve anpassen. */
+                const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
+                const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
                 replaceSegmentWithBezier(pieceId, cutIndex, cp1, cp2)
               }
             }
