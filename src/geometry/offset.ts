@@ -20,6 +20,8 @@ const BEZIER_SAMPLES = 64
 export type OffsetOptions = {
   joinType?: 'miter' | 'round' | 'square'
   miterLimit?: number
+  /** Douglas-Peucker Toleranz (mm); kleiner = Eckpunkte bleiben erhalten */
+  simplifyTolerance?: number
 }
 
 function samePoint(a: Point, b: Point, eps = 1e-6): boolean {
@@ -129,7 +131,8 @@ export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetO
   if (outPts.length > 1 && outPts[0].x === outPts[outPts.length - 1].x && outPts[0].y === outPts[outPts.length - 1].y) {
     outPts.pop()
   }
-  outPts = simplifyClosedPolygon(outPts, 0.15)
+  const tol = options?.simplifyTolerance ?? 0.15
+  outPts = simplifyClosedPolygon(outPts, tol)
   const segs = pointsToLineCurves(outPts)
   if (outPts.length >= 3) {
     segs.push({ type: 'line', start: outPts[outPts.length - 1], end: outPts[0] })
@@ -166,7 +169,11 @@ function reverseCurves(curves: Curve[]): Curve[] {
  */
 export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: number): Curve[] {
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
-  const raw = offsetCurves(cutLine, -seamAllowanceMm, { joinType: 'miter', miterLimit: 2 })
+  const raw = offsetCurves(cutLine, -seamAllowanceMm, {
+    joinType: 'miter',
+    miterLimit: 10,
+    simplifyTolerance: 0.06,
+  })
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)
   const seamArea = signedAreaCurves(raw)
