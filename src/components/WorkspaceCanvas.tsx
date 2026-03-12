@@ -698,40 +698,44 @@ export function WorkspaceCanvas() {
       }
       const VERTEX_HIT = 8
       const POINT_ON_CURVE_HIT = 8
-      // Punkt auf Kurve (Mitte): ziehen verschiebt die Kurve glatt. Immer cutLine für konsistente Indizes.
+      // Nächsten Punkt wählen (nicht ersten im Bereich), damit bei vielen nahen Punkten der richtige getroffen wird.
       if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
-        for (const pieceId of [...selectedPieceIds].reverse()) {
+        let bestPointOnCurve: { dist: number; pieceId: string; curveIndex: number } | null = null
+        let bestVertex: { dist: number; pieceId: string; vertexIndex: number } | null = null
+        for (const pieceId of selectedPieceIds) {
           const p = pieces.find((x) => x.id === pieceId)
           if (!p || p.cutLine.length === 0) continue
           const local = worldToPieceLocal(world, p)
+          const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
           for (let ci = 0; ci < p.cutLine.length; ci++) {
             const c = p.cutLine[ci]
             if (c.type !== 'bezier') continue
             const ptOnCurve = bezierAt(c, 0.5)
-            const dist = Math.hypot(local.x - ptOnCurve.x, local.y - ptOnCurve.y)
-            if (dist < POINT_ON_CURVE_HIT) {
-              setDragging({ kind: 'pointOnCurve', pieceId: p.id, curveIndex: ci, t: 0.5 })
-              ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-              return
+            const d = Math.hypot(local.x - ptOnCurve.x, local.y - ptOnCurve.y)
+            if (d < POINT_ON_CURVE_HIT && (!bestPointOnCurve || d < bestPointOnCurve.dist)) {
+              bestPointOnCurve = { dist: d, pieceId: p.id, curveIndex: ci }
+            }
+          }
+          for (let vi = 0; vi < p.cutLine.length; vi++) {
+            if (notchVIs.has(vi)) continue
+            const v = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
+            const d = Math.hypot(local.x - v.x, local.y - v.y)
+            if (d < VERTEX_HIT && (!bestVertex || d < bestVertex.dist)) {
+              bestVertex = { dist: d, pieceId: p.id, vertexIndex: vi }
             }
           }
         }
-      }
-      if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
-        for (const pieceId of [...selectedPieceIds].reverse()) {
-          const p = pieces.find((x) => x.id === pieceId)
-          if (!p || p.cutLine.length === 0) continue
-          const local = worldToPieceLocal(world, p)
-          const n = p.cutLine.length
-          for (let vi = 0; vi < n; vi++) {
-            const v = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
-            const dist = Math.hypot(local.x - v.x, local.y - v.y)
-            if (dist < VERTEX_HIT) {
-              setDragging({ kind: 'vertex', pieceId: p.id, vertexIndex: vi })
-              ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-              return
-            }
-          }
+        const usePointOnCurve = bestPointOnCurve && (!bestVertex || bestPointOnCurve.dist <= bestVertex.dist)
+        const useVertex = bestVertex && (!bestPointOnCurve || bestVertex.dist < bestPointOnCurve.dist)
+        if (usePointOnCurve && bestPointOnCurve) {
+          setDragging({ kind: 'pointOnCurve', pieceId: bestPointOnCurve.pieceId, curveIndex: bestPointOnCurve.curveIndex, t: 0.5 })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+        if (useVertex && bestVertex) {
+          setDragging({ kind: 'vertex', pieceId: bestVertex.pieceId, vertexIndex: bestVertex.vertexIndex })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
         }
       }
       if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
