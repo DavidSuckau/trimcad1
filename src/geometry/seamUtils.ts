@@ -1,5 +1,5 @@
 import type { PatternPiece, Point } from '../types/model'
-import { curveSegmentArcLength, bezierAt } from './curveToPath'
+import { curveSegmentArcLength, bezierAt, pointAtPathLength } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT } from './notchOnCurve'
 
@@ -186,4 +186,48 @@ export function edgeTotalLength(piece: PatternPiece, curveIndices: number[]): nu
     if (seg) total += curveSegmentArcLength(seg, 0, 1)
   }
   return total
+}
+
+/**
+ * Ermittelt die exakte Vertex-Position, sodass die Kantenlänge targetLength mm ergibt.
+ * vertexIndex muss Start oder Ende der Kante sein (curveIndices[0] oder curveIndices[last]+1).
+ * Liefert null wenn der Vertex nicht zur Kante gehört oder die Berechnung fehlschlägt.
+ */
+export function snapVertexToEdgeLength(
+  piece: PatternPiece,
+  curveIndices: number[],
+  vertexIndex: number,
+  targetLength: number
+): Point | null {
+  const n = piece.cutLine.length
+  if (curveIndices.length === 0 || n === 0) return null
+  const firstCi = curveIndices[0]
+  const lastCi = curveIndices[curveIndices.length - 1]
+  const startVi = firstCi
+  const endVi = (lastCi + 1) % n
+
+  const segs = curveIndices.map((ci) => piece.cutLine[ci]).filter(Boolean)
+  if (segs.length === 0) return null
+
+  if (vertexIndex === startVi) {
+    let fixed = 0
+    for (let i = 1; i < segs.length; i++) {
+      fixed += curveSegmentArcLength(segs[i], 0, 1)
+    }
+    const needFromEnd = Math.max(0, targetLength - fixed)
+    const seg0Len = curveSegmentArcLength(segs[0], 0, 1)
+    const distFromStart = Math.max(0, seg0Len - needFromEnd)
+    const r = pointAtPathLength(segs.slice(0, 1), distFromStart)
+    return r?.point ?? null
+  }
+  if (vertexIndex === endVi) {
+    let fixed = 0
+    for (let i = 0; i < segs.length - 1; i++) {
+      fixed += curveSegmentArcLength(segs[i], 0, 1)
+    }
+    const needLast = Math.max(0, targetLength - fixed)
+    const r = pointAtPathLength(segs.slice(-1), needLast)
+    return r?.point ?? null
+  }
+  return null
 }

@@ -3,7 +3,7 @@ import type { Workspace, PatternPiece, ViewState, Point, Curve, Notch, Drill, Se
 import { offsetCurvesInwardForSeam, offsetSegmentPoints } from '../geometry/offset'
 import { splitBezierAt, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
-import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength } from '../geometry/seamUtils'
+import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -172,6 +172,8 @@ type Store = {
   adjustSeamNotches: (assignmentId: string, keepSide: 'A' | 'B') => void
   /** Prüft alle SeamAssignments: Gesamtlänge gleich + Notch-Abstände ungleich → Modal öffnen. */
   checkSeamAdjustment: () => void
+  /** Snap bei Vertex-Drag: wenn Differenz < 5mm, Vertex exakt auf 0 setzen. */
+  snapSeamEdgeToMatch: (pieceId: string, vertexIndex: number) => void
 
   addCurveToCutLine: (pieceId: string, curve: Curve) => void
   addInternalLine: (pieceId: string, curve: Curve) => void
@@ -477,12 +479,27 @@ export const useStore = create<Store>((set, get) => ({
     }
     if (targetPoints.length === 0) { set({ seamAdjustmentDialog: null }); return }
 
-    set({ seamAdjustmentDialog: null })
+    const tpMap = new Map(targetPoints.map((tp) => [tp.notchId, tp.point]))
 
-    const { updateNotch } = get()
-    for (const tp of targetPoints) {
-      updateNotch(tgtPieceId, tp.notchId, { position: tp.point })
-    }
+    set((st) => {
+      const piece = st.workspace.pieces.find((p) => p.id === tgtPieceId)
+      if (!piece) return { seamAdjustmentDialog: null }
+      const notches = piece.notches.map((n) => {
+        const newPos = tpMap.get(n.id)
+        if (!newPos) return n
+        const { vertexIndex: _v, ...rest } = n
+        return { ...rest, position: { ...newPos } }
+      })
+      return {
+        seamAdjustmentDialog: null,
+        workspace: {
+          ...st.workspace,
+          pieces: st.workspace.pieces.map((p) =>
+            p.id === tgtPieceId ? { ...p, notches } : p
+          ),
+        },
+      }
+    })
   },
 
   checkSeamAdjustment: () => {
@@ -507,6 +524,29 @@ export const useStore = create<Store>((set, get) => ({
           set({ seamAdjustmentDialog: a.id })
           return
         }
+      }
+    }
+  },
+
+  snapSeamEdgeToMatch: (pieceId, vertexIndex) => {
+    const s = get()
+    const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece) return
+    for (const a of s.workspace.seamAssignments) {
+      const isA = a.pieceIdA === pieceId
+      const isB = a.pieceIdB === pieceId
+      if (!isA && !isB) continue
+      const curveIndices = isA ? a.curveIndicesA : a.curveIndicesB
+      const refPiece = s.workspace.pieces.find((p) => p.id === (isA ? a.pieceIdB : a.pieceIdA))
+      if (!refPiece) continue
+      const refLen = edgeTotalLength(refPiece, isA ? a.curveIndicesB : a.curveIndicesA)
+      const currLen = edgeTotalLength(piece, curveIndices)
+      const diff = Math.abs(currLen - refLen)
+      if (diff >= 5) continue
+      const snapPt = snapVertexToEdgeLength(piece, curveIndices, vertexIndex, refLen)
+      if (snapPt) {
+        get().updateVertex(pieceId, vertexIndex, snapPt)
+        return
       }
     }
   },

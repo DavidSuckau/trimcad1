@@ -500,6 +500,7 @@ export function WorkspaceCanvas() {
     toastMessage,
     setToastMessage,
     checkSeamAdjustment,
+    snapSeamEdgeToMatch,
     digitizeState,
     addDigitizeNode,
     updateDigitizeDrag,
@@ -1759,10 +1760,13 @@ export function WorkspaceCanvas() {
         }
         setTool('select')
       }
+    } else if (dragging?.kind === 'vertex') {
+      const cutVi = dragging.seamDrag ? dragging.seamDrag.cutVertexIndex : dragging.vertexIndex
+      snapSeamEdgeToMatch(dragging.pieceId, cutVi)
     }
     setDragging(null)
     setHoveredPieceId(null)
-  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, setTool, finishDigitizeDrag])
+  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, setTool, finishDigitizeDrag, snapSeamEdgeToMatch])
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault()
@@ -2499,12 +2503,13 @@ export function WorkspaceCanvas() {
               const notchMismatch = notchCountA !== notchCountB
               const subsA = getSubSegments(pieceA, a.curveIndicesA)
               const subsB = getSubSegments(pieceB, a.curveIndicesB)
-              let subDiffs: { diff: number; midA: Point; midB: Point }[] | null = null
+              let subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null = null
               if (!notchMismatch && subsA.length === subsB.length && subsA.length >= 2) {
                 subDiffs = subsA.map((sa, i) => {
                   const sb = subsB[subsB.length - 1 - i]
                   return {
-                    diff: Math.abs(sa.length - sb.length),
+                    lenA: sa.length,
+                    lenB: sb.length,
                     midA: pieceLocalToWorld(sa.midpoint, pieceA),
                     midB: pieceLocalToWorld(sb.midpoint, pieceB),
                   }
@@ -2568,13 +2573,14 @@ export function WorkspaceCanvas() {
                     </text>
                   )}
                   {subDiffs && subDiffs.map((sd, i) => {
-                    const isMatch = sd.diff < 0.1
+                    const isMatch = Math.abs(sd.lenA - sd.lenB) < 0.1
                     const color = isMatch ? '#2e7d32' : '#c62828'
-                    const label = isMatch ? '✓' : `Δ${sd.diff.toFixed(1)}`
+                    const labelA = isMatch ? '✓' : `${sd.lenA.toFixed(1)}`
+                    const labelB = isMatch ? '✓' : `${sd.lenB.toFixed(1)}`
                     return (
                       <g key={`sub-${i}`} pointerEvents="none">
-                        <text x={sd.midA.x} y={sd.midA.y - 5} textAnchor="middle" fontSize={8} fill={color} fontWeight="600" fontFamily="sans-serif">{label}</text>
-                        <text x={sd.midB.x} y={sd.midB.y - 5} textAnchor="middle" fontSize={8} fill={color} fontWeight="600" fontFamily="sans-serif">{label}</text>
+                        <text x={sd.midA.x} y={sd.midA.y - 5} textAnchor="middle" fontSize={8} fill={color} fontWeight="600" fontFamily="sans-serif">{labelA}</text>
+                        <text x={sd.midB.x} y={sd.midB.y - 5} textAnchor="middle" fontSize={8} fill={color} fontWeight="600" fontFamily="sans-serif">{labelB}</text>
                       </g>
                     )
                   })}
