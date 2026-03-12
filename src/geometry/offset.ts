@@ -166,7 +166,7 @@ function reverseCurves(curves: Curve[]): Curve[] {
  */
 export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: number): Curve[] {
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
-  const raw = offsetCurves(cutLine, -seamAllowanceMm, { joinType: 'round' })
+  const raw = offsetCurves(cutLine, -seamAllowanceMm, { joinType: 'miter', miterLimit: 2 })
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)
   const seamArea = signedAreaCurves(raw)
