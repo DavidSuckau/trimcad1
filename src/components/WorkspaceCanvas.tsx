@@ -671,20 +671,22 @@ export function WorkspaceCanvas() {
         return
       }
       if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
-        // Nahtzuordnung: Treffer auf der Nahtlinie (seamLine), nicht auf der Schnittlinie (cutLine)
+        // Nahtzuordnung: Klick immer auf der Nahtlinie (seamLine). Für die Logik speichern wir aber cutLine-Indices.
         let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
         for (const p of pieces) {
-          if (!p.cutLine || p.cutLine.length === 0) continue
+          if (!p.cutLine || p.cutLine.length === 0 || p.seamLine.length < 3) continue
           const local = worldToPieceLocal(world, p)
-          const curvesForHit = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
-          const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
-          if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, curvesForHit)) {
-            const nearestCut = nearestCurveIndexAndPoint(nearest.point, p.cutLine)
-            if (!nearestCut) continue
-            const cutCurveIndex = nearestCut.curveIndex
-            if (!best || nearest.distance < best.distance) {
-              best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
-            }
+          const nearestSeam = nearestCurveIndexAndPoint(local, p.seamLine)
+          if (!nearestSeam || nearestSeam.distance >= SEAM_HIT_MM) continue
+          // Innenseite wird relativ zur Außenkontur (cutLine) geprüft
+          const nearestCutForInside = nearestCurveIndexAndPoint(local, p.cutLine)
+          if (!nearestCutForInside || !isClickOnInnerSideOfEdge(local, nearestCutForInside, p.cutLine)) continue
+          // Kante für Zuordnung kommt aus der cutLine
+          const nearestCut = nearestCurveIndexAndPoint(nearestSeam.point, p.cutLine)
+          if (!nearestCut) continue
+          const cutCurveIndex = nearestCut.curveIndex
+          if (!best || nearestSeam.distance < best.distance) {
+            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearestSeam.distance, piece: p }
           }
         }
         if (best) {
@@ -1042,17 +1044,17 @@ export function WorkspaceCanvas() {
           const world = toWorld(e.clientX, e.clientY)
           let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
           for (const p of pieces) {
-            if (!p.cutLine?.length) continue
+            if (!p.cutLine?.length || p.seamLine.length < 3) continue
             const local = worldToPieceLocal(world, p)
-            const curvesForHit = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
-            const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
-            if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, curvesForHit)) {
-              const nearestCut = nearestCurveIndexAndPoint(nearest.point, p.cutLine)
-              if (!nearestCut) continue
-              const cutCurveIndex = nearestCut.curveIndex
-              if (!best || nearest.distance < best.distance) {
-                best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
-              }
+            const nearestSeam = nearestCurveIndexAndPoint(local, p.seamLine)
+            if (!nearestSeam || nearestSeam.distance >= SEAM_HIT_MM) continue
+            const nearestCutForInside = nearestCurveIndexAndPoint(local, p.cutLine)
+            if (!nearestCutForInside || !isClickOnInnerSideOfEdge(local, nearestCutForInside, p.cutLine)) continue
+            const nearestCut = nearestCurveIndexAndPoint(nearestSeam.point, p.cutLine)
+            if (!nearestCut) continue
+            const cutCurveIndex = nearestCut.curveIndex
+            if (!best || nearestSeam.distance < best.distance) {
+              best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearestSeam.distance, piece: p }
             }
           }
           if (best) {
@@ -1813,7 +1815,7 @@ export function WorkspaceCanvas() {
         cursor: rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' ? 'crosshair' : 'default',
       }}
     >
-      <div className="workspace-version">Aktuell V. 0.0.2</div>
+      <div className="workspace-version">Aktuell V. 0.0.3</div>
       {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"
