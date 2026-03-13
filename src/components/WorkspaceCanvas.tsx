@@ -5,7 +5,7 @@ import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { offsetSegmentPoints } from '../geometry/offset'
 import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPositionAndAngleOnSeamLine, getNotchCurveIndexAndT, notchTriangleCorners, notchCutoutPoints, cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
 import { isPointInClosedCurves } from '../geometry/pointInPolygon'
-import { getCornerRange, countNotchesOnEdge, getSubSegments } from '../geometry/seamUtils'
+import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves } from '../geometry/seamUtils'
 import type { PatternPiece, Point, Curve, SeamAssignment } from '../types/model'
 
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
@@ -2432,38 +2432,18 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === hoveredSeamForNahtzuordnung.pieceId)
             if (!piece?.cutLine?.length) return null
             const indices = hoveredSeamForNahtzuordnung.curveIndices
-            const seamMm = piece.seamAllowanceMm
-            const useSeam = seamMm != null && seamMm > 0 && piece.seamLine.length >= 3
+            const useSeam = piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+            const curves = useSeam ? getSeamEdgeCurves(piece, indices) : indices.map((ci) => piece.cutLine[ci]).filter(Boolean)
             let d = ''
-            for (const ci of indices) {
-              const seg = piece.cutLine[ci]
+            for (const seg of curves) {
               if (!seg) continue
-              let start: Point
-              let end: Point
-              let cp1: Point | undefined
-              let cp2: Point | undefined
-              if (useSeam) {
-                const pts = offsetSegmentPoints(piece.cutLine, ci, -seamMm)
-                if (!pts) continue
-                start = pts.start
-                end = pts.end
-                cp1 = pts.cp1
-                cp2 = pts.cp2
-              } else {
-                start = seg.start
-                end = seg.end
-                if (seg.type === 'bezier') {
-                  cp1 = seg.cp1
-                  cp2 = seg.cp2
-                }
-              }
-              const ws = pieceLocalToWorld(start, piece)
-              const we = pieceLocalToWorld(end, piece)
-              if (!cp1 || !cp2) {
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              if (seg.type === 'line') {
                 d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
               } else {
-                const wc1 = pieceLocalToWorld(cp1, piece)
-                const wc2 = pieceLocalToWorld(cp2, piece)
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
                 d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
               }
             }

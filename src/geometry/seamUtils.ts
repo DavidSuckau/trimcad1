@@ -1,7 +1,8 @@
-import type { PatternPiece, Point } from '../types/model'
-import { curveSegmentArcLength, bezierAt, pointAtPathLength } from './curveToPath'
+import type { PatternPiece, Point, Curve } from '../types/model'
+import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
-import { getNotchCurveIndexAndT } from './notchOnCurve'
+import { getNotchCurveIndexAndT, extractCurvePortion } from './notchOnCurve'
+import { offsetSegmentPoints } from './offset'
 
 /**
  * Erweitert einen einzelnen curveIndex zur Eckpunkt→Eckpunkt-Range.
@@ -176,6 +177,60 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[]): {
 
   result.sort((a, b) => a.arcLength - b.arcLength)
   return result
+}
+
+/**
+ * Liefert die Seam-Linien-Kurven für eine Eckpunkt→Eckpunkt-Kante (nur auf der Nahtlinie, nicht darüber hinaus).
+ * Nutzt die echte piece.seamLine und schneidet exakt von Eckpunkt zu Eckpunkt.
+ */
+export function getSeamEdgeCurves(piece: PatternPiece, curveIndices: number[]): Curve[] {
+  if (curveIndices.length === 0 || piece.seamLine.length < 3 || piece.seamAllowanceMm == null) return []
+  const cutLine = piece.cutLine
+  const seamLine = piece.seamLine
+  const seamMm = piece.seamAllowanceMm
+
+  const firstCi = curveIndices[0]
+  const lastCi = curveIndices[curveIndices.length - 1]
+  const ptsStart = offsetSegmentPoints(cutLine, firstCi, -seamMm)
+  const ptsEnd = offsetSegmentPoints(cutLine, lastCi, -seamMm)
+  if (!ptsStart || !ptsEnd) return []
+
+  const nr1 = nearestCurveIndexAndPoint(ptsStart.start, seamLine)
+  const nr2 = nearestCurveIndexAndPoint(ptsEnd.end, seamLine)
+  if (!nr1 || !nr2) return []
+
+  const L1 = pathLengthAt(seamLine, nr1.curveIndex, nr1.t ?? 0)
+  const L2 = pathLengthAt(seamLine, nr2.curveIndex, nr2.t ?? 1)
+  const total = totalPathLength(seamLine)
+  const cutLen = edgeTotalLength(piece, curveIndices)
+
+  const dForward = L2 >= L1 ? L2 - L1 : total - L1 + L2
+  const dBack = total - dForward
+  const useForward = dForward <= dBack && Math.abs(dForward - cutLen) <= Math.abs(dBack - cutLen)
+
+  const n = seamLine.length
+  let fromCI: number
+  let fromT: number
+  let toCI: number
+  let toT: number
+  if (useForward) {
+    fromCI = nr1.curveIndex
+    fromT = nr1.t ?? 0
+    toCI = nr2.curveIndex
+    toT = nr2.t ?? 1
+  } else {
+    fromCI = nr2.curveIndex
+    fromT = nr2.t ?? 1
+    toCI = nr1.curveIndex
+    toT = nr1.t ?? 0
+  }
+
+  if (fromCI <= toCI) {
+    return extractCurvePortion(seamLine, fromCI, fromT, toCI, toT)
+  }
+  const part1 = extractCurvePortion(seamLine, fromCI, fromT, n - 1, 1)
+  const part2 = extractCurvePortion(seamLine, 0, 0, toCI, toT)
+  return [...part1, ...part2]
 }
 
 /** Gesamtbogenlänge einer Kante (curveIndices) in mm. */

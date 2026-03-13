@@ -177,7 +177,7 @@ function copyCurve(c: Curve): Curve {
  * Extrahiert einen Abschnitt der Kontur zwischen (fromCI, fromT) und (toCI, toT).
  * Bezier-Segmente werden bei Bedarf via de Casteljau geteilt.
  */
-function extractCurvePortion(
+export function extractCurvePortion(
   curves: Curve[],
   fromCI: number,
   fromT: number,
