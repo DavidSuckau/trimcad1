@@ -473,6 +473,16 @@ body {
   color: #555;
 }
 
+.workspace-version {
+  position: absolute;
+  right: 16px;
+  bottom: 32px;
+  font-size: 0.75rem;
+  color: #999;
+  user-select: none;
+  pointer-events: none;
+}
+
 /* Nahtzugabe-Dialog (Modal) */
 .nahtzugabe-dialog-overlay {
   position: fixed;
