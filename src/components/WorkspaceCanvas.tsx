@@ -680,6 +680,10 @@ export function WorkspaceCanvas() {
           const local = worldToPieceLocal(world, p)
           const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
           if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+          if (hasSeam) {
+            const distToCut = nearestCurveIndexAndPoint(local, p.cutLine)?.distance ?? Infinity
+            if (nearest.distance >= distToCut) continue
+          }
           const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
           if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
           const cutCurveIndex = hasSeam
@@ -1031,6 +1035,10 @@ export function WorkspaceCanvas() {
             const local = worldToPieceLocal(world, p)
             const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
             if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+            if (hasSeam) {
+              const distToCut = nearestCurveIndexAndPoint(local, p.cutLine)?.distance ?? Infinity
+              if (nearest.distance >= distToCut) continue
+            }
             const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
             if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
             const cutCurveIndex = hasSeam
@@ -2406,9 +2414,10 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === hoveredSeamForNahtzuordnung.pieceId)
             if (!piece?.cutLine?.length) return null
             const indices = hoveredSeamForNahtzuordnung.curveIndices
+            const curvesForHighlight = piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
             let d = ''
             for (const ci of indices) {
-              const seg = piece.cutLine[ci]
+              const seg = curvesForHighlight[ci]
               if (!seg) continue
               const ws = pieceLocalToWorld(seg.start, piece)
               const we = pieceLocalToWorld(seg.end, piece)
