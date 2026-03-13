@@ -32,6 +32,7 @@ export function Toolbar() {
     selectedPieceIds,
     applyOffset,
     removeSeamAllowance,
+    rotatePiece90,
     pendingNahtzugabeClick: _pendingNahtzugabeClick,
     setPendingNahtzugabeClick,
     nahtzugabeDialogPieceId,
@@ -487,6 +488,19 @@ export function Toolbar() {
                   disabled={selectedPieceIds.length === 0}
                 >
                   Nahtzugabe {NAHTZUGABE_MM} mm
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    selectedPieceIds.forEach((id) => rotatePiece90(id))
+                    closeMenu()
+                  }}
+                  disabled={selectedPieceIds.length === 0}
+                >
+                  90° drehen <span className="menubar-shortcut">R</span>
                 </button>
               </li>
             </ul>

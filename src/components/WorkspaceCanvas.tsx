@@ -211,6 +211,7 @@ function PieceGroup({
   showDrills,
   showInternalLines,
   showPieceNames,
+  onContextMenu,
 }: {
   piece: PatternPiece
   isSelected: boolean
@@ -229,6 +230,7 @@ function PieceGroup({
   showDrills?: boolean
   showInternalLines?: boolean
   showPieceNames?: boolean
+  onContextMenu?: (e: React.MouseEvent) => void
 }) {
   const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
   const tx = `translate(${transform.x},${transform.y}) rotate(${transform.rotation}) scale(${transform.mirrored ? -1 : 1},1)`
@@ -244,7 +246,11 @@ function PieceGroup({
   const dashedPath = solidIsCut ? seamPath : cutPath
 
   return (
-    <g transform={tx} onPointerDown={onPointerDown}>
+    <g
+      transform={tx}
+      onPointerDown={onPointerDown}
+      onContextMenu={onContextMenu}
+    >
       {hasSeam && dashedPath && (
         <path
           d={dashedPath}
@@ -520,6 +526,7 @@ export function WorkspaceCanvas() {
     removeVertex,
     convertBezierSegmentToLine,
     flipPieceAlongGrain,
+    rotatePiece90,
     toastMessage,
     setToastMessage,
     checkSeamAdjustment,
@@ -540,6 +547,11 @@ export function WorkspaceCanvas() {
     clientY: number
   } | null>(null)
   const [grainContextMenu, setGrainContextMenu] = useState<{
+    pieceId: string
+    clientX: number
+    clientY: number
+  } | null>(null)
+  const [pieceContextMenu, setPieceContextMenu] = useState<{
     pieceId: string
     clientX: number
     clientY: number
@@ -1452,6 +1464,13 @@ export function WorkspaceCanvas() {
   }, [grainContextMenu])
 
   useEffect(() => {
+    if (!pieceContextMenu) return
+    const onClose = () => setPieceContextMenu(null)
+    document.addEventListener('pointerdown', onClose)
+    return () => document.removeEventListener('pointerdown', onClose)
+  }, [pieceContextMenu])
+
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
@@ -1464,6 +1483,11 @@ export function WorkspaceCanvas() {
       if (grainContextMenu && !inInput && e.key === 'Escape') {
         e.preventDefault()
         setGrainContextMenu(null)
+        return
+      }
+      if (pieceContextMenu && !inInput && e.key === 'Escape') {
+        e.preventDefault()
+        setPieceContextMenu(null)
         return
       }
       if (grainFlipHover && !grainContextMenu && !inInput && e.key === ' ') {
@@ -1569,6 +1593,11 @@ export function WorkspaceCanvas() {
         }
         return
       }
+      if ((e.key === 'r' || e.key === 'R') && !inInput && selectedPieceIds.length > 0) {
+        e.preventDefault()
+        selectedPieceIds.forEach((id) => rotatePiece90(id))
+        return
+      }
       if ((e.key === 'f' || e.key === 'F') && !inInput && hoveredDeletableNotch) {
         e.preventDefault()
         toggleNotchAnchor(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
@@ -1608,6 +1637,7 @@ export function WorkspaceCanvas() {
     pinnedSegment,
     segmentMenuMm,
     pieces,
+    selectedPieceIds,
     removeVertex,
     removeNotch,
     toggleNotchAnchor,
@@ -1615,12 +1645,14 @@ export function WorkspaceCanvas() {
     setTool,
     offsetSegment,
     addInternalLine,
+    rotatePiece90,
     closeSegmentMenu,
     hoveredPieceId,
-    selectedPieceIds,
     setPendingNahtzugabeClick,
     grainFlipHover,
     grainContextMenu,
+    pieceContextMenu,
+    setPieceContextMenu,
     digitizeState,
     cancelDigitize,
     startDigitize,
@@ -1893,6 +1925,53 @@ export function WorkspaceCanvas() {
           </div>
         </div>
       )}
+      {pieceContextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: pieceContextMenu.clientX,
+            top: pieceContextMenu.clientY,
+            zIndex: 2000,
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              background: '#fff',
+              border: '1px solid #ccc',
+              borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+              minWidth: 140,
+              padding: '4px 0',
+              fontSize: 13,
+              fontFamily: 'sans-serif',
+            }}
+          >
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                rotatePiece90(pieceContextMenu.pieceId)
+                setPieceContextMenu(null)
+              }}
+            >
+              90° drehen
+            </button>
+          </div>
+        </div>
+      )}
       {hoveredDeletablePoint && hoveredDeletablePointPos && (
         <div
           className="grain-flip-tooltip"
@@ -2106,6 +2185,15 @@ export function WorkspaceCanvas() {
               onGrainArrowClick={(e) => {
                 e.stopPropagation()
               }}
+              onContextMenu={
+                tool === 'select'
+                  ? (e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setPieceContextMenu({ pieceId: piece.id, clientX: e.clientX, clientY: e.clientY })
+                    }
+                  : undefined
+              }
             />
             )
           })}
