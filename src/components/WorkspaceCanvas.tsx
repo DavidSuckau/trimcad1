@@ -686,7 +686,10 @@ export function WorkspaceCanvas() {
           }
           const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
           if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-          const cutCurveIndex = nearestCut.curveIndex
+          const hitPoint = hasSeam ? nearest.point : local
+          const nearestFromHit = nearestCurveIndexAndPoint(hitPoint, p.cutLine)
+          if (!nearestFromHit) continue
+          const cutCurveIndex = nearestFromHit.curveIndex
           if (!best || nearest.distance < best.distance) {
             best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
           }
@@ -1039,7 +1042,10 @@ export function WorkspaceCanvas() {
             }
             const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
             if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-            const cutCurveIndex = nearestCut.curveIndex
+            const hitPoint = hasSeam ? nearest.point : local
+            const nearestFromHit = nearestCurveIndexAndPoint(hitPoint, p.cutLine)
+            if (!nearestFromHit) continue
+            const cutCurveIndex = nearestFromHit.curveIndex
             if (!best || nearest.distance < best.distance) {
               best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
             }
@@ -2410,10 +2416,9 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === hoveredSeamForNahtzuordnung.pieceId)
             if (!piece?.cutLine?.length) return null
             const indices = hoveredSeamForNahtzuordnung.curveIndices
-            const curvesForHighlight = piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
             let d = ''
             for (const ci of indices) {
-              const seg = curvesForHighlight[ci]
+              const seg = piece.cutLine[ci]
               if (!seg) continue
               const ws = pieceLocalToWorld(seg.start, piece)
               const we = pieceLocalToWorld(seg.end, piece)
