@@ -696,8 +696,8 @@ export function WorkspaceCanvas() {
         setPendingNahtzugabeClick(false)
         return
       }
-      const VERTEX_HIT = 8
-      const POINT_ON_CURVE_HIT = 8
+      const VERTEX_HIT = 12
+      const POINT_ON_CURVE_HIT = 12
       // Nächsten Punkt wählen (nicht ersten im Bereich), damit bei vielen nahen Punkten der richtige getroffen wird.
       // Hit-Detection erfolgt auf der aktuell sichtbaren Kontur (Cut oder Seam), Änderungen immer auf der cutLine.
       if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
@@ -988,7 +988,7 @@ export function WorkspaceCanvas() {
     ]
   )
 
-  const HOVER_DELETE_HIT = 10
+  const HOVER_DELETE_HIT = 14
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -1275,12 +1275,13 @@ export function WorkspaceCanvas() {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length === 0) return
         const notch = piece.notches.find((n) => n.id === dragging.notchId)
-        if (notch?.vertexIndex != null) {
-          toggleNotchAnchor(dragging.pieceId, dragging.notchId)
-          return
-        }
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
+        if (notch?.vertexIndex != null) {
+          // Verankerter Notch: bewegt die Kontur über den zugehörigen Vertex
+          updateVertex(dragging.pieceId, notch.vertexIndex, local)
+          return
+        }
         const hasSeam = piece.seamLine.length >= 3
         const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
         const useSeam = hasSeam && !solidIsCut
