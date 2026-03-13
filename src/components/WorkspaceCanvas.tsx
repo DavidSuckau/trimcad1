@@ -686,10 +686,18 @@ export function WorkspaceCanvas() {
           }
           const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
           if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-          const hitPoint = hasSeam ? nearest.point : local
-          const nearestFromHit = nearestCurveIndexAndPoint(hitPoint, p.cutLine)
-          if (!nearestFromHit) continue
-          const cutCurveIndex = nearestFromHit.curveIndex
+          let cutCurveIndex: number
+          if (hasSeam) {
+            const segHit = curvesForHit[nearest.curveIndex]
+            const midHit = segHit ? curveMidpoint(segHit) : nearest.point
+            const nr = nearestCurveIndexAndPoint(midHit, p.cutLine)
+            if (!nr) continue
+            const seamMm = p.seamAllowanceMm ?? 10
+            if (nr.distance > seamMm * 2.5) continue
+            cutCurveIndex = nr.curveIndex
+          } else {
+            cutCurveIndex = nearestCut.curveIndex
+          }
           if (!best || nearest.distance < best.distance) {
             best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
           }
@@ -1042,10 +1050,18 @@ export function WorkspaceCanvas() {
             }
             const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
             if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-            const hitPoint = hasSeam ? nearest.point : local
-            const nearestFromHit = nearestCurveIndexAndPoint(hitPoint, p.cutLine)
-            if (!nearestFromHit) continue
-            const cutCurveIndex = nearestFromHit.curveIndex
+            let cutCurveIndex: number
+            if (hasSeam) {
+              const segHit = curvesForHit[nearest.curveIndex]
+              const midHit = segHit ? curveMidpoint(segHit) : nearest.point
+              const nr = nearestCurveIndexAndPoint(midHit, p.cutLine)
+              if (!nr) continue
+              const seamMm = p.seamAllowanceMm ?? 10
+              if (nr.distance > seamMm * 2.5) continue
+              cutCurveIndex = nr.curveIndex
+            } else {
+              cutCurveIndex = nearestCut.curveIndex
+            }
             if (!best || nearest.distance < best.distance) {
               best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
             }
