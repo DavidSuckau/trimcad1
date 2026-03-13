@@ -481,15 +481,27 @@ function PieceGroup({
         const cy = (bounds.minY + bounds.maxY) / 2
         const handleY = cy - 25
         return (
-          <circle
-            cx={cx}
-            cy={handleY}
-            r={10}
-            fill="#fff"
-            stroke="#333"
-            strokeWidth={1.2}
-            style={{ cursor: 'grab' }}
-          />
+          <g style={{ cursor: 'grab' }}>
+            <circle
+              cx={cx}
+              cy={handleY}
+              r={10}
+              fill="#e3f2fd"
+              stroke="#1565c0"
+              strokeWidth={1.2}
+            />
+            <path
+              d={`M ${cx + 5} ${handleY} A 5 5 0 0 1 ${cx - 5} ${handleY}`}
+              fill="none"
+              stroke="#1565c0"
+              strokeWidth={1.1}
+              strokeLinecap="round"
+            />
+            <path
+              d={`M ${cx - 5} ${handleY} L ${cx - 6} ${handleY + 1.2} L ${cx - 4.2} ${handleY + 0.4} Z`}
+              fill="#1565c0"
+            />
+          </g>
         )
       })()}
     </g>
