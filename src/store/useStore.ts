@@ -342,7 +342,17 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       workspace: {
         ...s.workspace,
-        pieces: s.workspace.pieces.map((p) => (p.id === id ? { ...p, ...upd } : p)),
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== id) return p
+          const next = { ...p, ...upd }
+          // SeamLine nie willkürlich übernehmen: immer aus cutLine ableiten, wenn Nahtzugabe gesetzt
+          if (next.seamAllowanceMm != null && next.cutLine.length >= 3) {
+            next.seamLine = offsetCurvesInwardForSeam(next.cutLine, next.seamAllowanceMm)
+          } else if (next.seamAllowanceMm == null) {
+            next.seamLine = []
+          }
+          return next
+        }),
       },
     })),
 
@@ -1157,10 +1167,11 @@ export const useStore = create<Store>((set, get) => ({
       if (!bounds) return s
       const cx = (bounds.minX + bounds.maxX) / 2
       const cutLine = piece.cutLine.map((c) => mirrorCurve(c, cx))
+      // SeamLine nur aus cutLine ableiten – nie alte seamLine spiegeln (verhindert willkürliche Kontur)
       const seamLine =
         piece.seamAllowanceMm != null && cutLine.length >= 3
           ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
-          : piece.seamLine.map((c) => mirrorCurve(c, cx))
+          : []
       const notches = piece.notches.map((n) => ({
         ...n,
         position: mirrorX(n.position, cx),

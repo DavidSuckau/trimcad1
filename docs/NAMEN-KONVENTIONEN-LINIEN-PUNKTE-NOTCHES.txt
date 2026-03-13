@@ -1,0 +1,164 @@
+================================================================================
+TrimTex – Namenskonventionen: Linien, Punkte, Notches
+================================================================================
+Dokumentation für die Weiterentwicklung: Welche Namen haben Innen-/Außenlinie,
+Notches und Punkte im Code und Datenmodell.
+================================================================================
+
+--- 1. INNEN- UND AUSSENLINIE (Kontur) -----------------------------------------
+
+  Im Datenmodell (PatternPiece, src/types/model.ts):
+
+  • cutLine: Curve[]
+    = AUSSENKONTUR / Schnittlinie
+    = Die Linie, an der geschnitten wird (mit Nahtzugabe nach außen).
+    = Im DXF: AAMA Layer "CUT", ASTM Layer "1" (BOUNDARY).
+    = Im UI oft als "Außenkontur" bezeichnet.
+
+  • seamLine: Curve[]
+    = NAHTLINIE / Innenlinie
+    = Die Linie, wo tatsächlich genäht wird (innen der Nahtzugabe).
+    = Abstand cutLine ↔ seamLine = Nahtzugabe (seamAllowanceMm).
+    = Im DXF: AAMA Layer "SEAM", ASTM Layer "14" (SEW).
+    = Kann leer sein; dann wird sie ggf. aus cutLine + seamAllowanceMm berechnet
+      (offsetCurvesInwardForSeam).
+
+  Kurz:
+    cutLine  = Außenlinie (Schnittkante)
+    seamLine = Innenlinie (Nahtlinie)
+
+
+--- 2. NOTCHES (Kerben) -------------------------------------------------------
+
+  Typ: Notch (src/types/model.ts)
+
+  Felder:
+  • id: string                    – eindeutige ID
+  • position: Point               – absolute Position (x, y in mm)
+  • angle: number                 – Winkel in Grad (Richtung der Kerbe)
+  • type: NotchType               – 'single' | 'double' | 'v'
+  • depth: number                 – Tiefe der Kerbe (mm)
+  • width?: number                – Breite entlang der Kontur (mm, Default 6)
+  • vertexIndex?: number          – optional: Index des Konturpunkts (Vertex),
+                                    an dem der Notch „angeheftet“ ist;
+                                    wenn gesetzt, folgt der Notch dem Vertex
+
+  Im Piece:
+  • piece.notches: Notch[]        – Array aller Notches des Teils
+
+  DXF-Export:
+  • AAMA: Layer "NOTCH"
+  • ASTM: Layer "4" (Slit), "80" (T), "81" (Castle), "82" (Check), "83" (U)
+
+  Geometrie/Position:
+  • getNotchPositionAndAngleOnCutLine()  – Position/Winkel auf der cutLine
+  • getNotchPositionAndAngleOnSeamLine()  – Position/Winkel auf der seamLine
+  • notchCutoutPoints()                   – Punkte für Kerben-Ausschnitt
+  • cutLineWithNotchCutouts() / seamLineWithNotchCutouts() – Kontur mit
+    ausgeschnittenen Notch-Kerben für Darstellung
+
+
+--- 3. PUNKTE (Points, Vertices, Drills) --------------------------------------
+
+  • Point (Typ): { x: number; y: number }   – Koordinaten in mm
+
+  Kontur-Eckpunkte (Vertices):
+  • Kein eigenes Array „vertices“ – die Eckpunkte ergeben sich aus den
+    Kurven: cutLine[i].start / cutLine[i-1].end (bzw. seamLine analog).
+  • vertexIndex: Index i bezieht sich auf die cutLine: Vertex i = Endpunkt
+    von cutLine[i-1] = Startpunkt von cutLine[i] (i=0: Start von cutLine[0]).
+
+  „Erzeuge Punkt“ (blaue Punkte, keine echten Eckpunkte):
+  • piece.softVertices?: number[]   – Array von Vertex-Indices, die als
+    weiche Punkte gelten (z. B. für Nahtzuordnung), werden blau dargestellt.
+
+  Notch-Position:
+  • notch.position: Point   – absolute Position des Notchs
+
+  Bohrungen (Drills):
+  • Drill.center: Point     – Mittelpunkt
+  • Drill.radius: number    – Radius in mm
+  • piece.drills: Drill[]
+
+  Fadenlauf:
+  • piece.grainLine: Line | null   – Line = { start: Point; end: Point }
+
+
+--- 4. INTERNE LINIEN ---------------------------------------------------------
+
+  • piece.internalLines: Curve[]
+    = Abnäher, Taschenmarkierungen, sonstige interne Linien.
+    DXF: AAMA "INTERNAL", ASTM Layer "8".
+
+
+--- 5. LAYER-NAMEN IM DXF (Referenz) ------------------------------------------
+
+  AAMA (aamaWriter.ts):
+    CUT, SEAM, NOTCH, DRILL, GRAIN, TEXT, INTERNAL
+
+  ASTM (astmWriter.ts):
+    1=BOUNDARY, 4=NOTCH, 7=GRAIN, 8=INTERNAL, 13=DRILL, 14=SEW, 15=TEXT,
+    80=T_NOTCH, 81=CASTLE_NOTCH, 82=CHECK_NOTCH, 83=U_NOTCH
+
+
+--- 6. WICHTIGE DATEIEN -------------------------------------------------------
+
+  • src/types/model.ts     – PatternPiece, Notch, Drill, Point, Curve, Line
+  • src/dxf/aamaWriter.ts  – AAMA Layer-Namen und Export
+  • src/dxf/astmWriter.ts  – ASTM Layer-Nummern und Export
+  • src/geometry/notchOnCurve.ts – Notch-Position/Winkel auf cutLine/seamLine
+  • src/store/useStore.ts  – addNotch, updateNotch, removeNotch, notches im State
+
+
+--- 7. CUT/SEAM – Missverständnisse vermeiden (Klarstellungen) ----------------
+
+  In den Funktionen ist die Zuordnung cutLine = außen, seamLine = innen
+  durchgängig korrekt. Folgende Punkte können beim Weiterentwickeln Verwirrung
+  stiften:
+
+  • outwardNormalAngleAt(curves, …)
+    „Außen“ = Normale von der Kontur weg nach außen (bei cutLine: Richtung
+    Schnittkante, weg vom Stoff). „Innen“ = Gegenseite (Richtung Stoff).
+    Wird z.B. für Notch-Winkel (+180° = Spitze ins Teil) und für
+    isClickOnInnerSideOfEdge genutzt.
+
+  • offsetCurvesInwardForSeam(cutLine, seamAllowanceMm)
+    Offset mit -seamAllowanceMm = nach INNEN → ergibt seamLine. Richtung wird
+    über signedAreaCurves geprüft; ggf. wird reverseCurves angewendet. Kein
+    Vertauschen von cut/seam.
+
+  • cutSeamSwapped / solidIsCut (WorkspaceCanvas)
+    solidIsCut = !hasSeam || !!cutSeamSwapped
+    – Standard (cutSeamSwapped = false): durchgezogen = seamLine (Innenlinie),
+      gestrichelt = cutLine (Außenlinie).
+    – Getauscht (cutSeamSwapped = true): durchgezogen = cutLine, gestrichelt =
+      seamLine. „Swapped“ heißt also: Anzeige so getauscht, dass die
+      Außenlinie (cut) als solid erscheint.
+
+  • vertexIndex und curveIndex
+    Beziehen sich immer auf die CUTLINE (Anzahl Segmente = cutLine.length).
+    Die seamLine hat nach Offset+Simplify oft eine andere Segmentanzahl;
+    es gibt keine vertexIndex-/curveIndex-Zuordnung zur seamLine.
+
+  • offsetSegmentPoints(curves, curveIndex, deltaMm)
+    Verschiebt ein Segment in „Außenrichtung“ (outwardNormal). Wird auf
+    piece.cutLine angewendet: Segment der Außenkontur wird um deltaMm nach
+    außen verschoben (z.B. offsetSegment vergrößert die Kontur; oder es wird
+    eine parallele Linie als internalLine hinzugefügt – diese liegt dann
+    außen/parallel zur cutLine).
+
+  • Nahtzuordnung (Seam Assignment)
+    isClickOnInnerSideOfEdge(local, nearest, cutLine): Klick muss auf der
+    Innenseite der Kante liegen (Richtung Stoff), damit die Kante zugeordnet
+    wird. Es wird immer die cutLine für die Kante genutzt; „Innenseite“ =
+    entgegen der Außennormale der cutLine.
+
+  • Bearbeitung immer auf cutLine
+    Alle Änderungen an der Kontur (Punkte verschieben, Segment einfügen,
+    Vertex löschen, Nahtzugabe setzen) modifizieren die cutLine. Die seamLine
+    wird daraus abgeleitet (offsetCurvesInwardForSeam) oder explizit geleert
+    (removeSeam). Es wird nirgends „nur seamLine“ bearbeitet.
+
+================================================================================
+Stand: März 2025 – für Weiterentwicklung und Onboarding.
+================================================================================
