@@ -298,12 +298,22 @@ export function Toolbar() {
                 </button>
               </li>
               <li>
-                <button type="button" className="menubar-dropdown-btn" onClick={() => handleErzeugen('point')}>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => handleErzeugen('point')}
+                  title="Punkt auf der Kontur einfügen (blauer Punkt)"
+                >
                   Punkt <span className="menubar-shortcut">P</span>
                 </button>
               </li>
               <li>
-                <button type="button" className="menubar-dropdown-btn" onClick={() => handleErzeugen('curvepoint')}>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => handleErzeugen('curvepoint')}
+                  title="Punkt einfügen oder Linie in Kurve umwandeln (Klick auf Linie = Bézier, Klick auf Kurve = Punkt)"
+                >
                   Kurvenpunkt <span className="menubar-shortcut">C</span>
                 </button>
               </li>

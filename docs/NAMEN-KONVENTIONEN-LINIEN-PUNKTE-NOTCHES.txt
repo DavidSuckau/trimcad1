@@ -72,6 +72,11 @@ Notches und Punkte im Code und Datenmodell.
   • piece.softVertices?: number[]   – Array von Vertex-Indices, die als
     weiche Punkte gelten (z. B. für Nahtzuordnung), werden blau dargestellt.
 
+  Punkt löschen (removeVertex):
+  • Nur möglich bei mind. 4 Ecken (cutLine.length > 3). Die beiden am Vertex
+    angrenzenden Segmente werden zu einem Segment vom Typ Line zusammengeführt.
+  • Hinweis: Dabei geht ggf. die Kurvenform verloren (Bézier → Line beim Merge).
+
   Notch-Position:
   • notch.position: Point   – absolute Position des Notchs
 

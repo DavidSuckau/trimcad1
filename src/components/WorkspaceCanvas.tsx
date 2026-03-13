@@ -723,73 +723,49 @@ export function WorkspaceCanvas() {
       }
       const VERTEX_HIT = 12
       const POINT_ON_CURVE_HIT = 12
-      // Nächsten Punkt wählen (nicht ersten im Bereich), damit bei vielen nahen Punkten der richtige getroffen wird.
-      // Hit-Detection erfolgt auf der aktuell sichtbaren Kontur (Cut oder Seam), Änderungen immer auf der cutLine.
+      // Treffer und Darstellung immer auf cutLine – angezeigte Punkte = die, die man anklickt und verschiebt.
       if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
-        let bestPointOnCurve: { dist: number; pieceId: string; local: Point } | null = null
-        let bestVertex: { dist: number; pieceId: string; local: Point } | null = null
+        let bestPointOnCurve: { dist: number; pieceId: string; curveIndex: number; t: number } | null = null
+        let bestVertex: { dist: number; pieceId: string; vertexIndex: number } | null = null
         for (const pieceId of selectedPieceIds) {
           const p = pieces.find((x) => x.id === pieceId)
           if (!p || p.cutLine.length === 0) continue
           const local = worldToPieceLocal(world, p)
-          const hasSeam = p.seamLine.length >= 3
-          const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
-          const curvesForHit = hasSeam && !solidIsCut ? p.seamLine : p.cutLine
+          const cutLine = p.cutLine
           const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
-          // Kurvenpunkte (Mitte von Linien/Bezier)
-          for (let ci = 0; ci < curvesForHit.length; ci++) {
-            const c = curvesForHit[ci]
+          // Kurvenpunkte (Mitte von Bézier-Segmenten) – immer cutLine
+          for (let ci = 0; ci < cutLine.length; ci++) {
+            const c = cutLine[ci]
             if (c.type !== 'bezier') continue
             const ptOnCurve = bezierAt(c, 0.5)
             const d = Math.hypot(local.x - ptOnCurve.x, local.y - ptOnCurve.y)
             if (d < POINT_ON_CURVE_HIT && (!bestPointOnCurve || d < bestPointOnCurve.dist)) {
-              bestPointOnCurve = { dist: d, pieceId: p.id, local: ptOnCurve }
+              bestPointOnCurve = { dist: d, pieceId: p.id, curveIndex: ci, t: 0.5 }
             }
           }
-          // Eckpunkte
-          const n = curvesForHit.length
+          // Eckpunkte – immer cutLine
+          const n = cutLine.length
           for (let vi = 0; vi < n; vi++) {
             if (notchVIs.has(vi)) continue
-            const v = vi === 0 ? curvesForHit[0].start : curvesForHit[vi - 1].end
+            const v = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
             const d = Math.hypot(local.x - v.x, local.y - v.y)
             if (d < VERTEX_HIT && (!bestVertex || d < bestVertex.dist)) {
-              bestVertex = { dist: d, pieceId: p.id, local: v }
+              bestVertex = { dist: d, pieceId: p.id, vertexIndex: vi }
             }
           }
         }
         const usePointOnCurve = bestPointOnCurve && (!bestVertex || bestPointOnCurve.dist <= bestVertex.dist)
         const useVertex = bestVertex && (!bestPointOnCurve || bestVertex.dist < bestPointOnCurve.dist)
         if (usePointOnCurve && bestPointOnCurve) {
-          const p = pieces.find((x) => x.id === bestPointOnCurve.pieceId)
-          if (p && p.cutLine.length > 0) {
-            const nearestCut = nearestCurveIndexAndPoint(bestPointOnCurve.local, p.cutLine)
-            if (nearestCut && nearestCut.distance <= POINT_ON_CURVE_HIT * 1.5) {
-              const t = nearestCut.t != null ? nearestCut.t : 0.5
-              setDragging({ kind: 'pointOnCurve', pieceId: p.id, curveIndex: nearestCut.curveIndex, t })
-              ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-              return
-            }
-          }
+          setDragging({ kind: 'pointOnCurve', pieceId: bestPointOnCurve.pieceId, curveIndex: bestPointOnCurve.curveIndex, t: bestPointOnCurve.t })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
         }
         if (useVertex && bestVertex) {
-          const p = pieces.find((x) => x.id === bestVertex.pieceId)
-          if (p && p.cutLine.length > 0) {
-            let bestVi = 0
-            let bestD = Infinity
-            const n = p.cutLine.length
-            for (let vi = 0; vi < n; vi++) {
-              const v = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
-              const d = Math.hypot(bestVertex.local.x - v.x, bestVertex.local.y - v.y)
-              if (d < bestD) {
-                bestD = d
-                bestVi = vi
-              }
-            }
-            if (bestD <= VERTEX_HIT * 1.5) {
-              setDragging({ kind: 'vertex', pieceId: p.id, vertexIndex: bestVi })
-              ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-              return
-            }
+          if (bestVertex.dist <= VERTEX_HIT * 1.5) {
+            setDragging({ kind: 'vertex', pieceId: bestVertex.pieceId, vertexIndex: bestVertex.vertexIndex })
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
           }
         }
       }
@@ -1076,6 +1052,7 @@ export function WorkspaceCanvas() {
             const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
             for (let vi = 0; vi < p.cutLine.length; vi++) {
               if (notchVIs.has(vi)) continue
+              if (p.cutLine.length <= 3) continue
               const v = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
               const d = Math.hypot(local.x - v.x, local.y - v.y)
               if (d < best.dist) best = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
@@ -2180,17 +2157,16 @@ export function WorkspaceCanvas() {
               })
             })()
           }
+          {/* Kurvenpunkte (Punkt auf Kurve): immer cutLine – konsistent mit Eckpunkten */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / view.zoom
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
-                const hasSeam = piece.seamLine.length >= 3
-                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
+                const cutLine = piece.cutLine
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
-                return activeLine.flatMap((c, ci) => {
+                return cutLine.flatMap((c, ci) => {
                   if (c.type !== 'bezier') return []
                   const ptOnCurve = bezierAt(c, 0.5)
                   const w = pieceLocalToWorld(ptOnCurve, piece)
