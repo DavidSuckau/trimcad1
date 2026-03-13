@@ -1251,14 +1251,37 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+        const n = piece.cutLine.length
+        const hasSeam = piece.seamLine.length >= 3
+        const showSeam = hasSeam && !cutSeamSwappedSet.has(piece.id)
+        let target = local
+        if (showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0 && n > 0) {
+          const prevIdx = (dragging.vertexIndex - 1 + n) % n
+          const a1 = outwardNormalAngleAt(piece.cutLine, prevIdx, 1)
+          const a2 = outwardNormalAngleAt(piece.cutLine, dragging.vertexIndex, 0)
+          const rad = ((a1 + a2) / 2 * Math.PI) / 180
+          const dx = piece.seamAllowanceMm * Math.cos(rad)
+          const dy = piece.seamAllowanceMm * Math.sin(rad)
+          target = { x: local.x + dx, y: local.y + dy }
+        }
+        updateVertex(dragging.pieceId, dragging.vertexIndex, target)
         snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, local)
+        const hasSeam = piece.seamLine.length >= 3
+        const showSeam = hasSeam && !cutSeamSwappedSet.has(piece.id)
+        let target = local
+        if (showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0) {
+          const angleDeg = outwardNormalAngleAt(piece.cutLine, dragging.curveIndex, dragging.t)
+          const rad = (angleDeg * Math.PI) / 180
+          const dx = piece.seamAllowanceMm * Math.cos(rad)
+          const dy = piece.seamAllowanceMm * Math.sin(rad)
+          target = { x: local.x + dx, y: local.y + dy }
+        }
+        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target)
       } else if (dragging.kind === 'line') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -1278,8 +1301,19 @@ export function WorkspaceCanvas() {
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
         if (notch?.vertexIndex != null) {
-          // Verankerter Notch: bewegt die Kontur über den zugehörigen Vertex
-          updateVertex(dragging.pieceId, notch.vertexIndex, local)
+          const n = piece.cutLine.length
+          const hasSeam = piece.seamLine.length >= 3
+          const showSeam = hasSeam && !cutSeamSwappedSet.has(piece.id)
+          let target = local
+          if (showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0 && n > 0) {
+            const vi = notch.vertexIndex
+            const prevIdx = (vi - 1 + n) % n
+            const a1 = outwardNormalAngleAt(piece.cutLine, prevIdx, 1)
+            const a2 = outwardNormalAngleAt(piece.cutLine, vi, 0)
+            const rad = ((a1 + a2) / 2 * Math.PI) / 180
+            target = { x: local.x + piece.seamAllowanceMm * Math.cos(rad), y: local.y + piece.seamAllowanceMm * Math.sin(rad) }
+          }
+          updateVertex(dragging.pieceId, notch.vertexIndex, target)
           return
         }
         const hasSeam = piece.seamLine.length >= 3
