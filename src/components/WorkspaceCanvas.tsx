@@ -2078,11 +2078,13 @@ export function WorkspaceCanvas() {
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece || piece.cutLine.length === 0) return []
-                const cutLine = piece.cutLine
-                const n = cutLine.length
+                const hasSeam = piece.seamLine.length >= 3
+                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
+                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
+                const n = activeLine.length
                 return Array.from({ length: n }, (_, vi) => {
-                  if (piece.notches.some((no) => no.vertexIndex === vi)) return null
-                  const v = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
+                  if (solidIsCut && piece.notches.some((no) => no.vertexIndex === vi)) return null
+                  const v = vi === 0 ? activeLine[0].start : activeLine[vi - 1].end
                   const w = pieceLocalToWorld(v, piece)
                   const isSoft = (piece.softVertices ?? []).includes(vi)
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
@@ -2121,8 +2123,11 @@ export function WorkspaceCanvas() {
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
+                const hasSeam = piece.seamLine.length >= 3
+                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
+                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
-                return piece.cutLine.flatMap((c, ci) => {
+                return activeLine.flatMap((c, ci) => {
                   if (c.type !== 'bezier') return []
                   const ptOnCurve = bezierAt(c, 0.5)
                   const w = pieceLocalToWorld(ptOnCurve, piece)
