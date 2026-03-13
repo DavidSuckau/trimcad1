@@ -117,6 +117,24 @@ const VIEWBOX_HEIGHT = 600
 /** Treffer-/Hover-Distanz (mm) für Nahtzuordnung: Klick oder Zeiger auf Konturlinie (Kante von Punkt zu Punkt) */
 const SEAM_HIT_MM = 18
 
+/** Prüft ob ein Klick auf der Innenseite der Kante liegt (Richtung Stück-Inneres).
+ *  Nur Klicks von der Innenseite werden für die Nahtzuordnung akzeptiert. */
+function isClickOnInnerSideOfEdge(
+  local: Point,
+  nearest: { point: Point; curveIndex: number; t?: number },
+  cutLine: Curve[]
+): boolean {
+  const dx = local.x - nearest.point.x
+  const dy = local.y - nearest.point.y
+  if (Math.hypot(dx, dy) < 0.01) return true // direkt auf der Linie → akzeptieren
+  const angleDeg = outwardNormalAngleAt(cutLine, nearest.curveIndex, nearest.t ?? 0.5)
+  const rad = (angleDeg * Math.PI) / 180
+  const ox = Math.cos(rad)
+  const oy = Math.sin(rad)
+  const dot = dx * ox + dy * oy
+  return dot <= 0 // Innenseite = entgegen der Außennormale
+}
+
 /** Eckpunkte (rot), eingefügte Punkte (blau), Kurvenpunkte (orange) */
 const COLOR_ECKPUNKT: [string, string] = ['#ef5350', '#b71c1c']
 const COLOR_SOFT_PUNKT: [string, string] = ['#42a5f5', '#1565c0']
@@ -658,7 +676,7 @@ export function WorkspaceCanvas() {
           if (!p.cutLine || p.cutLine.length === 0) continue
           const local = worldToPieceLocal(world, p)
           const nearest = nearestCurveIndexAndPoint(local, p.cutLine)
-          if (nearest && nearest.distance < SEAM_HIT_MM) {
+          if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, p.cutLine)) {
             if (!best || nearest.distance < best.distance) {
               best = { pieceId: p.id, curveIndex: nearest.curveIndex, distance: nearest.distance, piece: p }
             }
@@ -1022,7 +1040,7 @@ export function WorkspaceCanvas() {
             if (!p.cutLine?.length) continue
             const local = worldToPieceLocal(world, p)
             const nearest = nearestCurveIndexAndPoint(local, p.cutLine)
-            if (nearest && nearest.distance < SEAM_HIT_MM) {
+            if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, p.cutLine)) {
               if (!best || nearest.distance < best.distance) {
                 best = { pieceId: p.id, curveIndex: nearest.curveIndex, distance: nearest.distance, piece: p }
               }
