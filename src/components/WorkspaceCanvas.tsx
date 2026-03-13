@@ -671,14 +671,19 @@ export function WorkspaceCanvas() {
         return
       }
       if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
+        // Nahtzuordnung: Treffer auf der Nahtlinie (seamLine), nicht auf der Schnittlinie (cutLine)
         let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
         for (const p of pieces) {
           if (!p.cutLine || p.cutLine.length === 0) continue
           const local = worldToPieceLocal(world, p)
-          const nearest = nearestCurveIndexAndPoint(local, p.cutLine)
-          if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, p.cutLine)) {
+          const curvesForHit = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
+          const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
+          if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, curvesForHit)) {
+            const nearestCut = nearestCurveIndexAndPoint(nearest.point, p.cutLine)
+            if (!nearestCut) continue
+            const cutCurveIndex = nearestCut.curveIndex
             if (!best || nearest.distance < best.distance) {
-              best = { pieceId: p.id, curveIndex: nearest.curveIndex, distance: nearest.distance, piece: p }
+              best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
             }
           }
         }
@@ -1039,10 +1044,14 @@ export function WorkspaceCanvas() {
           for (const p of pieces) {
             if (!p.cutLine?.length) continue
             const local = worldToPieceLocal(world, p)
-            const nearest = nearestCurveIndexAndPoint(local, p.cutLine)
-            if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, p.cutLine)) {
+            const curvesForHit = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
+            const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
+            if (nearest && nearest.distance < SEAM_HIT_MM && isClickOnInnerSideOfEdge(local, nearest, curvesForHit)) {
+              const nearestCut = nearestCurveIndexAndPoint(nearest.point, p.cutLine)
+              if (!nearestCut) continue
+              const cutCurveIndex = nearestCut.curveIndex
               if (!best || nearest.distance < best.distance) {
-                best = { pieceId: p.id, curveIndex: nearest.curveIndex, distance: nearest.distance, piece: p }
+                best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
               }
             }
           }
@@ -2125,20 +2134,18 @@ export function WorkspaceCanvas() {
               </g>
             )
           })()}
-          {/* Eckpunkte, normale Punkte, Kurvenpunkte: Größe zoom-invariant (bleiben klein beim Hereinfahren) */}
+          {/* Eckpunkte und weiche Punkte (blau): immer cutLine – softVertices/vertexIndex beziehen sich auf cutLine */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / view.zoom
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece || piece.cutLine.length === 0) return []
-                const hasSeam = piece.seamLine.length >= 3
-                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
-                const activeLine = solidIsCut ? piece.cutLine : piece.seamLine
-                const n = activeLine.length
+                const cutLine = piece.cutLine
+                const n = cutLine.length
                 return Array.from({ length: n }, (_, vi) => {
-                  if (solidIsCut && piece.notches.some((no) => no.vertexIndex === vi)) return null
-                  const v = vi === 0 ? activeLine[0].start : activeLine[vi - 1].end
+                  if (piece.notches.some((no) => no.vertexIndex === vi)) return null
+                  const v = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
                   const w = pieceLocalToWorld(v, piece)
                   const isSoft = (piece.softVertices ?? []).includes(vi)
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
