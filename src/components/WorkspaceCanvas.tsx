@@ -686,9 +686,7 @@ export function WorkspaceCanvas() {
           }
           const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
           if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-          const cutCurveIndex = hasSeam
-            ? (nearestCurveIndexAndPoint(nearest.point, p.cutLine)?.curveIndex ?? nearest.curveIndex)
-            : nearest.curveIndex
+          const cutCurveIndex = nearestCut.curveIndex
           if (!best || nearest.distance < best.distance) {
             best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
           }
@@ -1041,9 +1039,7 @@ export function WorkspaceCanvas() {
             }
             const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
             if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-            const cutCurveIndex = hasSeam
-              ? (nearestCurveIndexAndPoint(nearest.point, p.cutLine)?.curveIndex ?? nearest.curveIndex)
-              : nearest.curveIndex
+            const cutCurveIndex = nearestCut.curveIndex
             if (!best || nearest.distance < best.distance) {
               best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
             }
