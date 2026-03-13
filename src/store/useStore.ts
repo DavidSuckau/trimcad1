@@ -202,6 +202,8 @@ type Store = {
   flipPieceAlongGrain: (pieceId: string) => void
   /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
   rotatePiece90: (pieceId: string) => void
+  /** Rotation eines Teils setzen (Grad), Mittelpunkt bleibt fest. Für freie Drehung. */
+  setPieceRotation: (pieceId: string, rotationDeg: number) => void
   /** Einzelnes Kontur-Segment um deltaMm verschieben (Außenrichtung = positiv). */
   offsetSegment: (pieceId: string, curveIndex: number, deltaMm: number) => void
   /** SeamLine eines Teils neu berechnen (nach Drag-Ende aufrufen). */
@@ -1192,7 +1194,7 @@ export const useStore = create<Store>((set, get) => ({
       }
     }),
 
-  rotatePiece90: (pieceId) =>
+  setPieceRotation: (pieceId, rotationDeg) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
@@ -1202,10 +1204,9 @@ export const useStore = create<Store>((set, get) => ({
       const cy = (bounds.minY + bounds.maxY) / 2
       const t = piece.transform
       const worldCenter = pieceLocalToWorld({ x: cx, y: cy }, t)
-      const rotationNew = t.rotation + 90
       const lx = t.mirrored ? -cx : cx
       const ly = cy
-      const rad = (rotationNew * Math.PI) / 180
+      const rad = (rotationDeg * Math.PI) / 180
       const cos = Math.cos(rad)
       const sin = Math.sin(rad)
       const txNew = worldCenter.x - (lx * cos - ly * sin)
@@ -1215,12 +1216,15 @@ export const useStore = create<Store>((set, get) => ({
           ...s.workspace,
           pieces: s.workspace.pieces.map((p) =>
             p.id === pieceId
-              ? { ...p, transform: { ...p.transform, x: txNew, y: tyNew, rotation: rotationNew } }
+              ? { ...p, transform: { ...p.transform, x: txNew, y: tyNew, rotation: rotationDeg } }
               : p
           ),
         },
       }
     }),
+
+  rotatePiece90: (pieceId) =>
+    get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),
 
   startDigitize: () => set({ digitizeState: { nodes: [], isDragging: false, dragPosition: null } }),
 

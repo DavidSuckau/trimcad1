@@ -474,6 +474,24 @@ function PieceGroup({
           pointerEvents="none"
         />
       )}
+      {isSelected && cutLine.length >= 3 && (() => {
+        const bounds = curvesBounds(cutLine)
+        if (!bounds) return null
+        const cx = (bounds.minX + bounds.maxX) / 2
+        const cy = (bounds.minY + bounds.maxY) / 2
+        const handleY = cy - 25
+        return (
+          <circle
+            cx={cx}
+            cy={handleY}
+            r={10}
+            fill="#fff"
+            stroke="#333"
+            strokeWidth={1.2}
+            style={{ cursor: 'grab' }}
+          />
+        )
+      })()}
     </g>
   )
 }
@@ -527,6 +545,7 @@ export function WorkspaceCanvas() {
     convertBezierSegmentToLine,
     flipPieceAlongGrain,
     rotatePiece90,
+    setPieceRotation,
     toastMessage,
     setToastMessage,
     checkSeamAdjustment,
@@ -559,6 +578,7 @@ export function WorkspaceCanvas() {
   const [dragging, setDragging] = useState<
     | { kind: 'pan'; startClient: Point; startPan: Point }
     | { kind: 'piece'; pieceId: string; start: Point }
+    | { kind: 'rotate'; pieceId: string; startRotation: number; startWorldAngle: number }
     | { kind: 'vertex'; pieceId: string; vertexIndex: number; seamDrag?: { startLocal: Point; cutVertexIndex: number } }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
@@ -856,6 +876,31 @@ export function WorkspaceCanvas() {
           })
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
+        }
+        const ROTATION_HANDLE_OFFSET = 25
+        const ROTATION_HANDLE_HIT = 18
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+          const bounds = curvesBounds(p.cutLine)
+          if (!bounds) continue
+          const cx = (bounds.minX + bounds.maxX) / 2
+          const cy = (bounds.minY + bounds.maxY) / 2
+          const handleLocal = { x: cx, y: cy - ROTATION_HANDLE_OFFSET }
+          const handleWorld = pieceLocalToWorld(handleLocal, p)
+          const dist = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
+          if (dist < ROTATION_HANDLE_HIT) {
+            const worldCenter = pieceLocalToWorld({ x: cx, y: cy }, p)
+            const startWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
+            setDragging({
+              kind: 'rotate',
+              pieceId: p.id,
+              startRotation: p.transform.rotation,
+              startWorldAngle,
+            })
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
         }
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
@@ -1299,6 +1344,18 @@ export function WorkspaceCanvas() {
         const dy = world.y - dragging.start.y
         movePiece(dragging.pieceId, dx, dy)
         setDragging((d) => (d && d.kind === 'piece' ? { ...d, start: world } : d))
+      } else if (dragging.kind === 'rotate') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece || piece.cutLine.length < 3) return
+        const bounds = curvesBounds(piece.cutLine)
+        if (!bounds) return
+        const cx = (bounds.minX + bounds.maxX) / 2
+        const cy = (bounds.minY + bounds.maxY) / 2
+        const worldCenter = pieceLocalToWorld({ x: cx, y: cy }, piece)
+        const world = toWorld(e.clientX, e.clientY)
+        const currentWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
+        const deltaAngle = currentWorldAngle - dragging.startWorldAngle
+        setPieceRotation(dragging.pieceId, dragging.startRotation + deltaAngle)
       } else if (dragging.kind === 'rectangle') {
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'rectangle' ? { ...d, current } : d))
@@ -1453,6 +1510,7 @@ export function WorkspaceCanvas() {
       digitizeState,
       updateDigitizeDrag,
       snapSeamEdgeToMatch,
+      setPieceRotation,
     ]
   )
 
