@@ -2,6 +2,44 @@ import type { Curve, Notch, Point } from '../types/model'
 import { splitBezierAt, pathLengthAt, totalPathLength, pointAtPathLength, outwardNormalAngleAt } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
+const VERTEX_T_EPS = 0.05
+
+/** Innen-Normalenwinkel (Grad) an (curveIndex, t). An Vertices (t≈0 oder t≈1) Winkelhalbierende der beiden Segmente. */
+function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): number {
+  const n = curves.length
+  if (n === 0) return 0
+  const toRad = (deg: number) => (deg * Math.PI) / 180
+  const toDeg = (rad: number) => (rad * 180) / Math.PI
+  const toVector = (deg: number) => ({ x: Math.cos(toRad(deg)), y: Math.sin(toRad(deg)) })
+  const inward = (ci: number, tt: number) => outwardNormalAngleAt(curves, ci, tt) + 180
+
+  if (t <= VERTEX_T_EPS) {
+    const prevIdx = (curveIndex - 1 + n) % n
+    const a1 = inward(prevIdx, 1)
+    const a2 = inward(curveIndex, 0)
+    const v1 = toVector(a1)
+    const v2 = toVector(a2)
+    const sx = v1.x + v2.x
+    const sy = v1.y + v2.y
+    const len = Math.hypot(sx, sy)
+    if (len < 1e-10) return a1
+    return toDeg(Math.atan2(sy, sx))
+  }
+  if (t >= 1 - VERTEX_T_EPS) {
+    const nextIdx = (curveIndex + 1) % n
+    const a1 = inward(curveIndex, 1)
+    const a2 = inward(nextIdx, 0)
+    const v1 = toVector(a1)
+    const v2 = toVector(a2)
+    const sx = v1.x + v2.x
+    const sy = v1.y + v2.y
+    const len = Math.hypot(sx, sy)
+    if (len < 1e-10) return a1
+    return toDeg(Math.atan2(sy, sx))
+  }
+  return inward(curveIndex, t)
+}
+
 /**
  * Kanonische Notch-Position: notch.position ist die einzige Wahrheitsquelle.
  * Ausnahme: vertexIndex-Notches folgen dem Vertex (Knickpunkt auf der CutLine).
@@ -14,7 +52,7 @@ export function getNotchPositionAndAngle(
   const vi = notch.vertexIndex
   if (vi != null && vi >= 0 && vi < cutLine.length) {
     const position = { ...cutLine[vi].start }
-    const angle = outwardNormalAngleAt(cutLine, vi, 0) + 180
+    const angle = inwardNormalAngleAt(cutLine, vi, 0)
     return { position, angle }
   }
   return { position: notch.position, angle: notch.angle }
@@ -46,7 +84,7 @@ export function getNotchPositionAndAngleOnSeamLine(
   if (!nearest) return null
 
   const t = nearest.t ?? 0
-  const angle = outwardNormalAngleAt(seamLine, nearest.curveIndex, t) + 180
+  const angle = inwardNormalAngleAt(seamLine, nearest.curveIndex, t)
   return { position: nearest.point, angle }
 }
 
@@ -63,7 +101,7 @@ export function getNotchPositionAndAngleOnCutLine(
   const nearest = nearestCurveIndexAndPoint(position, cutLine)
   if (!nearest) return { position: notch.position, angle: notch.angle }
   const t = nearest.t ?? 0
-  const angle = outwardNormalAngleAt(cutLine, nearest.curveIndex, t) + 180
+  const angle = inwardNormalAngleAt(cutLine, nearest.curveIndex, t)
   return { position: nearest.point, angle }
 }
 

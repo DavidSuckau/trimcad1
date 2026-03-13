@@ -75,17 +75,6 @@ function adjustSeamAfterRemove(assignments: SeamAssignment[], pieceId: string, v
   })
 }
 
-/** Projiziert freie Notches auf die neue cutLine, damit sie nach Kontur-Änderungen nicht verloren gehen. */
-function repositionNotchesOnCutLine(notches: Notch[], cutLine: Curve[]): Notch[] {
-  if (cutLine.length === 0) return notches
-  return notches.map((n) => {
-    if (n.vertexIndex != null) return n
-    const nr = nearestCurveIndexAndPoint(n.position, cutLine)
-    if (!nr) return n
-    return { ...n, position: { ...nr.point } }
-  })
-}
-
 /** Fasst zwei benachbarte Segmente zu einem zusammen (evtl. Bezier-Erhalt statt Begradigung). */
 function mergeAdjacentSegments(prev: Curve, next: Curve): Curve {
   if (prev.type === 'line' && next.type === 'line') {
@@ -951,6 +940,8 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
 
+  // Wichtig: Nur den gezogenen Vertex und verankerte Notches an diesem Vertex aktualisieren.
+  // Freie Notches und andere Punkte niemals automatisch verschieben – Nutzerposition bleibt gesetzt.
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc) =>
     set((s) => ({
       workspace: {
@@ -996,10 +987,9 @@ export const useStore = create<Store>((set, get) => ({
           const seamLine = skipSeamRecalc
             ? p.seamLine
             : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
-          const moved = p.notches.map((notch) =>
+          const notches = p.notches.map((notch) =>
             notch.vertexIndex === vertexIndex ? { ...notch, position: { ...point } } : notch
           )
-          const notches = repositionNotchesOnCutLine(moved, cutLine)
           return { ...p, cutLine, seamLine, notches }
         }),
       },
@@ -1076,14 +1066,13 @@ export const useStore = create<Store>((set, get) => ({
             const cutLine = p.cutLine.filter((_, j) => j !== prevIdx && j !== nextIdx)
             cutLine.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
             const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-            const adjusted = p.notches.map((n) =>
+            const notches = p.notches.map((n) =>
               n.vertexIndex === vertexIndex
                 ? (() => { const { vertexIndex: _v, ...rest } = n; return rest })()
                 : n.vertexIndex != null && n.vertexIndex > vertexIndex
                   ? { ...n, vertexIndex: n.vertexIndex - 1 }
                   : n
             )
-            const notches = repositionNotchesOnCutLine(adjusted, cutLine)
             const softVertices = (p.softVertices ?? [])
               .filter((vi) => vi !== vertexIndex)
               .map((vi) => vi > vertexIndex ? vi - 1 : vi)
@@ -1105,8 +1094,7 @@ export const useStore = create<Store>((set, get) => ({
           const cutLine = [...p.cutLine]
           cutLine[curveIndex] = lineSeg
           const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-          const notches = repositionNotchesOnCutLine(p.notches, cutLine)
-          return { ...p, cutLine, seamLine, notches }
+          return { ...p, cutLine, seamLine }
         }),
       },
     })),
@@ -1140,8 +1128,7 @@ export const useStore = create<Store>((set, get) => ({
             cutLine[nextIdx] = { ...cutLine[nextIdx], start: pts.end } as Curve
             const seamLine =
               p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-            const notches = repositionNotchesOnCutLine(p.notches, cutLine)
-            return { ...p, cutLine, seamLine, notches }
+            return { ...p, cutLine, seamLine }
           }),
         },
       }

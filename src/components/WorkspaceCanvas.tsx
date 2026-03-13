@@ -671,22 +671,22 @@ export function WorkspaceCanvas() {
         return
       }
       if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
-        // Nahtzuordnung: Klick immer auf der Nahtlinie (seamLine). Für die Logik speichern wir aber cutLine-Indices.
+        // Nahtzuordnung: Klick immer auf seamLine (wenn vorhanden), sonst cutLine. cutLine-Indices für Logik.
         let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
         for (const p of pieces) {
-          if (!p.cutLine || p.cutLine.length === 0 || p.seamLine.length < 3) continue
+          if (!p.cutLine || p.cutLine.length === 0) continue
+          const hasSeam = p.seamLine.length >= 3
+          const curvesForHit = hasSeam ? p.seamLine : p.cutLine
           const local = worldToPieceLocal(world, p)
-          const nearestSeam = nearestCurveIndexAndPoint(local, p.seamLine)
-          if (!nearestSeam || nearestSeam.distance >= SEAM_HIT_MM) continue
-          // Innenseite wird relativ zur Außenkontur (cutLine) geprüft
-          const nearestCutForInside = nearestCurveIndexAndPoint(local, p.cutLine)
-          if (!nearestCutForInside || !isClickOnInnerSideOfEdge(local, nearestCutForInside, p.cutLine)) continue
-          // Kante für Zuordnung kommt aus der cutLine
-          const nearestCut = nearestCurveIndexAndPoint(nearestSeam.point, p.cutLine)
-          if (!nearestCut) continue
-          const cutCurveIndex = nearestCut.curveIndex
-          if (!best || nearestSeam.distance < best.distance) {
-            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearestSeam.distance, piece: p }
+          const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
+          if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+          const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
+          if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
+          const cutCurveIndex = hasSeam
+            ? (nearestCurveIndexAndPoint(nearest.point, p.cutLine)?.curveIndex ?? nearest.curveIndex)
+            : nearest.curveIndex
+          if (!best || nearest.distance < best.distance) {
+            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
           }
         }
         if (best) {
@@ -1025,17 +1025,19 @@ export function WorkspaceCanvas() {
           const world = toWorld(e.clientX, e.clientY)
           let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
           for (const p of pieces) {
-            if (!p.cutLine?.length || p.seamLine.length < 3) continue
+            if (!p.cutLine?.length) continue
+            const hasSeam = p.seamLine.length >= 3
+            const curvesForHit = hasSeam ? p.seamLine : p.cutLine
             const local = worldToPieceLocal(world, p)
-            const nearestSeam = nearestCurveIndexAndPoint(local, p.seamLine)
-            if (!nearestSeam || nearestSeam.distance >= SEAM_HIT_MM) continue
-            const nearestCutForInside = nearestCurveIndexAndPoint(local, p.cutLine)
-            if (!nearestCutForInside || !isClickOnInnerSideOfEdge(local, nearestCutForInside, p.cutLine)) continue
-            const nearestCut = nearestCurveIndexAndPoint(nearestSeam.point, p.cutLine)
-            if (!nearestCut) continue
-            const cutCurveIndex = nearestCut.curveIndex
-            if (!best || nearestSeam.distance < best.distance) {
-              best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearestSeam.distance, piece: p }
+            const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
+            if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+            const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
+            if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
+            const cutCurveIndex = hasSeam
+              ? (nearestCurveIndexAndPoint(nearest.point, p.cutLine)?.curveIndex ?? nearest.curveIndex)
+              : nearest.curveIndex
+            if (!best || nearest.distance < best.distance) {
+              best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
             }
           }
           if (best) {
