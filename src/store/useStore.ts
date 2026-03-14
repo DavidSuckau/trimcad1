@@ -4,7 +4,7 @@ import { offsetCurvesInwardForSeam, offsetSegmentPoints } from '../geometry/offs
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength, curvesBounds as getCurvesBounds } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
-import { pieceLocalToWorld } from '../geometry/pieceTransform'
+import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -202,8 +202,10 @@ type Store = {
   flipPieceAlongGrain: (pieceId: string) => void
   /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
   rotatePiece90: (pieceId: string) => void
-  /** Rotation eines Teils setzen (Grad), Mittelpunkt bleibt fest. Für freie Drehung. */
+  /** Rotation eines Teils setzen (Grad), Pivot bleibt fest. Für freie Drehung. */
   setPieceRotation: (pieceId: string, rotationDeg: number) => void
+  /** Drehpunkt (Pivot) setzen oder zurücksetzen (null = Bounds-Mitte). */
+  setPiecePivot: (pieceId: string, pivotLocal: Point | null) => void
   /** Einzelnes Kontur-Segment um deltaMm verschieben (Außenrichtung = positiv). */
   offsetSegment: (pieceId: string, curveIndex: number, deltaMm: number) => void
   /** SeamLine eines Teils neu berechnen (nach Drag-Ende aufrufen). */
@@ -1198,14 +1200,11 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
-      const bounds = getCurvesBounds(piece.cutLine)
-      if (!bounds) return s
-      const cx = (bounds.minX + bounds.maxX) / 2
-      const cy = (bounds.minY + bounds.maxY) / 2
+      const pivot = getPiecePivotLocal(piece)
       const t = piece.transform
-      const worldCenter = pieceLocalToWorld({ x: cx, y: cy }, t)
-      const lx = t.mirrored ? -cx : cx
-      const ly = cy
+      const worldCenter = pieceLocalToWorld(pivot, t)
+      const lx = t.mirrored ? -pivot.x : pivot.x
+      const ly = pivot.y
       const rad = (rotationDeg * Math.PI) / 180
       const cos = Math.cos(rad)
       const sin = Math.sin(rad)
@@ -1222,6 +1221,23 @@ export const useStore = create<Store>((set, get) => ({
         },
       }
     }),
+
+  setPiecePivot: (pieceId, pivotLocal) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          const next = { ...p, transform: { ...p.transform } }
+          if (pivotLocal === null) {
+            delete (next.transform as { pivotLocal?: Point }).pivotLocal
+          } else {
+            next.transform.pivotLocal = pivotLocal
+          }
+          return next
+        }),
+      },
+    })),
 
   rotatePiece90: (pieceId) =>
     get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),

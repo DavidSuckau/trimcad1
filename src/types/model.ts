@@ -47,6 +47,8 @@ export type PatternPieceTransform = {
   y: number
   rotation: number
   mirrored: boolean
+  /** Drehpunkt in Teilkoordinaten; wenn nicht gesetzt: Bounds-Mitte. */
+  pivotLocal?: Point
 }
 
 export type PatternPiece = {

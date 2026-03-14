@@ -6,6 +6,7 @@ import { offsetSegmentPoints } from '../geometry/offset'
 import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPositionAndAngleOnSeamLine, getNotchCurveIndexAndT, notchTriangleCorners, notchCutoutPoints, cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
 import { isPointInClosedCurves } from '../geometry/pointInPolygon'
 import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves } from '../geometry/seamUtils'
+import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import type { PatternPiece, Point, Curve, SeamAssignment } from '../types/model'
 
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
@@ -382,6 +383,7 @@ function PieceGroup({
         const tickLen = tickLenNom * scale
         const midY = (topY + bottomY) / 2
         const hitPad = Math.max(14, aw + 2)
+        const grainCx = cx + 22
         const hasGrainHandlers =
           onGrainArrowEnter != null &&
           onGrainArrowLeave != null &&
@@ -402,9 +404,9 @@ function PieceGroup({
               style={hasGrainHandlers ? { cursor: 'pointer' } : undefined}
             >
               <line
-                x1={cx}
+                x1={grainCx}
                 y1={topY}
-                x2={cx}
+                x2={grainCx}
                 y2={bottomY}
                 stroke="#333"
                 strokeWidth={0.35}
@@ -412,23 +414,23 @@ function PieceGroup({
                 pointerEvents="none"
               />
               <line
-                x1={cx - tickLen}
+                x1={grainCx - tickLen}
                 y1={midY}
-                x2={cx}
+                x2={grainCx}
                 y2={midY}
                 stroke="#333"
                 strokeWidth={0.35}
                 pointerEvents="none"
               />
               <path
-                d={`M ${cx} ${topY} L ${cx - aw} ${topY + ah} L ${cx + aw} ${topY + ah} Z`}
+                d={`M ${grainCx} ${topY} L ${grainCx - aw} ${topY + ah} L ${grainCx + aw} ${topY + ah} Z`}
                 fill="none"
                 stroke="#333"
                 strokeWidth={0.35}
                 pointerEvents="none"
               />
               <path
-                d={`M ${cx} ${bottomY} L ${cx - aw} ${bottomY - ah} L ${cx + aw} ${bottomY - ah} Z`}
+                d={`M ${grainCx} ${bottomY} L ${grainCx - aw} ${bottomY - ah} L ${grainCx + aw} ${bottomY - ah} Z`}
                 fill="none"
                 stroke="#333"
                 strokeWidth={0.35}
@@ -436,7 +438,7 @@ function PieceGroup({
               />
               {hasGrainHandlers && (
                 <rect
-                  x={cx - hitPad}
+                  x={grainCx - hitPad}
                   y={topY - 4}
                   width={hitPad * 2}
                   height={bottomY - topY + 8}
@@ -446,7 +448,7 @@ function PieceGroup({
             </g>
             {showPieceNames !== false && (
               <text
-                x={cx + 10}
+                x={grainCx + 10}
                 y={midY}
                 textAnchor="start"
                 dominantBaseline="middle"
@@ -475,33 +477,38 @@ function PieceGroup({
         />
       )}
       {isSelected && cutLine.length >= 3 && (() => {
-        const bounds = curvesBounds(cutLine)
-        if (!bounds) return null
-        const cx = (bounds.minX + bounds.maxX) / 2
-        const cy = (bounds.minY + bounds.maxY) / 2
-        const handleY = cy - 25
+        const pivot = getPiecePivotLocal(piece)
+        const handleY = pivot.y - 25
         return (
-          <g style={{ cursor: 'grab' }}>
-            <circle
-              cx={cx}
-              cy={handleY}
-              r={10}
-              fill="#e3f2fd"
-              stroke="#1565c0"
-              strokeWidth={1.2}
-            />
-            <path
-              d={`M ${cx + 5} ${handleY} A 5 5 0 0 1 ${cx - 5} ${handleY}`}
-              fill="none"
-              stroke="#1565c0"
-              strokeWidth={1.1}
-              strokeLinecap="round"
-            />
-            <path
-              d={`M ${cx - 5} ${handleY} L ${cx - 6} ${handleY + 1.2} L ${cx - 4.2} ${handleY + 0.4} Z`}
-              fill="#1565c0"
-            />
-          </g>
+          <>
+            <g style={{ cursor: 'grab' }} pointerEvents="all">
+              <circle cx={pivot.x} cy={pivot.y} r={12} fill="transparent" />
+              <circle cx={pivot.x} cy={pivot.y} r={4} fill="#333" stroke="#fff" strokeWidth={1} pointerEvents="none" />
+              <line x1={pivot.x - 6} y1={pivot.y} x2={pivot.x + 6} y2={pivot.y} stroke="#333" strokeWidth={0.8} pointerEvents="none" />
+              <line x1={pivot.x} y1={pivot.y - 6} x2={pivot.x} y2={pivot.y + 6} stroke="#333" strokeWidth={0.8} pointerEvents="none" />
+            </g>
+            <g style={{ cursor: 'grab' }}>
+              <circle
+                cx={pivot.x}
+                cy={handleY}
+                r={10}
+                fill="#e3f2fd"
+                stroke="#1565c0"
+                strokeWidth={1.2}
+              />
+              <path
+                d={`M ${pivot.x + 5} ${handleY} A 5 5 0 0 1 ${pivot.x - 5} ${handleY}`}
+                fill="none"
+                stroke="#1565c0"
+                strokeWidth={1.1}
+                strokeLinecap="round"
+              />
+              <path
+                d={`M ${pivot.x - 5} ${handleY} L ${pivot.x - 6} ${handleY + 1.2} L ${pivot.x - 4.2} ${handleY + 0.4} Z`}
+                fill="#1565c0"
+              />
+            </g>
+          </>
         )
       })()}
     </g>
@@ -558,6 +565,7 @@ export function WorkspaceCanvas() {
     flipPieceAlongGrain,
     rotatePiece90,
     setPieceRotation,
+    setPiecePivot,
     toastMessage,
     setToastMessage,
     checkSeamAdjustment,
@@ -591,6 +599,7 @@ export function WorkspaceCanvas() {
     | { kind: 'pan'; startClient: Point; startPan: Point }
     | { kind: 'piece'; pieceId: string; start: Point }
     | { kind: 'rotate'; pieceId: string; startRotation: number; startWorldAngle: number }
+    | { kind: 'pivot'; pieceId: string }
     | { kind: 'vertex'; pieceId: string; vertexIndex: number; seamDrag?: { startLocal: Point; cutVertexIndex: number } }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
@@ -891,18 +900,16 @@ export function WorkspaceCanvas() {
         }
         const ROTATION_HANDLE_OFFSET = 25
         const ROTATION_HANDLE_HIT = 18
+        const PIVOT_HIT = 14
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-          const bounds = curvesBounds(p.cutLine)
-          if (!bounds) continue
-          const cx = (bounds.minX + bounds.maxX) / 2
-          const cy = (bounds.minY + bounds.maxY) / 2
-          const handleLocal = { x: cx, y: cy - ROTATION_HANDLE_OFFSET }
+          const pivot = getPiecePivotLocal(p)
+          const handleLocal = { x: pivot.x, y: pivot.y - ROTATION_HANDLE_OFFSET }
           const handleWorld = pieceLocalToWorld(handleLocal, p)
           const dist = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
           if (dist < ROTATION_HANDLE_HIT) {
-            const worldCenter = pieceLocalToWorld({ x: cx, y: cy }, p)
+            const worldCenter = pieceLocalToWorld(pivot, p)
             const startWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
             setDragging({
               kind: 'rotate',
@@ -910,6 +917,22 @@ export function WorkspaceCanvas() {
               startRotation: p.transform.rotation,
               startWorldAngle,
             })
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
+        }
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+          const pivot = getPiecePivotLocal(p)
+          const pivotWorld = pieceLocalToWorld(pivot, p)
+          const pivotDist = Math.hypot(world.x - pivotWorld.x, world.y - pivotWorld.y)
+          if (pivotDist < PIVOT_HIT) {
+            if (e.detail === 2) {
+              setPiecePivot(p.id, null)
+              return
+            }
+            setDragging({ kind: 'pivot', pieceId: p.id })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
           }
@@ -1359,15 +1382,24 @@ export function WorkspaceCanvas() {
       } else if (dragging.kind === 'rotate') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
-        const bounds = curvesBounds(piece.cutLine)
-        if (!bounds) return
-        const cx = (bounds.minX + bounds.maxX) / 2
-        const cy = (bounds.minY + bounds.maxY) / 2
-        const worldCenter = pieceLocalToWorld({ x: cx, y: cy }, piece)
+        const pivot = getPiecePivotLocal(piece)
+        const worldCenter = pieceLocalToWorld(pivot, piece)
         const world = toWorld(e.clientX, e.clientY)
         const currentWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
         const deltaAngle = currentWorldAngle - dragging.startWorldAngle
         setPieceRotation(dragging.pieceId, dragging.startRotation + deltaAngle)
+      } else if (dragging.kind === 'pivot') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece || piece.cutLine.length < 3) return
+        const bounds = curvesBounds(piece.cutLine)
+        if (!bounds) return
+        const world = toWorld(e.clientX, e.clientY)
+        let local = worldToPieceLocal(world, piece)
+        local = {
+          x: Math.max(bounds.minX, Math.min(bounds.maxX, local.x)),
+          y: Math.max(bounds.minY, Math.min(bounds.maxY, local.y)),
+        }
+        setPiecePivot(dragging.pieceId, local)
       } else if (dragging.kind === 'rectangle') {
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'rectangle' ? { ...d, current } : d))
@@ -1523,6 +1555,7 @@ export function WorkspaceCanvas() {
       updateDigitizeDrag,
       snapSeamEdgeToMatch,
       setPieceRotation,
+      setPiecePivot,
     ]
   )
 

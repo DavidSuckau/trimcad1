@@ -1,4 +1,16 @@
-import type { Point, PatternPieceTransform } from '../types/model'
+import type { Point, PatternPieceTransform, PatternPiece } from '../types/model'
+import { curvesBounds } from './curveToPath'
+
+/** Pivot in Teilkoordinaten: transform.pivotLocal oder Bounds-Mitte der cutLine. */
+export function getPiecePivotLocal(piece: PatternPiece): Point {
+  if (piece.transform.pivotLocal != null) return piece.transform.pivotLocal
+  const bounds = curvesBounds(piece.cutLine)
+  if (!bounds) return { x: 0, y: 0 }
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+  }
+}
 
 /** Lokalen Punkt (Teilkoordinaten) in Weltkoordinaten transformieren. */
 export function pieceLocalToWorld(local: Point, transform: PatternPieceTransform): Point {
