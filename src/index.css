@@ -145,6 +145,19 @@ body {
   cursor: default;
 }
 
+.menubar-dropdown-btn-disabled {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8125rem;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #999;
+  cursor: default;
+}
+
 .menubar-shortcut {
   margin-left: 0.75rem;
   color: #666;
@@ -204,6 +217,28 @@ body {
 }
 .nahtzuordnung-abbrechen:hover {
   background: #f0f0f0;
+}
+
+/* Sichtbare Anzeige des aktiven Werkzeugs (weniger Klicks, klare Orientierung) */
+.toolbar-tool-indicator {
+  display: flex;
+  align-items: center;
+  margin-left: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8125rem;
+  color: #555;
+  background: #f0f0f0;
+  border-radius: 2px;
+  border: 1px solid #e0e0e0;
+}
+.toolbar-tool-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.toolbar-tool-label .menubar-shortcut {
+  font-size: 0.75rem;
+  color: #666;
 }
 
 .toolbar-ruler-btn,
@@ -267,6 +302,14 @@ body {
   min-width: 2.5rem;
   font-size: 0.8125rem;
   text-align: center;
+}
+
+.toolbar-export-wrap {
+  position: relative;
+}
+.menubar-dropdown-right {
+  left: auto;
+  right: 0;
 }
 
 .toolbar-grid {

@@ -959,8 +959,7 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
 
-  // Wichtig: Nur den gezogenen Vertex und verankerte Notches an diesem Vertex aktualisieren.
-  // Freie Notches und andere Punkte niemals automatisch verschieben – Nutzerposition bleibt gesetzt.
+  // Nur den gezogenen Vertex verschieben. Normale Punkte (Kurvenform) und Notches behalten ihre Koordinaten.
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc) =>
     set((s) => ({
       workspace: {
@@ -973,41 +972,18 @@ export const useStore = create<Store>((set, get) => ({
               ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
               : { type: 'bezier' as const, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
           )
-          let oldPoint: Point
           if (vertexIndex === 0) {
-            oldPoint = cutLine[0].start
-            const dx = point.x - oldPoint.x
-            const dy = point.y - oldPoint.y
             cutLine[0] = { ...cutLine[0], start: point } as Curve
             cutLine[n - 1] = { ...cutLine[n - 1], end: point } as Curve
-            const seg0 = cutLine[0]
-            if (seg0.type === 'bezier') {
-              cutLine[0] = { ...seg0, cp1: { x: seg0.cp1.x + dx, y: seg0.cp1.y + dy } }
-            }
-            const segLast = cutLine[n - 1]
-            if (segLast.type === 'bezier') {
-              cutLine[n - 1] = { ...segLast, cp2: { x: segLast.cp2.x + dx, y: segLast.cp2.y + dy } }
-            }
           } else {
-            oldPoint = cutLine[vertexIndex - 1].end
-            const dx = point.x - oldPoint.x
-            const dy = point.y - oldPoint.y
             cutLine[vertexIndex - 1] = { ...cutLine[vertexIndex - 1], end: point } as Curve
             cutLine[vertexIndex] = { ...cutLine[vertexIndex], start: point } as Curve
-            const segPrev = cutLine[vertexIndex - 1]
-            if (segPrev.type === 'bezier') {
-              cutLine[vertexIndex - 1] = { ...segPrev, cp2: { x: segPrev.cp2.x + dx, y: segPrev.cp2.y + dy } }
-            }
-            const segCur = cutLine[vertexIndex]
-            if (segCur.type === 'bezier') {
-              cutLine[vertexIndex] = { ...segCur, cp1: { x: segCur.cp1.x + dx, y: segCur.cp1.y + dy } }
-            }
           }
           const seamLine = skipSeamRecalc
             ? p.seamLine
             : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
           const notches = p.notches.map((notch) =>
-            notch.vertexIndex === vertexIndex ? { ...notch, position: { ...point } } : notch
+            notch.vertexIndex === vertexIndex ? { ...notch, vertexIndex: undefined } : notch
           )
           return { ...p, cutLine, seamLine, notches }
         }),

@@ -12,6 +12,23 @@ type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectan
 type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
 
 const NAHTZUGABE_MM = 5
+
+/** Anzeigename und optional Shortcut pro Werkzeug (für sichtbare Werkzeug-Anzeige in der Toolbar). */
+const TOOL_DISPLAY: Record<string, { label: string; shortcut?: string }> = {
+  select: { label: 'Auswahl' },
+  pan: { label: 'Verschieben' },
+  point: { label: 'Punkt', shortcut: 'P' },
+  curvepoint: { label: 'Kurvenpunkt', shortcut: 'C' },
+  notch: { label: 'Notch', shortcut: 'N' },
+  kante: { label: 'Kante', shortcut: 'K' },
+  digitize: { label: 'Digitalisieren', shortcut: 'D' },
+  rectangle: { label: 'Rechteck' },
+  line: { label: 'Linie' },
+  internalLine: { label: 'Linie (intern)' },
+  drill: { label: 'Bohrung' },
+  internalCircle: { label: 'Kreis' },
+  bezier: { label: 'Bézier' },
+}
 const VIEWBOX_CX = 400
 const VIEWBOX_CY = 300
 
@@ -19,10 +36,6 @@ export function Toolbar() {
   const {
     tool,
     setTool,
-    showGrid,
-    setShowGrid,
-    showPoints,
-    setShowPoints,
     rulerMode,
     setRulerMode,
     setRulerLine,
@@ -50,10 +63,10 @@ export function Toolbar() {
   const { view } = workspace
   const [openMenu, setOpenMenu] = useState<MenuId>(null)
   const [erzeugenSubmenu, setErzeugenSubmenu] = useState<'interne-elemente' | null>(null)
-  const [bearbeitenSubmenu, setBearbeitenSubmenu] = useState<'kante' | null>(null)
-  const [nahtSubmenu, setNahtSubmenu] = useState<'nahtecken' | null>(null)
   const [dateiSubmenu, setDateiSubmenu] = useState<'exportieren' | null>(null)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
   const dxfImportInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -61,8 +74,6 @@ export function Toolbar() {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setOpenMenu(null)
         setErzeugenSubmenu(null)
-        setBearbeitenSubmenu(null)
-        setNahtSubmenu(null)
       }
     }
     if (openMenu) {
@@ -74,9 +85,19 @@ export function Toolbar() {
   useEffect(() => {
     if (openMenu !== 'datei') setDateiSubmenu(null)
     if (openMenu !== 'erzeugen') setErzeugenSubmenu(null)
-    if (openMenu !== 'bearbeiten') setBearbeitenSubmenu(null)
-    if (openMenu !== 'naht') setNahtSubmenu(null)
   }, [openMenu])
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false)
+      }
+    }
+    if (exportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside, true)
+      return () => document.removeEventListener('mousedown', handleClickOutside, true)
+    }
+  }, [exportMenuOpen])
 
   const closeMenu = () => setOpenMenu(null)
 
@@ -145,7 +166,7 @@ export function Toolbar() {
     setErzeugenSubmenu(null)
   }
 
-  const handleBearbeiten = (action: ToolId | 'nahtzugabe') => {
+  const handleBearbeiten = (action: ToolId | 'nahtzugabe' | 'kante') => {
     if (action === 'nahtzugabe') {
       selectedPieceIds.forEach((id) => applyOffset(id, NAHTZUGABE_MM))
     } else {
@@ -158,17 +179,17 @@ export function Toolbar() {
     if (action === 'geschlossen') {
       const piece = selectedPieceIds.length === 1 ? workspace.pieces.find((p) => p.id === selectedPieceIds[0]) : null
       if (!piece) {
-        alert('Bitte genau ein Teil auswählen.')
+        setToastMessage('error:Bitte genau ein Teil auswählen.')
       } else if (piece.cutLine.length < 3) {
-        alert('Teil hat keine geschlossene Kontur.')
+        setToastMessage('error:Teil hat keine geschlossene Kontur.')
       } else {
-        alert('Teil hat eine geschlossene Kontur.')
+        setToastMessage('success:Teil hat eine geschlossene Kontur.')
       }
     }
     if (action === 'alle') {
       const n = workspace.pieces.length
       const closed = workspace.pieces.filter((p) => p.cutLine.length >= 3).length
-      alert(`${closed} von ${n} Teilen haben eine geschlossene Kontur.`)
+      setToastMessage(`success:${closed} von ${n} Teilen haben eine geschlossene Kontur.`)
     }
     closeMenu()
   }
@@ -242,18 +263,6 @@ export function Toolbar() {
                     </li>
                   </ul>
                 )}
-              </li>
-              <li>
-                <button
-                  type="button"
-                  className="menubar-dropdown-btn"
-                  onClick={() => {
-                    setShowGrid(!showGrid)
-                    closeMenu()
-                  }}
-                >
-                  {showGrid ? 'Raster ausblenden' : 'Raster einblenden'}
-                </button>
               </li>
               <li>
                 <button
@@ -381,11 +390,6 @@ export function Toolbar() {
                   </ul>
                 )}
               </li>
-              <li>
-                <button type="button" className="menubar-dropdown-btn" onClick={() => handleErzeugen('addPiece')}>
-                  Teil hinzufügen
-                </button>
-              </li>
             </ul>
           )}
         </div>
@@ -445,43 +449,16 @@ export function Toolbar() {
                   Bohrung
                 </button>
               </li>
-              <li
-                className="menubar-submenu-wrap"
-                onMouseEnter={() => setBearbeitenSubmenu('kante')}
-                onMouseLeave={() => setBearbeitenSubmenu(null)}
-              >
-                <span className="menubar-dropdown-btn menubar-dropdown-btn-submenu">Kante</span>
-                {bearbeitenSubmenu === 'kante' && (
-                  <ul className="menubar-dropdown menubar-submenu">
-                    <li>
-                      <button
-                        type="button"
-                        className="menubar-dropdown-btn"
-                        onClick={() => {
-                          setTool('select')
-                          closeMenu()
-                          setBearbeitenSubmenu(null)
-                        }}
-                      >
-                        Kanten-Menü (Kante anfahren)
-                      </button>
-                    </li>
-                  </ul>
-                )}
-              </li>
-              <li className="menubar-separator" />
               <li>
                 <button
                   type="button"
-                  className={`menubar-dropdown-btn ${showPoints ? 'active' : ''}`}
-                  onClick={() => {
-                    setShowPoints(!showPoints)
-                    closeMenu()
-                  }}
+                  className={`menubar-dropdown-btn ${tool === 'kante' ? 'active' : ''}`}
+                  onClick={() => handleBearbeiten('kante')}
                 >
-                  {showPoints ? 'Punkte ausblenden' : 'Punkte einblenden'}
+                  Kante <span className="menubar-shortcut">K</span>
                 </button>
               </li>
+              <li className="menubar-separator" />
               <li>
                 <button
                   type="button"
@@ -572,36 +549,10 @@ export function Toolbar() {
                   Nahtzuordnung
                 </button>
               </li>
-              <li
-                className="menubar-submenu-wrap"
-                onMouseEnter={() => setNahtSubmenu('nahtecken')}
-                onMouseLeave={() => setNahtSubmenu(null)}
-              >
-                <span className="menubar-dropdown-btn menubar-dropdown-btn-submenu">Nahtecken</span>
-                {nahtSubmenu === 'nahtecken' && (
-                  <ul className="menubar-dropdown menubar-submenu">
-                    <li>
-                      <button type="button" className="menubar-dropdown-btn" onClick={() => closeMenu()}>
-                        Abgeschnitten
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" className="menubar-dropdown-btn" onClick={() => closeMenu()}>
-                        Faccete
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" className="menubar-dropdown-btn" onClick={() => closeMenu()}>
-                        Ecke
-                      </button>
-                    </li>
-                    <li>
-                      <button type="button" className="menubar-dropdown-btn" onClick={() => closeMenu()}>
-                        usw.
-                      </button>
-                    </li>
-                  </ul>
-                )}
+              <li>
+                <span className="menubar-dropdown-btn menubar-dropdown-btn-disabled" title="Nahtecken-Typen (Abgeschnitten, Faccete, Ecke) kommen in einer späteren Version">
+                  Nahtecken (in Entwicklung)
+                </span>
               </li>
             </ul>
           )}
@@ -615,7 +566,13 @@ export function Toolbar() {
           >
             Material
           </button>
-          {openMenu === 'material' && <ul className="menubar-dropdown" />}
+          {openMenu === 'material' && (
+            <ul className="menubar-dropdown">
+              <li>
+                <span className="menubar-dropdown-btn menubar-dropdown-btn-disabled">In Entwicklung</span>
+              </li>
+            </ul>
+          )}
         </div>
         <div className="menubar-item-wrap">
           <button
@@ -629,9 +586,7 @@ export function Toolbar() {
           {openMenu === 'stueckliste' && (
             <ul className="menubar-dropdown">
               <li>
-                <button type="button" className="menubar-dropdown-btn" onClick={() => closeMenu()}>
-                  Stückliste
-                </button>
+                <span className="menubar-dropdown-btn menubar-dropdown-btn-disabled">In Entwicklung</span>
               </li>
             </ul>
           )}
@@ -687,6 +642,19 @@ export function Toolbar() {
           )}
         </div>
       </nav>
+      <div className="toolbar-tool-indicator" title="Aktives Werkzeug">
+        {(() => {
+          const d = TOOL_DISPLAY[tool]
+          const label = d ? d.label : tool
+          const shortcut = d?.shortcut
+          return (
+            <span className="toolbar-tool-label">
+              Werkzeug: {label}
+              {shortcut != null && <span className="menubar-shortcut">{shortcut}</span>}
+            </span>
+          )
+        })()}
+      </div>
       <div className="menubar-right">
         {nahtzuordnungMode !== 'idle' && (
           <span className="nahtzuordnung-hint">
@@ -700,6 +668,36 @@ export function Toolbar() {
             </button>
           </span>
         )}
+        <div className="menubar-item-wrap toolbar-export-wrap" ref={exportMenuRef}>
+          <button
+            type="button"
+            className={`toolbar-ruler-btn ${exportMenuOpen ? 'active' : ''}`}
+            onClick={() => setExportMenuOpen(!exportMenuOpen)}
+            aria-expanded={exportMenuOpen}
+            title="DXF exportieren (2 Klicks)"
+          >
+            <span className="toolbar-ruler-btn-label">Export</span>
+          </button>
+          {exportMenuOpen && (
+            <ul className="menubar-dropdown menubar-dropdown-right">
+              <li>
+                <button type="button" className="menubar-dropdown-btn" onClick={() => { handleExportDxf(); setExportMenuOpen(false) }}>
+                  DXF (einfach)
+                </button>
+              </li>
+              <li>
+                <button type="button" className="menubar-dropdown-btn" onClick={() => { handleExportAama(); setExportMenuOpen(false) }}>
+                  AAMA-DXF (.aam)
+                </button>
+              </li>
+              <li>
+                <button type="button" className="menubar-dropdown-btn" onClick={() => { handleExportAstm(); setExportMenuOpen(false) }}>
+                  ASTM-DXF (Gerber)
+                </button>
+              </li>
+            </ul>
+          )}
+        </div>
         <button
           type="button"
           className={`toolbar-ruler-btn ${rulerMode ? 'active' : ''}`}

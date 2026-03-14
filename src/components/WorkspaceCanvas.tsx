@@ -669,9 +669,7 @@ export function WorkspaceCanvas() {
     | { pieceId: string; kind: 'pointOnCurve'; curveIndex: number }
     | null
   >(null)
-  const [hoveredDeletablePointPos, setHoveredDeletablePointPos] = useState<{ clientX: number; clientY: number } | null>(null)
   const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
-  const [hoveredDeletableNotchPos, setHoveredDeletableNotchPos] = useState<{ clientX: number; clientY: number } | null>(null)
   const [notchPreview, setNotchPreview] = useState<{
     pieceId: string
     position: Point
@@ -1268,16 +1266,13 @@ export function WorkspaceCanvas() {
             }
           }
           setHoveredDeletablePoint(best.value)
-          setHoveredDeletablePointPos(best.value ? { clientX: e.clientX, clientY: e.clientY } : null)
           if (best.value) {
             setHoveredDeletableNotch(null)
-            setHoveredDeletableNotchPos(null)
             setHoveredPieceId(null)
             return
           }
         } else {
           setHoveredDeletablePoint(null)
-          setHoveredDeletablePointPos(null)
         }
         const worldForNotch = toWorld(e.clientX, e.clientY)
         const piecesForNotchHover =
@@ -1304,15 +1299,12 @@ export function WorkspaceCanvas() {
         }
         if (bestNotch.dist <= NOTCH_HOVER_HIT) {
           setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
-          setHoveredDeletableNotchPos({ clientX: e.clientX, clientY: e.clientY })
           setHoveredDeletablePoint(null)
-          setHoveredDeletablePointPos(null)
           setNotchPreview(null)
           setHoveredPieceId(null)
           return
         }
         setHoveredDeletableNotch(null)
-        setHoveredDeletableNotchPos(null)
         if (tool === 'notch') {
           const world = toWorld(e.clientX, e.clientY)
           const piecesToCheck =
@@ -1496,20 +1488,7 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        const n = piece.cutLine.length
-        const hasSeam = piece.seamLine.length >= 3
-        const showSeam = hasSeam && !cutSeamSwappedSet.has(piece.id)
-        let target = local
-        if (showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0 && n > 0) {
-          const prevIdx = (dragging.vertexIndex - 1 + n) % n
-          const a1 = outwardNormalAngleAt(piece.cutLine, prevIdx, 1)
-          const a2 = outwardNormalAngleAt(piece.cutLine, dragging.vertexIndex, 0)
-          const rad = ((a1 + a2) / 2 * Math.PI) / 180
-          const dx = piece.seamAllowanceMm * Math.cos(rad)
-          const dy = piece.seamAllowanceMm * Math.sin(rad)
-          target = { x: local.x + dx, y: local.y + dy }
-        }
-        updateVertex(dragging.pieceId, dragging.vertexIndex, target)
+        updateVertex(dragging.pieceId, dragging.vertexIndex, local)
         snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -1808,7 +1787,6 @@ export function WorkspaceCanvas() {
         e.preventDefault()
         removeNotch(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
         setHoveredDeletableNotch(null)
-        setHoveredDeletableNotchPos(null)
         return
       }
       if (!hoveredDeletablePoint) return
@@ -2045,9 +2023,7 @@ export function WorkspaceCanvas() {
       onPointerLeave={() => {
         handlePointerUp()
         setHoveredDeletablePoint(null)
-        setHoveredDeletablePointPos(null)
         setHoveredDeletableNotch(null)
-        setHoveredDeletableNotchPos(null)
         setNotchPreview(null)
         setHoveredSeamForNahtzuordnung(null)
         setHoveredSeamAssignmentId(null)
@@ -2189,41 +2165,6 @@ export function WorkspaceCanvas() {
           </div>
         </div>
       )}
-      {hoveredDeletablePoint && hoveredDeletablePointPos && (
-        <div
-          className="grain-flip-tooltip"
-          style={{
-            position: 'fixed',
-            left: hoveredDeletablePointPos.clientX,
-            top: hoveredDeletablePointPos.clientY,
-            transform: 'translate(8px, 8px)',
-            pointerEvents: 'none',
-            zIndex: 1000,
-          }}
-        >
-          {hoveredDeletablePoint.kind === 'pointOnCurve' ? 'Entf: Kurve begradigen' : 'Entf: Punkt löschen'}
-        </div>
-      )}
-      {hoveredDeletableNotch && hoveredDeletableNotchPos && (() => {
-        const hPiece = pieces.find((p) => p.id === hoveredDeletableNotch.pieceId)
-        const hNotch = hPiece?.notches.find((n) => n.id === hoveredDeletableNotch.notchId)
-        const anchored = hNotch?.vertexIndex != null
-        return (
-          <div
-            className="grain-flip-tooltip"
-            style={{
-              position: 'fixed',
-              left: hoveredDeletableNotchPos.clientX,
-              top: hoveredDeletableNotchPos.clientY,
-              transform: 'translate(8px, 8px)',
-              pointerEvents: 'none',
-              zIndex: 1000,
-            }}
-          >
-            {anchored ? '⚓ Verankert' : '↔ Frei'} · Entf: Löschen · F: {anchored ? 'Lösen' : 'Verankern'}
-          </div>
-        )
-      })()}
       {segmentMenuVisible && segmentForMenu && segmentPosForMenu && (
         <div
           className="segment-context-menu"
