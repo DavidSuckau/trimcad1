@@ -482,12 +482,14 @@ function PieceGroup({
         return (
           <>
             <g style={{ cursor: 'grab' }} pointerEvents="all">
-              <circle cx={pivot.x} cy={pivot.y} r={12} fill="transparent" />
+              <title>Drehpunkt: Ziehen zum Verschieben, Doppelklick zum Zurücksetzen</title>
+              <circle cx={pivot.x} cy={pivot.y} r={16} fill="transparent" />
               <circle cx={pivot.x} cy={pivot.y} r={4} fill="#333" stroke="#fff" strokeWidth={1} pointerEvents="none" />
               <line x1={pivot.x - 6} y1={pivot.y} x2={pivot.x + 6} y2={pivot.y} stroke="#333" strokeWidth={0.8} pointerEvents="none" />
               <line x1={pivot.x} y1={pivot.y - 6} x2={pivot.x} y2={pivot.y + 6} stroke="#333" strokeWidth={0.8} pointerEvents="none" />
             </g>
             <g style={{ cursor: 'grab' }}>
+              <title>Drehgriff: Ziehen zum Drehen des Teils</title>
               <circle
                 cx={pivot.x}
                 cy={handleY}
@@ -900,7 +902,7 @@ export function WorkspaceCanvas() {
         }
         const ROTATION_HANDLE_OFFSET = 25
         const ROTATION_HANDLE_HIT = 18
-        const PIVOT_HIT = 14
+        const PIVOT_HIT = 20
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
@@ -933,7 +935,7 @@ export function WorkspaceCanvas() {
               return
             }
             setDragging({ kind: 'pivot', pieceId: p.id })
-            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            containerRef.current?.setPointerCapture?.(e.pointerId)
             return
           }
         }
