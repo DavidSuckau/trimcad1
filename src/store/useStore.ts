@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Workspace, PatternPiece, ViewState, Point, Curve, Notch, Drill, SeamAssignment, DigitizeNode, DigitizeState } from '../types/model'
 import { offsetCurvesInwardForSeam, offsetSegmentPoints } from '../geometry/offset'
-import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength, curvesBounds as getCurvesBounds } from '../geometry/curveToPath'
+import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
