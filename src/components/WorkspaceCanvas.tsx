@@ -580,6 +580,7 @@ export function WorkspaceCanvas() {
     cancelDigitize,
     finishDigitize,
     startDigitize,
+    setShowHelpModal,
   } = useStore()
   const { pieces, view } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
@@ -1580,6 +1581,11 @@ export function WorkspaceCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (!inInput && (e.key === 'F1' || e.key === '?')) {
+        setShowHelpModal(true)
+        e.preventDefault()
+        return
+      }
       const segmentActive = hoveredSegment ?? (segmentMenuPinned ? pinnedSegment : null)
       if (tool === 'digitize' && digitizeState && e.key === 'Escape') {
         e.preventDefault()
@@ -1768,6 +1774,7 @@ export function WorkspaceCanvas() {
     digitizeState,
     cancelDigitize,
     startDigitize,
+    setShowHelpModal,
   ])
 
   const handlePointerUp = useCallback(() => {

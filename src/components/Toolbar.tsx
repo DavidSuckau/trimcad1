@@ -9,7 +9,7 @@ import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
 
 type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle'
-type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | null
+type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
 
 const NAHTZUGABE_MM = 5
 const VIEWBOX_CX = 400
@@ -41,6 +41,7 @@ export function Toolbar() {
     nahtzuordnungMode,
     setNahtzuordnungMode,
     setShowSettingsModal,
+    setShowHelpModal,
     dxfExportScale,
     startDigitize,
     setToastMessage,
@@ -654,6 +655,32 @@ export function Toolbar() {
               <li>
                 <button type="button" className="menubar-dropdown-btn" onClick={() => handlePruefen('alle')}>
                   Alle Teile prüfen
+                </button>
+              </li>
+            </ul>
+          )}
+        </div>
+        <div className="menubar-item-wrap">
+          <button
+            type="button"
+            className="menubar-item"
+            aria-expanded={openMenu === 'hilfe'}
+            onClick={() => setOpenMenu(openMenu === 'hilfe' ? null : 'hilfe')}
+          >
+            Hilfe
+          </button>
+          {openMenu === 'hilfe' && (
+            <ul className="menubar-dropdown">
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setShowHelpModal(true)
+                    closeMenu()
+                  }}
+                >
+                  Anleitung <span className="menubar-shortcut">F1</span>
                 </button>
               </li>
             </ul>

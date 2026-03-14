@@ -137,6 +137,7 @@ type Store = {
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
   showSettingsModal: boolean
+  showHelpModal: boolean
   dxfExportScale: number
   notchSettings: NotchSetting[]
   toastMessage: string | null
@@ -164,6 +165,7 @@ type Store = {
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
+  setShowHelpModal: (v: boolean) => void
   setDxfExportScale: (v: number) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
@@ -307,6 +309,7 @@ export const useStore = create<Store>((set, get) => ({
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   showSettingsModal: false,
+  showHelpModal: false,
   dxfExportScale: 1,
   toastMessage: null,
   seamAdjustmentDialog: null,
@@ -387,6 +390,7 @@ export const useStore = create<Store>((set, get) => ({
   setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
+  setShowHelpModal: (v) => set({ showHelpModal: v }),
   setDxfExportScale: (v) => set({ dxfExportScale: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
