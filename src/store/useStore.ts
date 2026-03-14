@@ -905,7 +905,10 @@ export const useStore = create<Store>((set, get) => ({
           const seamLine = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
           const cutLine = offsetCurvesOutwardForCut(seamLine, deltaMm)
           if (cutLine.length === 0) return p
-          return { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm }
+          // Notches behalten: vertexIndex entfernen, da die neue cutLine andere Segmentanzahl haben kann.
+          // Position bleibt; wird beim Zeichnen auf die neue Kontur projiziert.
+          const notches = p.notches.map((n) => ({ ...n, vertexIndex: undefined }))
+          return { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches }
         }),
       },
     })),

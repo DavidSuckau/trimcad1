@@ -681,6 +681,7 @@ export function WorkspaceCanvas() {
     storePos: Point
     storeAngle: number
   } | null>(null)
+  const [pointPreview, setPointPreview] = useState<{ pieceId: string; point: Point } | null>(null)
   const [hoveredSegment, setHoveredSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [hoveredSegmentPos, setHoveredSegmentPos] = useState<{ clientX: number; clientY: number } | null>(null)
   const [segmentMenuMm, setSegmentMenuMm] = useState('5')
@@ -930,6 +931,7 @@ export function WorkspaceCanvas() {
             } else if (curve.type === 'bezier' && nearest.t != null) {
               insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
             }
+            setPointPreview(null)
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
           }
@@ -1392,6 +1394,25 @@ export function WorkspaceCanvas() {
           }
           setHoveredSegment(null)
           setHoveredSegmentPos(null)
+        }
+        if (tool === 'point' && selectedPieceIds.length === 1) {
+          const world = toWorld(e.clientX, e.clientY)
+          const HIT = 15
+          const pieceId = selectedPieceIds[0]
+          const p = pieces.find((x) => x.id === pieceId)
+          if (p && p.cutLine.length > 0) {
+            const local = worldToPieceLocal(world, p)
+            const nearest = nearestCurveIndexAndPoint(local, p.cutLine)
+            if (nearest && nearest.distance < HIT) {
+              setPointPreview({ pieceId: p.id, point: nearest.point })
+            } else {
+              setPointPreview(null)
+            }
+          } else {
+            setPointPreview(null)
+          }
+        } else {
+          setPointPreview(null)
         }
         if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
           const world = toWorld(e.clientX, e.clientY)
@@ -2025,6 +2046,7 @@ export function WorkspaceCanvas() {
         setHoveredDeletablePoint(null)
         setHoveredDeletableNotch(null)
         setNotchPreview(null)
+        setPointPreview(null)
         setHoveredSeamForNahtzuordnung(null)
         setHoveredSeamAssignmentId(null)
       }}
@@ -2396,6 +2418,31 @@ export function WorkspaceCanvas() {
                   {notchPreview.distanceMmRight.toFixed(1)} mm
                 </text>
               </g>
+            )
+          })()}
+          {/* Punkt-Vorschau: wo der neue Punkt (P) gesetzt wird, wenn Maus auf der Linie ist */}
+          {pointPreview && (() => {
+            const piece = pieces.find((p) => p.id === pointPreview.pieceId)
+            if (!piece) return null
+            const hasSeam = piece.seamLine.length >= 3
+            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pointPreview.pieceId)
+            const displayPoint =
+              solidIsCut || !hasSeam
+                ? pointPreview.point
+                : (nearestCurveIndexAndPoint(pointPreview.point, piece.seamLine)?.point ?? pointPreview.point)
+            const w = pieceLocalToWorld(displayPoint, piece)
+            const ps = 1 / view.zoom
+            const [fill, stroke] = COLOR_SOFT_PUNKT
+            return (
+              <circle
+                cx={w.x}
+                cy={w.y}
+                r={1.5 * ps}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={0.6 * ps}
+                pointerEvents="none"
+              />
             )
           })()}
           {/* Eckpunkte und weiche Punkte: auf cutLine oder seamLine je nach gewählter Ansicht (solid) */}
