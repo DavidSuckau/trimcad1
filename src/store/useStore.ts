@@ -1248,7 +1248,7 @@ export const useStore = create<Store>((set, get) => ({
     const piece = get().workspace.pieces.find((p) => p.id === pieceId)
     if (!piece || piece.cutLine.length < 3) return
     const currentWorldAngle = piece.transform.rotation + 90
-    const targetWorldAngle = -90
+    const targetWorldAngle = 90
     let delta = targetWorldAngle - currentWorldAngle
     while (delta > 180) delta -= 360
     while (delta < -180) delta += 360
