@@ -1974,7 +1974,7 @@ export function WorkspaceCanvas() {
         cursor: rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' ? 'crosshair' : 'default',
       }}
     >
-      <div className="workspace-version">Aktuell V. 0.0.3</div>
+      <div className="workspace-version">Aktuell V. 0.0.4</div>
       {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"
