@@ -12,6 +12,17 @@ import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
 
+/** t vom Vertex weghalten, damit ein verschobener Notch nicht exakt auf einen Eckpunkt fällt. */
+const NOTCH_MOVE_T_MIN = 0.05
+const NOTCH_MOVE_T_MAX = 0.95
+
+function pointOnCurveAt(c: Curve, t: number): Point {
+  if (c.type === 'line') {
+    return { x: c.start.x + t * (c.end.x - c.start.x), y: c.start.y + t * (c.end.y - c.start.y) }
+  }
+  return bezierAt(c, t)
+}
+
 function worldToPieceLocal(
   world: Point,
   piece: PatternPiece
@@ -54,6 +65,18 @@ function getPieceGrainLine(piece: PatternPiece): Line {
   const bottomY = bounds.maxY - inset
   const grainCx = cx + 22
   return { start: { x: grainCx, y: topY }, end: { x: grainCx, y: bottomY } }
+}
+
+const GRAIN_ARROW_HIT_PAD = 14
+/** Prüft, ob ein Punkt (Teilkoordinaten) im Klickbereich des Laufrichtungspfeils liegt. */
+function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
+  if (piece.cutLine.length < 3) return false
+  const line = getPieceGrainLine(piece)
+  const minX = Math.min(line.start.x, line.end.x) - GRAIN_ARROW_HIT_PAD
+  const minY = Math.min(line.start.y, line.end.y) - 4
+  const w = Math.abs(line.end.x - line.start.x) + GRAIN_ARROW_HIT_PAD * 2
+  const h = Math.abs(line.end.y - line.start.y) + 8
+  return local.x >= minX && local.x <= minX + w && local.y >= minY && local.y <= minY + h
 }
 
 /** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe)
@@ -226,6 +249,7 @@ function PieceGroup({
   showDrills,
   showInternalLines,
   showPieceNames,
+  showPoints,
   onContextMenu,
 }: {
   piece: PatternPiece
@@ -245,6 +269,7 @@ function PieceGroup({
   showDrills?: boolean
   showInternalLines?: boolean
   showPieceNames?: boolean
+  showPoints?: boolean
   onContextMenu?: (e: React.MouseEvent) => void
 }) {
   const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
@@ -420,7 +445,6 @@ function PieceGroup({
                 e.stopPropagation()
                 onGrainArrowClick?.(e)
               }}
-              onPointerDown={(e) => e.stopPropagation()}
               style={hasGrainHandlers ? { cursor: 'pointer' } : undefined}
             >
               <line
@@ -459,8 +483,12 @@ function PieceGroup({
                 />
               )}
             </g>
-            <circle cx={line.start.x} cy={line.start.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
-            <circle cx={line.end.x} cy={line.end.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
+            {showPoints && (
+              <>
+                <circle cx={line.start.x} cy={line.start.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
+                <circle cx={line.end.x} cy={line.end.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
+              </>
+            )}
             {showPieceNames !== false && (
               <text
                 x={midX + 10 * Math.cos(angle) - 5 * Math.sin(angle)}
@@ -982,6 +1010,7 @@ export function WorkspaceCanvas() {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
           if (isPointInsidePiece(local, p)) {
+            if (isPointInGrainArrowArea(local, p)) return
             selectPiece(p.id, e.shiftKey)
             setDragging({ kind: 'piece', pieceId: p.id, start: world })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
@@ -1538,15 +1567,25 @@ export function WorkspaceCanvas() {
         if (nearest && nearest.distance < 25) {
           const t = nearest.t ?? 0
           const angle = outwardNormalAngleAt(curves, nearest.curveIndex, t) + 180
-          let storePos = nearest.point
-          let storeAngle = angle
+          let storePos: Point
+          let storeAngle: number
           if (useSeam) {
             const cutNearest = nearestCurveIndexAndPoint(nearest.point, piece.cutLine)
             if (cutNearest) {
-              storePos = cutNearest.point
-              const ct = cutNearest.t ?? 0
-              storeAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
+              const cutT = cutNearest.t ?? 0
+              const tNudged = cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
+              storePos = pointOnCurveAt(piece.cutLine[cutNearest.curveIndex], tNudged)
+              storeAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, tNudged) + 180
+            } else {
+              storePos = nearest.point
+              storeAngle = angle
             }
+          } else {
+            const cutCi = nearest.curveIndex
+            const cutT = t
+            const tNudged = cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
+            storePos = pointOnCurveAt(piece.cutLine[cutCi], tNudged)
+            storeAngle = outwardNormalAngleAt(piece.cutLine, cutCi, tNudged) + 180
           }
           const notchesOnSegment = piece.notches.map((n) => {
             if (n.id === dragging.notchId) return t
@@ -2356,6 +2395,7 @@ export function WorkspaceCanvas() {
               showDrills={showDrills}
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
+              showPoints={showPoints}
               notchIdBeingDragged={
                 dragging?.kind === 'notchMove' &&
                 dragging.pieceId === piece.id &&
