@@ -206,6 +206,8 @@ type Store = {
   setPieceRotation: (pieceId: string, rotationDeg: number) => void
   /** Drehpunkt (Pivot) setzen oder zurücksetzen (null = Bounds-Mitte). */
   setPiecePivot: (pieceId: string, pivotLocal: Point | null) => void
+  /** Teil so drehen, dass der Laufrichtungspfeil senkrecht nach oben zeigt. */
+  alignPieceToGrain: (pieceId: string) => void
   /** Einzelnes Kontur-Segment um deltaMm verschieben (Außenrichtung = positiv). */
   offsetSegment: (pieceId: string, curveIndex: number, deltaMm: number) => void
   /** SeamLine eines Teils neu berechnen (nach Drag-Ende aufrufen). */
@@ -1241,6 +1243,17 @@ export const useStore = create<Store>((set, get) => ({
 
   rotatePiece90: (pieceId) =>
     get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),
+
+  alignPieceToGrain: (pieceId) => {
+    const piece = get().workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece || piece.cutLine.length < 3) return
+    const currentWorldAngle = piece.transform.rotation + 90
+    const targetWorldAngle = -90
+    let delta = targetWorldAngle - currentWorldAngle
+    while (delta > 180) delta -= 360
+    while (delta < -180) delta += 360
+    get().setPieceRotation(pieceId, piece.transform.rotation + delta)
+  },
 
   startDigitize: () => set({ digitizeState: { nodes: [], isDragging: false, dragPosition: null } }),
 

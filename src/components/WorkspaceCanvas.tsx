@@ -568,6 +568,7 @@ export function WorkspaceCanvas() {
     rotatePiece90,
     setPieceRotation,
     setPiecePivot,
+    alignPieceToGrain,
     toastMessage,
     setToastMessage,
     checkSeamAdjustment,
@@ -1703,6 +1704,11 @@ export function WorkspaceCanvas() {
         selectedPieceIds.forEach((id) => rotatePiece90(id))
         return
       }
+      if ((e.key === 'a' || e.key === 'A') && !inInput && selectedPieceIds.length > 0) {
+        e.preventDefault()
+        selectedPieceIds.forEach((id) => alignPieceToGrain(id))
+        return
+      }
       if ((e.key === 'f' || e.key === 'F') && !inInput && hoveredDeletableNotch) {
         e.preventDefault()
         toggleNotchAnchor(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
@@ -1751,6 +1757,7 @@ export function WorkspaceCanvas() {
     offsetSegment,
     addInternalLine,
     rotatePiece90,
+    alignPieceToGrain,
     closeSegmentMenu,
     hoveredPieceId,
     setPendingNahtzugabeClick,
@@ -2073,6 +2080,27 @@ export function WorkspaceCanvas() {
               }}
             >
               90° drehen
+            </button>
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                alignPieceToGrain(pieceContextMenu.pieceId)
+                setPieceContextMenu(null)
+              }}
+            >
+              An Laufrichtung ausrichten <span className="menubar-shortcut">A</span>
             </button>
           </div>
         </div>

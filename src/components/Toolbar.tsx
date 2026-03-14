@@ -33,6 +33,7 @@ export function Toolbar() {
     applyOffset,
     removeSeamAllowance,
     rotatePiece90,
+    alignPieceToGrain,
     pendingNahtzugabeClick: _pendingNahtzugabeClick,
     setPendingNahtzugabeClick,
     nahtzugabeDialogPieceId,
@@ -501,6 +502,19 @@ export function Toolbar() {
                   disabled={selectedPieceIds.length === 0}
                 >
                   90° drehen <span className="menubar-shortcut">R</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    selectedPieceIds.forEach((id) => alignPieceToGrain(id))
+                    closeMenu()
+                  }}
+                  disabled={selectedPieceIds.length === 0}
+                >
+                  An Laufrichtung ausrichten <span className="menubar-shortcut">A</span>
                 </button>
               </li>
             </ul>
