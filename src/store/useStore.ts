@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Workspace, PatternPiece, ViewState, Point, Curve, Notch, Drill, SeamAssignment, DigitizeNode, DigitizeState } from '../types/model'
+import type { Workspace, PatternPiece, ViewState, Point, Line, Curve, Notch, Drill, SeamAssignment, DigitizeNode, DigitizeState } from '../types/model'
 import { offsetCurvesInwardForSeam, offsetSegmentPoints } from '../geometry/offset'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
@@ -208,7 +208,9 @@ type Store = {
   setPieceRotation: (pieceId: string, rotationDeg: number) => void
   /** Drehpunkt (Pivot) setzen oder zurücksetzen (null = Bounds-Mitte). */
   setPiecePivot: (pieceId: string, pivotLocal: Point | null) => void
-  /** Teil so drehen, dass der Laufrichtungspfeil senkrecht nach oben zeigt. */
+  /** Laufrichtungslinie (Fadenlauf) setzen. */
+  setGrainLine: (pieceId: string, line: Line) => void
+  /** Teil so drehen, dass der Laufrichtungspfeil senkrecht ausgerichtet ist. */
   alignPieceToGrain: (pieceId: string) => void
   /** Einzelnes Kontur-Segment um deltaMm verschieben (Außenrichtung = positiv). */
   offsetSegment: (pieceId: string, curveIndex: number, deltaMm: number) => void
@@ -1248,10 +1250,48 @@ export const useStore = create<Store>((set, get) => ({
   rotatePiece90: (pieceId) =>
     get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),
 
+  setGrainLine: (pieceId, line) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === pieceId ? { ...p, grainLine: line } : p
+        ),
+      },
+    })),
+
   alignPieceToGrain: (pieceId) => {
     const piece = get().workspace.pieces.find((p) => p.id === pieceId)
     if (!piece || piece.cutLine.length < 3) return
-    const currentWorldAngle = piece.transform.rotation + 90
+    const bounds = (() => {
+      const curves = piece.cutLine
+      if (curves.length === 0) return null
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const c of curves) {
+        minX = Math.min(minX, c.start.x, c.end.x)
+        minY = Math.min(minY, c.start.y, c.end.y)
+        maxX = Math.max(maxX, c.start.x, c.end.x)
+        maxY = Math.max(maxY, c.start.y, c.end.y)
+        if (c.type === 'bezier') {
+          minX = Math.min(minX, c.cp1.x, c.cp2.x)
+          minY = Math.min(minY, c.cp1.y, c.cp2.y)
+          maxX = Math.max(maxX, c.cp1.x, c.cp2.x)
+          maxY = Math.max(maxY, c.cp1.y, c.cp2.y)
+        }
+      }
+      return minX === Infinity ? null : { minX, minY, maxX, maxY }
+    })()
+    if (!bounds) return
+    const cx = (bounds.minX + bounds.maxX) / 2
+    const topY = bounds.minY + Math.max((bounds.maxY - bounds.minY) * 0.2, 3)
+    const bottomY = bounds.maxY - Math.max((bounds.maxY - bounds.minY) * 0.2, 3)
+    const grainCx = cx + 22
+    const defaultStart = { x: grainCx, y: topY }
+    const defaultEnd = { x: grainCx, y: bottomY }
+    const start = piece.grainLine?.start ?? defaultStart
+    const end = piece.grainLine?.end ?? defaultEnd
+    const grainAngleDeg = (Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI
+    const currentWorldAngle = piece.transform.rotation + grainAngleDeg
     const targetWorldAngle = 90
     let delta = targetWorldAngle - currentWorldAngle
     while (delta > 180) delta -= 360

@@ -7,7 +7,7 @@ import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPo
 import { isPointInClosedCurves } from '../geometry/pointInPolygon'
 import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves } from '../geometry/seamUtils'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
-import type { PatternPiece, Point, Curve, SeamAssignment } from '../types/model'
+import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
 
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
@@ -40,6 +40,20 @@ function pieceLocalToWorld(local: Point, piece: PatternPiece): Point {
     x: tx + lx * cos - ly * sin,
     y: ty + lx * sin + ly * cos,
   }
+}
+
+/** Aktuelle Laufrichtungslinie (piece.grainLine oder Default vertikal). */
+function getPieceGrainLine(piece: PatternPiece): Line {
+  if (piece.grainLine) return piece.grainLine
+  const bounds = curvesBounds(piece.cutLine)
+  if (!bounds) return { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } }
+  const cx = (bounds.minX + bounds.maxX) / 2
+  const h = bounds.maxY - bounds.minY
+  const inset = Math.max(h * 0.2, 3)
+  const topY = bounds.minY + inset
+  const bottomY = bounds.maxY - inset
+  const grainCx = cx + 22
+  return { start: { x: grainCx, y: topY }, end: { x: grainCx, y: bottomY } }
 }
 
 /** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe)
@@ -363,32 +377,38 @@ function PieceGroup({
       {showGrain !== false && cutLine.length >= 3 && (() => {
         const bounds = curvesBounds(cutLine)
         if (!bounds) return null
-        const cx = (bounds.minX + bounds.maxX) / 2
+        const line = getPieceGrainLine(piece)
         const w = bounds.maxX - bounds.minX
-        const h = bounds.maxY - bounds.minY
-        const inset = Math.max(h * 0.2, 3)
-        const topY = bounds.minY + inset
-        const bottomY = bounds.maxY - inset
-        const shaftH = bottomY - topY
+        const shaftH = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y) || 1
         const awNom = 6
         const ahNom = 8
         const tickLenNom = 3
-        const scale = Math.min(
-          1,
-          w / (2 * awNom),
-          shaftH / (2 * ahNom)
-        )
+        const scale = Math.min(1, w / (2 * awNom), shaftH / (2 * ahNom))
         const aw = awNom * scale
         const ah = ahNom * scale
         const tickLen = tickLenNom * scale
-        const midY = (topY + bottomY) / 2
+        const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x)
+        const midX = (line.start.x + line.end.x) / 2
+        const midY = (line.start.y + line.end.y) / 2
         const hitPad = Math.max(14, aw + 2)
-        const grainCx = cx + 22
         const hasGrainHandlers =
           onGrainArrowEnter != null &&
           onGrainArrowLeave != null &&
           onGrainArrowMove != null &&
           onGrainArrowClick != null
+        const endTip = line.end
+        const baseMidX = endTip.x - ah * Math.cos(angle)
+        const baseMidY = endTip.y - ah * Math.sin(angle)
+        const baseLeftX = baseMidX - aw * Math.sin(angle)
+        const baseLeftY = baseMidY + aw * Math.cos(angle)
+        const baseRightX = baseMidX + aw * Math.sin(angle)
+        const baseRightY = baseMidY - aw * Math.cos(angle)
+        const perpX = -Math.sin(angle)
+        const perpY = Math.cos(angle)
+        const tickStartX = midX - perpX * (tickLen / 2)
+        const tickStartY = midY - perpY * (tickLen / 2)
+        const tickEndX = midX + perpX * (tickLen / 2)
+        const tickEndY = midY + perpY * (tickLen / 2)
         return (
           <>
             <g
@@ -404,33 +424,26 @@ function PieceGroup({
               style={hasGrainHandlers ? { cursor: 'pointer' } : undefined}
             >
               <line
-                x1={grainCx}
-                y1={topY}
-                x2={grainCx}
-                y2={bottomY}
+                x1={line.start.x}
+                y1={line.start.y}
+                x2={line.end.x}
+                y2={line.end.y}
                 stroke="#333"
                 strokeWidth={0.35}
                 strokeDasharray="5 3"
                 pointerEvents="none"
               />
               <line
-                x1={grainCx - tickLen}
-                y1={midY}
-                x2={grainCx}
-                y2={midY}
+                x1={tickStartX}
+                y1={tickStartY}
+                x2={tickEndX}
+                y2={tickEndY}
                 stroke="#333"
                 strokeWidth={0.35}
                 pointerEvents="none"
               />
               <path
-                d={`M ${grainCx} ${topY} L ${grainCx - aw} ${topY + ah} L ${grainCx + aw} ${topY + ah} Z`}
-                fill="none"
-                stroke="#333"
-                strokeWidth={0.35}
-                pointerEvents="none"
-              />
-              <path
-                d={`M ${grainCx} ${bottomY} L ${grainCx - aw} ${bottomY - ah} L ${grainCx + aw} ${bottomY - ah} Z`}
+                d={`M ${endTip.x} ${endTip.y} L ${baseLeftX} ${baseLeftY} L ${baseRightX} ${baseRightY} Z`}
                 fill="none"
                 stroke="#333"
                 strokeWidth={0.35}
@@ -438,18 +451,20 @@ function PieceGroup({
               />
               {hasGrainHandlers && (
                 <rect
-                  x={grainCx - hitPad}
-                  y={topY - 4}
-                  width={hitPad * 2}
-                  height={bottomY - topY + 8}
+                  x={Math.min(line.start.x, line.end.x) - hitPad}
+                  y={Math.min(line.start.y, line.end.y) - 4}
+                  width={Math.abs(line.end.x - line.start.x) + hitPad * 2}
+                  height={Math.abs(line.end.y - line.start.y) + 8}
                   fill="transparent"
                 />
               )}
             </g>
+            <circle cx={line.start.x} cy={line.start.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
+            <circle cx={line.end.x} cy={line.end.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
             {showPieceNames !== false && (
               <text
-                x={grainCx + 10}
-                y={midY}
+                x={midX + 10 * Math.cos(angle) - 5 * Math.sin(angle)}
+                y={midY + 10 * Math.sin(angle) + 5 * Math.cos(angle)}
                 textAnchor="start"
                 dominantBaseline="middle"
                 fill="#333"
@@ -568,6 +583,7 @@ export function WorkspaceCanvas() {
     rotatePiece90,
     setPieceRotation,
     setPiecePivot,
+    setGrainLine,
     alignPieceToGrain,
     toastMessage,
     setToastMessage,
@@ -604,6 +620,7 @@ export function WorkspaceCanvas() {
     | { kind: 'piece'; pieceId: string; start: Point }
     | { kind: 'rotate'; pieceId: string; startRotation: number; startWorldAngle: number }
     | { kind: 'pivot'; pieceId: string }
+    | { kind: 'grainPoint'; pieceId: string; which: 'start' | 'end' }
     | { kind: 'vertex'; pieceId: string; vertexIndex: number; seamDrag?: { startLocal: Point; cutVertexIndex: number } }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
@@ -937,6 +954,26 @@ export function WorkspaceCanvas() {
               return
             }
             setDragging({ kind: 'pivot', pieceId: p.id })
+            containerRef.current?.setPointerCapture?.(e.pointerId)
+            return
+          }
+        }
+        const GRAIN_POINT_HIT = 14
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+          const grain = getPieceGrainLine(p)
+          const startWorld = pieceLocalToWorld(grain.start, p)
+          const endWorld = pieceLocalToWorld(grain.end, p)
+          const dStart = Math.hypot(world.x - startWorld.x, world.y - startWorld.y)
+          const dEnd = Math.hypot(world.x - endWorld.x, world.y - endWorld.y)
+          if (dStart < GRAIN_POINT_HIT) {
+            setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'start' })
+            containerRef.current?.setPointerCapture?.(e.pointerId)
+            return
+          }
+          if (dEnd < GRAIN_POINT_HIT) {
+            setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'end' })
             containerRef.current?.setPointerCapture?.(e.pointerId)
             return
           }
@@ -1404,6 +1441,22 @@ export function WorkspaceCanvas() {
           y: Math.max(bounds.minY, Math.min(bounds.maxY, local.y)),
         }
         setPiecePivot(dragging.pieceId, local)
+      } else if (dragging.kind === 'grainPoint') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece || piece.cutLine.length < 3) return
+        const bounds = curvesBounds(piece.cutLine)
+        if (!bounds) return
+        const world = toWorld(e.clientX, e.clientY)
+        let local = worldToPieceLocal(world, piece)
+        local = {
+          x: Math.max(bounds.minX, Math.min(bounds.maxX, local.x)),
+          y: Math.max(bounds.minY, Math.min(bounds.maxY, local.y)),
+        }
+        const currentLine = piece.grainLine ?? getPieceGrainLine(piece)
+        setGrainLine(dragging.pieceId, {
+          ...currentLine,
+          [dragging.which]: local,
+        })
       } else if (dragging.kind === 'rectangle') {
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'rectangle' ? { ...d, current } : d))
