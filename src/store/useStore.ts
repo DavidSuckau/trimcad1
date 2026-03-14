@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { Workspace, PatternPiece, ViewState, Point, Line, Curve, Notch, Drill, SeamAssignment, DigitizeNode, DigitizeState } from '../types/model'
-import { offsetCurvesInwardForSeam, offsetSegmentPoints } from '../geometry/offset'
+import { offsetCurvesInwardForSeam, offsetCurvesOutwardForCut, offsetSegmentPoints } from '../geometry/offset'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
@@ -901,9 +901,11 @@ export const useStore = create<Store>((set, get) => ({
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== pieceId || p.cutLine.length < 3) return p
-          // Nur die Kontur (cutLine) erhält Nahtzugabe; interne Linien (internalLines) nicht
-          const seamLine = offsetCurvesInwardForSeam(p.cutLine, deltaMm)
-          return { ...p, seamLine, seamAllowanceMm: deltaMm }
+          // Nahtlinie = bestehende Kontur (beim ersten Mal: aktueller cutLine; sonst: seamLine)
+          const seamLine = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
+          const cutLine = offsetCurvesOutwardForCut(seamLine, deltaMm)
+          if (cutLine.length === 0) return p
+          return { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm }
         }),
       },
     })),
@@ -912,9 +914,11 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       workspace: {
         ...s.workspace,
-        pieces: s.workspace.pieces.map((p) =>
-          p.id === pieceId ? { ...p, seamLine: [], seamAllowanceMm: null } : p
-        ),
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          // Nahtlinie wird wieder zur einzigen Kontur (cutLine)
+          return { ...p, cutLine: p.seamLine.length >= 3 ? p.seamLine : p.cutLine, seamLine: [], seamAllowanceMm: null }
+        }),
       },
     })),
 

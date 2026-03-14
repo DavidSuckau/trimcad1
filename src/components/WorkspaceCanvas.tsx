@@ -1170,6 +1170,8 @@ export function WorkspaceCanvas() {
   )
 
   const HOVER_DELETE_HIT = 14
+  /** Hover/Delete nur, wenn Maus wirklich über dem Notch-Punkt (kleiner Kreis). */
+  const NOTCH_HOVER_HIT = 4
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -1281,7 +1283,7 @@ export function WorkspaceCanvas() {
         const piecesForNotchHover =
           selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
         let bestNotch: { dist: number; pieceId: string; notchId: string } = {
-          dist: HOVER_DELETE_HIT + 1,
+          dist: NOTCH_HOVER_HIT + 1,
           pieceId: '',
           notchId: '',
         }
@@ -1300,7 +1302,7 @@ export function WorkspaceCanvas() {
             }
           }
         }
-        if (bestNotch.dist <= HOVER_DELETE_HIT) {
+        if (bestNotch.dist <= NOTCH_HOVER_HIT) {
           setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
           setHoveredDeletableNotchPos({ clientX: e.clientX, clientY: e.clientY })
           setHoveredDeletablePoint(null)
@@ -1540,25 +1542,8 @@ export function WorkspaceCanvas() {
       } else if (dragging.kind === 'notchMove') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length === 0) return
-        const notch = piece.notches.find((n) => n.id === dragging.notchId)
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        if (notch?.vertexIndex != null) {
-          const n = piece.cutLine.length
-          const hasSeam = piece.seamLine.length >= 3
-          const showSeam = hasSeam && !cutSeamSwappedSet.has(piece.id)
-          let target = local
-          if (showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0 && n > 0) {
-            const vi = notch.vertexIndex
-            const prevIdx = (vi - 1 + n) % n
-            const a1 = outwardNormalAngleAt(piece.cutLine, prevIdx, 1)
-            const a2 = outwardNormalAngleAt(piece.cutLine, vi, 0)
-            const rad = ((a1 + a2) / 2 * Math.PI) / 180
-            target = { x: local.x + piece.seamAllowanceMm * Math.cos(rad), y: local.y + piece.seamAllowanceMm * Math.sin(rad) }
-          }
-          updateVertex(dragging.pieceId, notch.vertexIndex, target)
-          return
-        }
         const hasSeam = piece.seamLine.length >= 3
         const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
         const useSeam = hasSeam && !solidIsCut

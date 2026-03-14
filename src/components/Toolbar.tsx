@@ -735,8 +735,9 @@ export function Toolbar() {
         const dialogPiece = workspace.pieces.find((p) => p.id === nahtzugabeDialogPieceId)
         const hasExisting = dialogPiece?.seamAllowanceMm != null
         const mm = parseFloat(nahtzugabeMm)
+        const contourForValidation = dialogPiece?.seamLine.length >= 3 ? dialogPiece.seamLine : dialogPiece?.cutLine ?? []
         const validation = dialogPiece && Number.isFinite(mm) && mm > 0
-          ? validateSeamAllowance(dialogPiece.cutLine, mm)
+          ? validateSeamAllowance(contourForValidation, mm)
           : null
         return (
         <div className="nahtzugabe-dialog-overlay" onClick={() => setNahtzugabeDialogPieceId(null)}>
@@ -748,7 +749,7 @@ export function Toolbar() {
               </p>
             )}
             <p className="nahtzugabe-dialog-hint">
-              Abstand der Nahtlinie zur Kontur (mm). Die gestrichelte Linie wird bei Konturänderung automatisch angepasst.
+              Die bestehende Kontur wird zur Nahtlinie; die CutLine (Schnittlinie) wird um diesen Abstand nach außen hinzugefügt.
             </p>
             <label className="nahtzugabe-dialog-label">
               <span>Nahtzugabe (mm)</span>

@@ -182,6 +182,25 @@ export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: num
 }
 
 /**
+ * Schnittlinie (cutLine) aus der Nahtlinie (seamLine):
+ * Offset nach AUSSEN um die Nahtzugabe. Die bestehende Kontur bleibt die Nahtlinie,
+ * die CutLine wird zusätzlich nach außen hinzugefügt.
+ */
+export function offsetCurvesOutwardForCut(seamLine: Curve[], seamAllowanceMm: number): Curve[] {
+  if (seamLine.length === 0 || seamAllowanceMm <= 0) return []
+  const raw = offsetCurves(seamLine, seamAllowanceMm, {
+    joinType: 'miter',
+    miterLimit: 50,
+    simplifyTolerance: 0.06,
+  })
+  if (raw.length === 0) return []
+  const seamArea = signedAreaCurves(seamLine)
+  const cutArea = signedAreaCurves(raw)
+  if (seamArea * cutArea < 0) return reverseCurves(raw)
+  return raw
+}
+
+/**
  * Einzelnes Segment um deltaMm in Außenrichtung verschieben.
  * Für Linien: einheitliche Verschiebung entlang Mittennormale.
  * Für Bézier: Start/cp1 entlang Startnormale, cp2/Ende entlang Endnormale (paralleler Offset).
