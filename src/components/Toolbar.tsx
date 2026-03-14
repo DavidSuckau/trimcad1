@@ -735,7 +735,8 @@ export function Toolbar() {
         const dialogPiece = workspace.pieces.find((p) => p.id === nahtzugabeDialogPieceId)
         const hasExisting = dialogPiece?.seamAllowanceMm != null
         const mm = parseFloat(nahtzugabeMm)
-        const contourForValidation = dialogPiece?.seamLine.length >= 3 ? dialogPiece.seamLine : dialogPiece?.cutLine ?? []
+        const contourForValidation =
+          dialogPiece && (dialogPiece.seamLine?.length ?? 0) >= 3 ? dialogPiece.seamLine : (dialogPiece?.cutLine ?? [])
         const validation = dialogPiece && Number.isFinite(mm) && mm > 0
           ? validateSeamAllowance(contourForValidation, mm)
           : null
