@@ -1509,8 +1509,8 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
+        // Punkt folgt immer direkt der Maus (unabhängig von Cut-/Seam-Ansicht).
         updateVertex(dragging.pieceId, dragging.vertexIndex, local)
-        snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
