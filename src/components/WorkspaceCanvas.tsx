@@ -1513,10 +1513,22 @@ export function WorkspaceCanvas() {
         const hasSeam = piece.seamLine.length >= 3
         const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
         const useSeam = hasSeam && !solidIsCut
-        // In Seam-Ansicht: Punkt frei mit Maus bewegen, aber seamLine während Drag nicht neu berechnen
-        // (verhindert Springen). Beim Loslassen wird recomputeSeamLine aufgerufen → Cut und Seam in Einklang.
+        // In Seam-Ansicht: Mausposition = gewünschte Seam-Position → Cut = Seam + Außennormale × Nahtzugabe,
+        // damit Cut und Seam nicht überschneiden und parallel bleiben.
+        let target = local
+        if (useSeam && piece.seamLine.length > 0 && (piece.seamAllowanceMm ?? 0) > 0) {
+          const nearest = nearestCurveIndexAndPoint(local, piece.seamLine)
+          if (nearest) {
+            const seamPoint = nearest.point
+            const angleDeg = outwardNormalAngleAt(piece.seamLine, nearest.curveIndex, nearest.t ?? 0.5)
+            const rad = (angleDeg * Math.PI) / 180
+            const dx = (piece.seamAllowanceMm ?? 0) * Math.cos(rad)
+            const dy = (piece.seamAllowanceMm ?? 0) * Math.sin(rad)
+            target = { x: seamPoint.x + dx, y: seamPoint.y + dy }
+          }
+        }
         const skipSeam = useSeam && (piece.seamAllowanceMm ?? 0) > 0
-        updateVertex(dragging.pieceId, dragging.vertexIndex, local, skipSeam)
+        updateVertex(dragging.pieceId, dragging.vertexIndex, target, skipSeam)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
