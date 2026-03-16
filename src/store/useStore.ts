@@ -1347,10 +1347,7 @@ export const useStore = create<Store>((set, get) => ({
     if (!a) return
     const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
     const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
-    if (!pieceA || !pieceB) {
-      set({ seamAdjustmentDialog: null })
-      return
-    }
+    if (!pieceA || !pieceB) return
     const nA = pieceA.cutLine.length
     const nB = pieceB.cutLine.length
     if (nA < 3 || nB < 3 || a.curveIndicesA.length === 0 || a.curveIndicesB.length === 0) {
@@ -1378,27 +1375,17 @@ export const useStore = create<Store>((set, get) => ({
     const startVB = startVertexIndex(a.curveIndicesB)
     const endVB = endVertexIndex(a.curveIndicesB, nB)
 
-    const pairs: { pieceId: string; vertexIndex: number; targetWorld: Point }[] = []
+    // Referenz: Teil A bleibt unverändert; Teil B wird an die Weltpositionen von A angelegt.
+    const startALocal = vertexPointLocal(pieceA.cutLine, startVA)
+    const endALocal = vertexPointLocal(pieceA.cutLine, endVA)
+    const startAWorld = pieceLocalToWorld(startALocal, pieceA.transform)
+    const endAWorld = pieceLocalToWorld(endALocal, pieceA.transform)
 
-    const pushAlignedPair = (piece1: typeof pieceA, vi1: number, piece2: typeof pieceB, vi2: number) => {
-      const local1 = vertexPointLocal(piece1.cutLine, vi1)
-      const local2 = vertexPointLocal(piece2.cutLine, vi2)
-      const world1 = pieceLocalToWorld(local1, piece1.transform)
-      const world2 = pieceLocalToWorld(local2, piece2.transform)
-      const avg: Point = { x: (world1.x + world2.x) / 2, y: (world1.y + world2.y) / 2 }
-      pairs.push({ pieceId: piece1.id, vertexIndex: vi1, targetWorld: avg })
-      pairs.push({ pieceId: piece2.id, vertexIndex: vi2, targetWorld: avg })
-    }
+    const startBLocalTarget = worldToPieceLocal(startAWorld, pieceB.transform)
+    const endBLocalTarget = worldToPieceLocal(endAWorld, pieceB.transform)
 
-    pushAlignedPair(pieceA, startVA, pieceB, startVB)
-    pushAlignedPair(pieceA, endVA, pieceB, endVB)
-
-    for (const p of pairs) {
-      const piece = s.workspace.pieces.find((x) => x.id === p.pieceId)
-      if (!piece) continue
-      const local = worldToPieceLocal(p.targetWorld, piece.transform)
-      get().updateVertex(p.pieceId, p.vertexIndex, local)
-    }
+    get().updateVertex(pieceB.id, startVB, startBLocalTarget)
+    get().updateVertex(pieceB.id, endVB, endBLocalTarget)
 
     set({ seamAdjustmentDialog: null })
   },
