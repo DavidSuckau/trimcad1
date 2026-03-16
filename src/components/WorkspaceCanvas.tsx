@@ -1509,7 +1509,26 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+        const hasSeam = piece.seamLine.length >= 3
+        const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
+        const useSeam = hasSeam && !solidIsCut
+
+        // Wenn in der Seam-Ansicht gezogen wird, liegt der Mauspunkt auf der seamLine.
+        // Wir müssen dann den zugehörigen Cut-Vertex setzen (seamPoint + Nahtzugabe nach außen),
+        // sonst „springt“ der Vertex auf die cutLine bzw. zieht die Kontur ungewollt zusammen.
+        let target = local
+        if (useSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0) {
+          const nearest = nearestCurveIndexAndPoint(local, piece.seamLine)
+          if (nearest?.point) {
+            const angleDeg = outwardNormalAngleAt(piece.seamLine, nearest.curveIndex, nearest.t ?? 0.5)
+            const rad = (angleDeg * Math.PI) / 180
+            const dx = piece.seamAllowanceMm * Math.cos(rad)
+            const dy = piece.seamAllowanceMm * Math.sin(rad)
+            target = { x: nearest.point.x + dx, y: nearest.point.y + dy }
+          }
+        }
+
+        updateVertex(dragging.pieceId, dragging.vertexIndex, target)
         snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)

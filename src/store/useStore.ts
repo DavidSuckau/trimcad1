@@ -1384,8 +1384,9 @@ export const useStore = create<Store>((set, get) => ({
     const startBLocalTarget = worldToPieceLocal(startAWorld, pieceB.transform)
     const endBLocalTarget = worldToPieceLocal(endAWorld, pieceB.transform)
 
-    get().updateVertex(pieceB.id, startVB, startBLocalTarget)
-    get().updateVertex(pieceB.id, endVB, endBLocalTarget)
+    // Nur CutLine-Vertices von B anpassen; seamLine bleibt unverändert (skipSeamRecalc = true).
+    get().updateVertex(pieceB.id, startVB, startBLocalTarget, true)
+    get().updateVertex(pieceB.id, endVB, endBLocalTarget, true)
 
     set({ seamAdjustmentDialog: null })
   },
