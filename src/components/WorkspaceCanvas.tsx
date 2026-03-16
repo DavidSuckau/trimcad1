@@ -2005,12 +2005,10 @@ export function WorkspaceCanvas() {
         }
         setTool('select')
       }
-    } else if (dragging?.kind === 'vertex') {
-      snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
     }
     setDragging(null)
     setHoveredPieceId(null)
-  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, updateNotch, notchPreview, setTool, finishDigitizeDrag, snapSeamEdgeToMatch])
+  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, updateNotch, notchPreview, setTool, finishDigitizeDrag])
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault()
