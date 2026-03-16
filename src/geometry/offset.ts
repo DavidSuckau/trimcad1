@@ -3,7 +3,8 @@ import { bezierAt, outwardNormalAngleAt, signedAreaCurves, curvesBounds } from '
 // @ts-expect-error clipper-lib has no types
 import ClipperLib from 'clipper-lib'
 
-const SCALE = 10000
+/** Höhere Auflösung reduziert sichtbare „Stufen“ bei Nahtzugabe (Clipper arbeitet mit Integer-Koordinaten). */
+const SCALE = 100000
 
 type IntPoint = { X: number; Y: number }
 
