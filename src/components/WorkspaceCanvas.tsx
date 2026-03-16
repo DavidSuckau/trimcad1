@@ -617,6 +617,7 @@ export function WorkspaceCanvas() {
     setToastMessage,
     checkSeamAdjustment,
     snapSeamEdgeToMatch,
+    recomputeSeamLine,
     digitizeState,
     addDigitizeNode,
     updateDigitizeDrag,
@@ -1509,8 +1510,27 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        // Punkt folgt immer direkt der Maus (unabhängig von Cut-/Seam-Ansicht).
-        updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+        const hasSeam = piece.seamLine.length >= 3
+        const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
+        const useSeam = hasSeam && !solidIsCut
+
+        if (useSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0) {
+          // Seam-Ansicht: Punkt bleibt auf der Nahtlinie. Maus auf seamLine projizieren,
+          // Cut-Vertex = Projektion + Nahtzugabe nach außen. seamLine während Drag nicht neu berechnen.
+          const nearest = nearestCurveIndexAndPoint(local, piece.seamLine)
+          if (nearest?.point) {
+            const angleDeg = outwardNormalAngleAt(piece.seamLine, nearest.curveIndex, nearest.t ?? 0.5)
+            const rad = (angleDeg * Math.PI) / 180
+            const dx = piece.seamAllowanceMm * Math.cos(rad)
+            const dy = piece.seamAllowanceMm * Math.sin(rad)
+            const target = { x: nearest.point.x + dx, y: nearest.point.y + dy }
+            updateVertex(dragging.pieceId, dragging.vertexIndex, target, true)
+          } else {
+            updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+          }
+        } else {
+          updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+        }
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -2005,10 +2025,12 @@ export function WorkspaceCanvas() {
         }
         setTool('select')
       }
+    } else if (dragging?.kind === 'vertex') {
+      recomputeSeamLine(dragging.pieceId)
     }
     setDragging(null)
     setHoveredPieceId(null)
-  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, updateNotch, notchPreview, setTool, finishDigitizeDrag])
+  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, updateNotch, notchPreview, setTool, finishDigitizeDrag, recomputeSeamLine])
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault()
