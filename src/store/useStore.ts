@@ -4,7 +4,7 @@ import { offsetCurvesInwardForSeam, offsetCurvesOutwardForCut, offsetSegmentPoin
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
-import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
+import { pieceLocalToWorld, worldToPieceLocal, getPiecePivotLocal } from '../geometry/pieceTransform'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -174,6 +174,8 @@ type Store = {
   setSeamAdjustmentDialog: (v: string | null) => void
   /** Passt Notch-Positionen auf der Zielseite an die Referenzseite an. */
   adjustSeamNotches: (assignmentId: string, keepSide: 'A' | 'B') => void
+  /** Passt Nahtecken (CutLine-Vertices an Nahtenden) so an, dass beide Teile bündig sind. */
+  adjustSeamCorners: (assignmentId: string) => void
   /** Prüft alle SeamAssignments: Gesamtlänge gleich + Notch-Abstände ungleich → Modal öffnen. */
   checkSeamAdjustment: () => void
   /** Snap bei Vertex-Drag: wenn Differenz < 5mm, Vertex exakt auf 0 setzen. */
@@ -1337,5 +1339,67 @@ export const useStore = create<Store>((set, get) => ({
       digitizeState: null,
       tool: 'select',
     }))
+  },
+
+  adjustSeamCorners: (assignmentId) => {
+    const s = get()
+    const a = s.workspace.seamAssignments.find((x) => x.id === assignmentId)
+    if (!a) return
+    const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
+    const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
+    if (!pieceA || !pieceB) {
+      set({ seamAdjustmentDialog: null })
+      return
+    }
+    const nA = pieceA.cutLine.length
+    const nB = pieceB.cutLine.length
+    if (nA < 3 || nB < 3 || a.curveIndicesA.length === 0 || a.curveIndicesB.length === 0) {
+      set({ seamAdjustmentDialog: null })
+      return
+    }
+
+    const startVertexIndex = (curveIndices: number[], n: number): number => {
+      const firstCi = curveIndices[0]
+      return firstCi === 0 ? 0 : firstCi
+    }
+    const endVertexIndex = (curveIndices: number[], n: number): number => {
+      const lastCi = curveIndices[curveIndices.length - 1]
+      return (lastCi + 1) % n
+    }
+    const vertexPointLocal = (cutLine: Curve[], vertexIndex: number): Point => {
+      if (vertexIndex === 0) {
+        return cutLine[0].start
+      }
+      return cutLine[vertexIndex - 1].end
+    }
+
+    const startVA = startVertexIndex(a.curveIndicesA, nA)
+    const endVA = endVertexIndex(a.curveIndicesA, nA)
+    const startVB = startVertexIndex(a.curveIndicesB, nB)
+    const endVB = endVertexIndex(a.curveIndicesB, nB)
+
+    const pairs: { pieceId: string; vertexIndex: number; targetWorld: Point }[] = []
+
+    const pushAlignedPair = (piece1: typeof pieceA, vi1: number, piece2: typeof pieceB, vi2: number) => {
+      const local1 = vertexPointLocal(piece1.cutLine, vi1)
+      const local2 = vertexPointLocal(piece2.cutLine, vi2)
+      const world1 = pieceLocalToWorld(local1, piece1.transform)
+      const world2 = pieceLocalToWorld(local2, piece2.transform)
+      const avg: Point = { x: (world1.x + world2.x) / 2, y: (world1.y + world2.y) / 2 }
+      pairs.push({ pieceId: piece1.id, vertexIndex: vi1, targetWorld: avg })
+      pairs.push({ pieceId: piece2.id, vertexIndex: vi2, targetWorld: avg })
+    }
+
+    pushAlignedPair(pieceA, startVA, pieceB, startVB)
+    pushAlignedPair(pieceA, endVA, pieceB, endVB)
+
+    for (const p of pairs) {
+      const piece = s.workspace.pieces.find((x) => x.id === p.pieceId)
+      if (!piece) continue
+      const local = worldToPieceLocal(p.targetWorld, piece.transform)
+      get().updateVertex(p.pieceId, p.vertexIndex, local)
+    }
+
+    set({ seamAdjustmentDialog: null })
   },
 }))

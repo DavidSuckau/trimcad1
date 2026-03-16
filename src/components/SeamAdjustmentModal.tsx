@@ -5,6 +5,7 @@ export function SeamAdjustmentModal() {
   const seamAdjustmentDialog = useStore((s) => s.seamAdjustmentDialog)
   const setSeamAdjustmentDialog = useStore((s) => s.setSeamAdjustmentDialog)
   const adjustSeamNotches = useStore((s) => s.adjustSeamNotches)
+  const adjustSeamCorners = useStore((s) => s.adjustSeamCorners)
   const workspace = useStore((s) => s.workspace)
 
   if (!seamAdjustmentDialog) return null
@@ -114,6 +115,42 @@ export function SeamAdjustmentModal() {
           >
             Nicht anpassen
           </button>
+        </div>
+
+        <div style={{ marginTop: '1rem', borderTop: '1px solid #eee', paddingTop: '0.6rem' }}>
+          <div style={{ fontSize: '0.8125rem', color: '#555', marginBottom: '0.5rem' }}>
+            Ecken der Nahtzugabe an dieser Naht bündig machen (beide Teile)?
+          </div>
+          <div className="nahtzugabe-dialog-actions" style={{ flexDirection: 'column', gap: '0.35rem' }}>
+            <button
+              style={{
+                padding: '0.45rem 0.75rem',
+                fontSize: '0.8125rem',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                background: '#1976d2',
+                color: '#fff',
+                cursor: 'pointer',
+              }}
+              onClick={() => adjustSeamCorners(seamAdjustmentDialog)}
+            >
+              Ecken anpassen (beide Teile)
+            </button>
+            <button
+              style={{
+                padding: '0.45rem 0.75rem',
+                fontSize: '0.8125rem',
+                border: '1px solid #ccc',
+                borderRadius: 4,
+                background: '#fff',
+                color: '#333',
+                cursor: 'pointer',
+              }}
+              onClick={() => setSeamAdjustmentDialog(null)}
+            >
+              Ecken nicht anpassen
+            </button>
+          </div>
         </div>
       </div>
     </div>

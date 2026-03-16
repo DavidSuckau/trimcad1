@@ -1509,7 +1509,21 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        updateVertex(dragging.pieceId, dragging.vertexIndex, local)
+        const hasSeam = piece.seamLine.length >= 3
+        const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
+        const useSeam = hasSeam && !solidIsCut
+        let target = local
+        if (useSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0) {
+          const nearest = nearestCurveIndexAndPoint(local, piece.seamLine)
+          if (nearest?.point != null) {
+            const angleDeg = outwardNormalAngleAt(piece.cutLine, nearest.curveIndex, nearest.t ?? 0.5)
+            const rad = (angleDeg * Math.PI) / 180
+            const dx = piece.seamAllowanceMm * Math.cos(rad)
+            const dy = piece.seamAllowanceMm * Math.sin(rad)
+            target = { x: nearest.point.x + dx, y: nearest.point.y + dy }
+          }
+        }
+        updateVertex(dragging.pieceId, dragging.vertexIndex, target)
         snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)

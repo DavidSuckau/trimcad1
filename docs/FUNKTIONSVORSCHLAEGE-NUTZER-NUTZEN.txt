@@ -1,0 +1,164 @@
+================================================================================
+TrimTex – Funktionsvorschläge mit echtem Nutzer-Nutzen
+================================================================================
+Ideensammlung: Funktionen, die den Arbeitsalltag spürbar erleichtern könnten.
+Stand: März 2025
+================================================================================
+
+--- 1. AUTOMATISIERTE NAHT-ECKEN-ERSTELLUNG --------------------------------
+
+  Problem:
+  Heute müssen Naht-Ecken (Punkte für die Nahtzuordnung zwischen Teilen) oft
+  manuell mit „Erzeuge Punkt“ gesetzt werden. Bei vielen Ecken oder
+  symmetrischen Teilen ist das mühsam.
+
+  Vorschlag:
+  • „Naht-Ecken automatisch setzen“: Alle geometrischen Ecken (Knickpunkte
+    der cutLine) automatisch als softVertices markieren, sodass jede Kante
+    genau von Eckpunkt zu Eckpunkt verläuft. Optional: nur Ecken mit
+    Innenwinkel < 180° (echte Knicke).
+  • „Naht-Ecken an ausgewählten Vertices setzen“: Nur an den markierten
+    Vertices weiche Punkte setzen (z. B. nach Auswahl mehrerer Punkte).
+  • Nahtecken-Typen (bereits in der Toolbar angedeutet): Abgeschnitten,
+    Faccete, Ecke – automatisch je nach Winkel oder manuell wählbar.
+
+  Nutzen: Schnellere Nahtzuordnung, weniger Klicks, weniger Vergessen von
+  Ecken.
+
+
+--- 2. NAHTECKEN-TYPEN (ABGESCHNITTEN / FACCETE / ECKE) --------------------
+
+  Kontext: In der Toolbar steht bereits „Nahtecken-Typen … kommen in einer
+  späteren Version“.
+
+  Vorschlag:
+  • Pro Vertex (oder pro softVertex) einen Typ: Abgeschnitten (cut-off),
+    Faccete (abgeschrägt), Ecke (rechter Winkel / Nahtzugabe-Falte).
+  • Darstellung: Leichte optische Unterscheidung (z. B. kleines Symbol oder
+    Linienführung an der Nahtzugabe).
+  • DXF: Falls AAMA/ASTM Ecken-Typen unterstützen, im Export abbilden;
+    sonst nur intern für Darstellung und ggf. spätere Cutter-Logik.
+
+  Nutzen: Professionelle Nahtzugabe-Darstellung und -Verarbeitung, weniger
+  manuelle Nacharbeit am Cutter.
+
+
+--- 3. SYMMETRISCHES TEIL AUS EINER HÄLFTE ---------------------------------
+
+  Vorschlag:
+  • „Spiegeln und duplizieren“: Ausgewähltes Teil an einer Achse (vertikal/
+    horizontal oder frei wählbare Linie) spiegeln und als neues Teil ablegen.
+  • „Symmetrie-Modus“: Beim Bearbeiten eines Teils Änderungen automatisch
+    auf die andere Hälfte übertragen (eine Hälfte als „Master“, andere
+    gespiegelt).
+
+  Nutzen: Typische Schnittkonstruktion (z. B. Vorderteil links/rechts) mit
+  halbem Aufwand.
+
+
+--- 4. NOTCHES AUF KANTEN VERTEILEN -----------------------------------------
+
+  Vorschlag:
+  • „Notches gleichmäßig auf Kante verteilen“: Kante auswählen (z. B. zwei
+    Eckpunkte), Anzahl N eingeben → N Notches mit gleichem Abstand auf der
+    Kante platzieren (inkl. Winkel zur Kontur).
+  • „Notch an prozentualer Position“: Einzelnen Notch bei z. B. 25 % der
+    Kantenlänge setzen (für Passkerben, Mittellinien).
+
+  Nutzen: Standard-Arbeit beim Ausrichten von Teilen (z. B. Ärmel in
+  Armkugel) deutlich schneller.
+
+
+--- 5. NAHTZUGABE PRO KANTE (STATT NUR GLOBAL) ------------------------------
+
+  Vorschlag:
+  • Pro Kante (Eckpunkt→Eckpunkt) eine optionale Nahtzugabe in mm. Wenn
+    nicht gesetzt: Fallback auf piece.seamAllowanceMm.
+  • seamLine wird dann segmentweise aus cutLine + kantenweiser Nahtzugabe
+    berechnet (Ecken entsprechend Nahtecken-Typ falten/facettieren).
+
+  Nutzen: Unterschiedliche Nahtzugaben pro Naht (z. B. Ärmel 1 cm, Saum
+  4 cm) ohne mehrere Teile oder manuelle Offsets.
+
+
+--- 6. KANTEN-LÄNGE ANZEIGEN UND GLEICH SETZEN ------------------------------
+
+  Vorschlag:
+  • Beim Hover über eine Kante: Länge in mm anzeigen (z. B. Tooltip oder
+    kleines Label). Bereits vorhanden: edgeTotalLength – Anzeige fehlt ggf.
+  • „Kante auf Länge bringen“: Ziel-Länge eingeben, Segment wird gestaucht/
+    gestreckt (oder benachbartes Teil wird angepasst bei Nahtzuordnung).
+
+  Nutzen: Passform-Kontrolle (z. B. Armloch = Ärmelkopf) und gezieltes
+  Angleichen von Kanten.
+
+
+--- 7. VORLAGEN / TEIL-BIBLIOTHEK -------------------------------------------
+
+  Vorschlag:
+  • Häufig genutzte Grundformen (Rechteck, Oval, T-Shirt-Vorderteil …) als
+    Vorlagen zum Einfügen.
+  • Eigene Teile als „Vorlage“ speichern und in anderen Dateien wieder
+    einfügen.
+
+  Nutzen: Weniger Wiederholung, schnellerer Einstieg für Standard-Schnitte.
+
+
+--- 8. UNDO / REDO (GLOBAL) --------------------------------------------------
+
+  Vorschlag:
+  • Einfache Undo/Redo-History für Aktionen (Kontur ändern, Notch setzen,
+    Teil löschen, Nahtzuordnung …). Begrenzte Tiefe (z. B. 50 Schritte).
+
+  Nutzen: Experimentieren ohne Angst, schnelles Korrigieren von Fehlklicks.
+
+
+--- 9. MESSEN UND LINIAL-VERBESSERUNG ---------------------------------------
+
+  Vorschlag:
+  • Zwei Punkte auswählen → Abstand anzeigen (gerade Linie und optional
+    Pfadlänge entlang der Kontur).
+  • Linial-Modus: Strecke zwischen zwei Klicks zeichnen und Länge anzeigen
+    (falls noch nicht vorhanden).
+
+  Nutzen: Kontrolle von Abständen und Passmaßen ohne externes CAD.
+
+
+--- 10. DXF-IMPORT (ROUNDTRIP) -----------------------------------------------
+
+  Vorschlag:
+  • DXF-Dateien (AAMA/ASTM) einlesen: cutLine, seamLine, Notches, Drills,
+    Grain aus Layern rekonstruieren und als TrimTex-Teile öffnen.
+  • Runde Reise: Import → Bearbeiten → Export ohne Informationsverlust.
+
+  Nutzen: Bestehende Schnitte aus anderen Systemen weiterbearbeiten und
+  in TrimTex zentral pflegen.
+
+
+--- 11. BATCH-NAHTZUGABE UND BATCH-NOTCH ------------------------------------
+
+  Vorschlag:
+  • „Nahtzugabe auf alle Teile anwenden“: Ein Wert, alle Teile bekommen
+    seamAllowanceMm und neu berechnete seamLine.
+  • „Notch-Typ auf alle setzen“: Alle Notches eines Teils (oder aller
+    Teile) auf z. B. „V“ oder „Doppel“ umstellen.
+
+  Nutzen: Konsistente Änderungen in großen Layern ohne Einzelklicks.
+
+
+--- 12. KURZREFERENZ (PRIORITÄT FÜR DICH) ------------------------------------
+
+  Die folgenden Punkte würden den Nutzer besonders stark entlasten, wenn
+  du sie zuerst umsetzen würdest:
+
+  1. Automatisierte Naht-Ecken-Erstellung (alle Ecken = softVertices)
+  2. Nahtecken-Typen (Abgeschnitten / Faccete / Ecke) mit Darstellung
+  3. Notches gleichmäßig auf Kante verteilen
+  4. Undo/Redo
+  5. Nahtzugabe pro Kante (optional)
+
+  Die Reihenfolge kann je nach Nutzer-Feedback angepasst werden.
+
+================================================================================
+Ende der Funktionsvorschläge
+================================================================================
