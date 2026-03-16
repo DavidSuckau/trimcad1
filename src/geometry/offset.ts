@@ -132,7 +132,9 @@ export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetO
     outPts.pop()
   }
   const tol = options?.simplifyTolerance ?? 0.15
-  outPts = simplifyClosedPolygon(outPts, tol)
+  if (tol > 0) {
+    outPts = simplifyClosedPolygon(outPts, tol)
+  }
   const segs = pointsToLineCurves(outPts)
   if (outPts.length >= 3) {
     segs.push({ type: 'line', start: outPts[outPts.length - 1], end: outPts[0] })
@@ -169,10 +171,11 @@ function reverseCurves(curves: Curve[]): Curve[] {
  */
 export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: number): Curve[] {
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
+  // Keine Vereinfachung (0), damit Ecken beim Vertex-Ziehen nicht wegfallen und das Teil nicht „verzieht“
   const raw = offsetCurves(cutLine, -seamAllowanceMm, {
     joinType: 'miter',
     miterLimit: 50,
-    simplifyTolerance: 0.06,
+    simplifyTolerance: 0,
   })
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)
