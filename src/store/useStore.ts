@@ -4,7 +4,7 @@ import { offsetCurvesInwardForSeam, offsetCurvesOutwardForCut, offsetSegmentPoin
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
-import { pieceLocalToWorld, worldToPieceLocal, getPiecePivotLocal } from '../geometry/pieceTransform'
+import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -1341,53 +1341,9 @@ export const useStore = create<Store>((set, get) => ({
     }))
   },
 
-  adjustSeamCorners: (assignmentId) => {
-    const s = get()
-    const a = s.workspace.seamAssignments.find((x) => x.id === assignmentId)
-    if (!a) return
-    const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
-    const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
-    if (!pieceA || !pieceB) return
-    const nA = pieceA.cutLine.length
-    const nB = pieceB.cutLine.length
-    if (nA < 3 || nB < 3 || a.curveIndicesA.length === 0 || a.curveIndicesB.length === 0) {
-      set({ seamAdjustmentDialog: null })
-      return
-    }
-
-    const startVertexIndex = (curveIndices: number[]): number => {
-      const firstCi = curveIndices[0]
-      return firstCi === 0 ? 0 : firstCi
-    }
-    const endVertexIndex = (curveIndices: number[], n: number): number => {
-      const lastCi = curveIndices[curveIndices.length - 1]
-      return (lastCi + 1) % n
-    }
-    const vertexPointLocal = (cutLine: Curve[], vertexIndex: number): Point => {
-      if (vertexIndex === 0) {
-        return cutLine[0].start
-      }
-      return cutLine[vertexIndex - 1].end
-    }
-
-    const startVA = startVertexIndex(a.curveIndicesA)
-    const endVA = endVertexIndex(a.curveIndicesA, nA)
-    const startVB = startVertexIndex(a.curveIndicesB)
-    const endVB = endVertexIndex(a.curveIndicesB, nB)
-
-    // Referenz: Teil A bleibt unverändert; Teil B wird an die Weltpositionen von A angelegt.
-    const startALocal = vertexPointLocal(pieceA.cutLine, startVA)
-    const endALocal = vertexPointLocal(pieceA.cutLine, endVA)
-    const startAWorld = pieceLocalToWorld(startALocal, pieceA.transform)
-    const endAWorld = pieceLocalToWorld(endALocal, pieceA.transform)
-
-    const startBLocalTarget = worldToPieceLocal(startAWorld, pieceB.transform)
-    const endBLocalTarget = worldToPieceLocal(endAWorld, pieceB.transform)
-
-    // Nur CutLine-Vertices von B anpassen; seamLine bleibt unverändert (skipSeamRecalc = true).
-    get().updateVertex(pieceB.id, startVB, startBLocalTarget, true)
-    get().updateVertex(pieceB.id, endVB, endBLocalTarget, true)
-
-    set({ seamAdjustmentDialog: null })
+  adjustSeamCorners: (_assignmentId) => {
+    // Nahtecken-Funktion vorerst deaktiviert, bis das Verhalten stabil definiert ist.
+    // Das Modal bietet weiterhin nur die Notch-Anpassung an.
+    return
   },
 }))
