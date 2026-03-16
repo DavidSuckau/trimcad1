@@ -1358,7 +1358,7 @@ export const useStore = create<Store>((set, get) => ({
       return
     }
 
-    const startVertexIndex = (curveIndices: number[], n: number): number => {
+    const startVertexIndex = (curveIndices: number[]): number => {
       const firstCi = curveIndices[0]
       return firstCi === 0 ? 0 : firstCi
     }
@@ -1373,9 +1373,9 @@ export const useStore = create<Store>((set, get) => ({
       return cutLine[vertexIndex - 1].end
     }
 
-    const startVA = startVertexIndex(a.curveIndicesA, nA)
+    const startVA = startVertexIndex(a.curveIndicesA)
     const endVA = endVertexIndex(a.curveIndicesA, nA)
-    const startVB = startVertexIndex(a.curveIndicesB, nB)
+    const startVB = startVertexIndex(a.curveIndicesB)
     const endVB = endVertexIndex(a.curveIndicesB, nB)
 
     const pairs: { pieceId: string; vertexIndex: number; targetWorld: Point }[] = []
