@@ -174,8 +174,6 @@ type Store = {
   setSeamAdjustmentDialog: (v: string | null) => void
   /** Passt Notch-Positionen auf der Zielseite an die Referenzseite an. */
   adjustSeamNotches: (assignmentId: string, keepSide: 'A' | 'B') => void
-  /** Passt Nahtecken (CutLine-Vertices an Nahtenden) so an, dass beide Teile bündig sind. */
-  adjustSeamCorners: (assignmentId: string) => void
   /** Prüft alle SeamAssignments: Gesamtlänge gleich + Notch-Abstände ungleich → Modal öffnen. */
   checkSeamAdjustment: () => void
   /** Snap bei Vertex-Drag: wenn Differenz < 5mm, Vertex exakt auf 0 setzen. */
@@ -1341,9 +1339,4 @@ export const useStore = create<Store>((set, get) => ({
     }))
   },
 
-  adjustSeamCorners: (_assignmentId) => {
-    // Nahtecken-Funktion vorerst deaktiviert, bis das Verhalten stabil definiert ist.
-    // Das Modal bietet weiterhin nur die Notch-Anpassung an.
-    return
-  },
 }))
