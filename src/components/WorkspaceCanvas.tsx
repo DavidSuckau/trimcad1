@@ -1522,8 +1522,8 @@ export function WorkspaceCanvas() {
             target = { x: seamPoint.x + dx, y: seamPoint.y + dy }
           }
         }
-        const skipSeam = hasSeam && (piece.seamAllowanceMm ?? 0) > 0
-        updateVertex(dragging.pieceId, dragging.vertexIndex, target, skipSeam)
+        // Seam-Line in Echtzeit mitbewegen: Naht bei jedem Schritt neu aus CutLine ableiten.
+        updateVertex(dragging.pieceId, dragging.vertexIndex, target, false)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
