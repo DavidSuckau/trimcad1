@@ -848,7 +848,6 @@ export function WorkspaceCanvas() {
           const local = worldToPieceLocal(world, p)
           const cutLine = p.cutLine
           const hasSeam = p.seamLine.length >= 3
-          const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
           const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
           // Kurvenpunkte – immer cutLine (eindeutige Indizes)
           for (let ci = 0; ci < cutLine.length; ci++) {
@@ -860,12 +859,12 @@ export function WorkspaceCanvas() {
               bestPointOnCurve = { dist: d, pieceId: p.id, curveIndex: ci, t: 0.5 }
             }
           }
-          // Eckpunkte – bei Seam-Ansicht Treffer auf projizierter Position (auf seamLine)
+          // Eckpunkte – nur auf seamLine sichtbar/treffbar (wenn Naht vorhanden), sonst auf cutLine
           const n = cutLine.length
           for (let vi = 0; vi < n; vi++) {
             if (notchVIs.has(vi)) continue
             const cutV = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
-            const hitPos = solidIsCut || !hasSeam
+            const hitPos = !hasSeam
               ? cutV
               : (nearestCurveIndexAndPoint(cutV, p.seamLine)?.point ?? cutV)
             const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
@@ -1248,13 +1247,12 @@ export function WorkspaceCanvas() {
             if (!p || p.cutLine.length === 0) continue
             const local = worldToPieceLocal(world, p)
             const hasSeam = p.seamLine.length >= 3
-            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
             const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
             for (let vi = 0; vi < p.cutLine.length; vi++) {
               if (notchVIs.has(vi)) continue
               if (p.cutLine.length <= 3) continue
               const cutV = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
-              const hitPos = solidIsCut || !hasSeam
+              const hitPos = !hasSeam
                 ? cutV
                 : (nearestCurveIndexAndPoint(cutV, p.seamLine)?.point ?? cutV)
               const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
@@ -1511,12 +1509,9 @@ export function WorkspaceCanvas() {
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
         const hasSeam = piece.seamLine.length >= 3
-        const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
-        const useSeam = hasSeam && !solidIsCut
-        // In Seam-Ansicht: Mausposition = gewünschte Seam-Position → Cut = Seam + Außennormale × Nahtzugabe,
-        // damit Cut und Seam nicht überschneiden und parallel bleiben.
+        // Punkte nur auf seamLine bearbeitbar: Maus = Seam-Position → Cut = Seam + Nahtzugabe (keine Überschneidung).
         let target = local
-        if (useSeam && piece.seamLine.length > 0 && (piece.seamAllowanceMm ?? 0) > 0) {
+        if (hasSeam && piece.seamLine.length > 0 && (piece.seamAllowanceMm ?? 0) > 0) {
           const nearest = nearestCurveIndexAndPoint(local, piece.seamLine)
           if (nearest) {
             const seamPoint = nearest.point
@@ -1527,7 +1522,7 @@ export function WorkspaceCanvas() {
             target = { x: seamPoint.x + dx, y: seamPoint.y + dy }
           }
         }
-        const skipSeam = useSeam && (piece.seamAllowanceMm ?? 0) > 0
+        const skipSeam = hasSeam && (piece.seamAllowanceMm ?? 0) > 0
         updateVertex(dragging.pieceId, dragging.vertexIndex, target, skipSeam)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -2443,9 +2438,8 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === pointPreview.pieceId)
             if (!piece) return null
             const hasSeam = piece.seamLine.length >= 3
-            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pointPreview.pieceId)
             const displayPoint =
-              solidIsCut || !hasSeam
+              !hasSeam
                 ? pointPreview.point
                 : (nearestCurveIndexAndPoint(pointPreview.point, piece.seamLine)?.point ?? pointPreview.point)
             const w = pieceLocalToWorld(displayPoint, piece)
@@ -2463,7 +2457,7 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
-          {/* Eckpunkte und weiche Punkte: auf cutLine oder seamLine je nach gewählter Ansicht (solid) */}
+          {/* Eckpunkte und weiche Punkte: nur auf seamLine (wenn Naht), sonst cutLine – nur dort sichtbar und bearbeitbar */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / view.zoom
@@ -2472,12 +2466,11 @@ export function WorkspaceCanvas() {
                 if (!piece || piece.cutLine.length === 0) return []
                 const cutLine = piece.cutLine
                 const hasSeam = piece.seamLine.length >= 3
-                const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
                 const n = cutLine.length
                 return Array.from({ length: n }, (_, vi) => {
                   if (piece.notches.some((no) => no.vertexIndex === vi)) return null
                   const cutV = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
-                  const v = solidIsCut || !hasSeam
+                  const v = !hasSeam
                     ? cutV
                     : (nearestCurveIndexAndPoint(cutV, piece.seamLine)?.point ?? cutV)
                   const w = pieceLocalToWorld(v, piece)
