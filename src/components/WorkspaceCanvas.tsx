@@ -626,6 +626,7 @@ export function WorkspaceCanvas() {
     finishDigitize,
     startDigitize,
     setShowHelpModal,
+    deletePiece,
   } = useStore()
   const { pieces, view } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
@@ -1508,22 +1509,9 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
-        const hasSeam = piece.seamLine.length >= 3
-        // Punkte nur auf seamLine bearbeitbar: Maus = Seam-Position → Cut = Seam + Nahtzugabe (keine Überschneidung).
-        let target = local
-        if (hasSeam && piece.seamLine.length > 0 && (piece.seamAllowanceMm ?? 0) > 0) {
-          const nearest = nearestCurveIndexAndPoint(local, piece.seamLine)
-          if (nearest) {
-            const seamPoint = nearest.point
-            const angleDeg = outwardNormalAngleAt(piece.seamLine, nearest.curveIndex, nearest.t ?? 0.5)
-            const rad = (angleDeg * Math.PI) / 180
-            const dx = (piece.seamAllowanceMm ?? 0) * Math.cos(rad)
-            const dy = (piece.seamAllowanceMm ?? 0) * Math.sin(rad)
-            target = { x: seamPoint.x + dx, y: seamPoint.y + dy }
-          }
-        }
-        // Seam-Line in Echtzeit mitbewegen: Naht bei jedem Schritt neu aus CutLine ableiten.
-        updateVertex(dragging.pieceId, dragging.vertexIndex, target, false)
+        // Grundverhalten: Eck- und weiche Punkte verschieben direkt die cutLine-Vertices zur Mausposition.
+        // seamLine wird bei jedem Schritt aus der cutLine neu berechnet (updateVertex mit skipSeam=false).
+        updateVertex(dragging.pieceId, dragging.vertexIndex, local, false)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -2102,13 +2090,14 @@ export function WorkspaceCanvas() {
               border: '1px solid #ccc',
               borderRadius: 6,
               boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-              minWidth: 140,
+              minWidth: 180,
               padding: '4px 0',
               fontSize: 13,
               fontFamily: 'sans-serif',
             }}
           >
             <button
+              type="button"
               style={{
                 display: 'block',
                 width: '100%',
@@ -2127,7 +2116,82 @@ export function WorkspaceCanvas() {
                 setGrainFlipHover(null)
               }}
             >
-              Flippen
+              Spiegellinie (Flippen)
+            </button>
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                deletePiece(grainContextMenu.pieceId)
+                setGrainContextMenu(null)
+                setGrainFlipHover(null)
+              }}
+            >
+              Teil löschen
+            </button>
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                const piece = pieces.find((p) => p.id === grainContextMenu.pieceId)
+                if (!piece) return
+                addPiece({
+                  ...piece,
+                  id: undefined,
+                  number: undefined,
+                  name: piece.name,
+                })
+                setGrainContextMenu(null)
+                setGrainFlipHover(null)
+              }}
+            >
+              Teil kopieren
+            </button>
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                const piece = pieces.find((p) => p.id === grainContextMenu.pieceId)
+                if (!piece) return
+                selectPiece(piece.id)
+                setGrainContextMenu(null)
+                setGrainFlipHover(null)
+              }}
+            >
+              Teil-Eigenschaften
             </button>
           </div>
         </div>
