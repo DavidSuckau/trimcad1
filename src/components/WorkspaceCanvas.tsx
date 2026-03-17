@@ -838,19 +838,25 @@ export function WorkspaceCanvas() {
         return
       }
       const VERTEX_HIT = 12
+      const VERTEX_HIT_SEAM = 18
       const POINT_ON_CURVE_HIT = 12
-      // Treffer: bei Seam-Ansicht Abstand zum projizierten Punkt auf seamLine, sonst cutLine.
+      // Treffer: Seam-as-Master = Eckpunkte auf Innenkontur (seamLine); sonst cut/seam je nach Ansicht.
       if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
         let bestPointOnCurve: { dist: number; pieceId: string; curveIndex: number; t: number } | null = null
-        let bestVertex: { dist: number; pieceId: string; vertexIndex: number } | null = null
+        let bestVertex: { dist: number; pieceId: string; vertexIndex: number; hitRadius: number } | null = null
         for (const pieceId of selectedPieceIds) {
           const p = pieces.find((x) => x.id === pieceId)
-          if (!p || p.cutLine.length === 0) continue
+          const useSeamMaster = p != null && p.seamAllowanceMm != null && p.seamLine.length >= 3
+          const curvesForVertices = useSeamMaster ? p!.seamLine : p?.cutLine ?? []
+          if (!p || curvesForVertices.length === 0) continue
           const local = worldToPieceLocal(world, p)
           const cutLine = p.cutLine
           const hasSeam = p.seamLine.length >= 3
+          const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
+          const useSeam = hasSeam && !solidIsCut
           const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
-          // Kurvenpunkte – immer cutLine (eindeutige Indizes)
+          const vertexHitR = useSeam || useSeamMaster ? VERTEX_HIT_SEAM : VERTEX_HIT
+          // Kurvenpunkte – cutLine (Seam-Master: seltener Bézier auf Seam; vereinfacht)
           for (let ci = 0; ci < cutLine.length; ci++) {
             const c = cutLine[ci]
             if (c.type !== 'bezier') continue
@@ -860,19 +866,19 @@ export function WorkspaceCanvas() {
               bestPointOnCurve = { dist: d, pieceId: p.id, curveIndex: ci, t: 0.5 }
             }
           }
-          // Eckpunkte – je nach Ansicht Cut- oder Seam-Linie (siehe Regel cut/seam swapped)
-          const n = cutLine.length
+          // Eckpunkte – Seam-Master: direkt auf seamLine; sonst cut/seam je nach Ansicht
+          const n = curvesForVertices.length
           for (let vi = 0; vi < n; vi++) {
             if (notchVIs.has(vi)) continue
-            const cutV = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
-            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
-            const useSeam = hasSeam && !solidIsCut
-            const hitPos = !useSeam
-              ? cutV
-              : (nearestCurveIndexAndPoint(cutV, p.seamLine)?.point ?? cutV)
+            const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
+            const hitPos = useSeamMaster
+              ? vertexPos
+              : !useSeam
+                ? vertexPos
+                : (nearestCurveIndexAndPoint(vertexPos, p.seamLine)?.point ?? vertexPos)
             const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
-            if (d < VERTEX_HIT && (!bestVertex || d < bestVertex.dist)) {
-              bestVertex = { dist: d, pieceId: p.id, vertexIndex: vi }
+            if (d < vertexHitR && (!bestVertex || d < bestVertex.dist)) {
+              bestVertex = { dist: d, pieceId: p.id, vertexIndex: vi, hitRadius: vertexHitR }
             }
           }
         }
@@ -884,7 +890,7 @@ export function WorkspaceCanvas() {
           return
         }
         if (useVertex && bestVertex) {
-          if (bestVertex.dist <= VERTEX_HIT * 1.5) {
+          if (bestVertex.dist <= bestVertex.hitRadius * 1.5) {
             setDragging({ kind: 'vertex', pieceId: bestVertex.pieceId, vertexIndex: bestVertex.vertexIndex })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
@@ -1251,13 +1257,17 @@ export function WorkspaceCanvas() {
             const local = worldToPieceLocal(world, p)
             const hasSeam = p.seamLine.length >= 3
             const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
-            for (let vi = 0; vi < p.cutLine.length; vi++) {
+            const useSeamMaster = p.seamAllowanceMm != null && p.seamLine.length >= 3
+            const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
+            for (let vi = 0; vi < curvesForHover.length; vi++) {
               if (notchVIs.has(vi)) continue
-              if (p.cutLine.length <= 3) continue
-              const cutV = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
-              const hitPos = !hasSeam
-                ? cutV
-                : (nearestCurveIndexAndPoint(cutV, p.seamLine)?.point ?? cutV)
+              if (curvesForHover.length <= 3) continue
+              const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
+              const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
+              const useSeam = hasSeam && !solidIsCut
+              const hitPos = useSeamMaster || !useSeam
+                ? vertexPos
+                : (nearestCurveIndexAndPoint(vertexPos, p.seamLine)?.point ?? vertexPos)
               const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
               if (d < best.dist) best = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
             }
@@ -1510,9 +1520,14 @@ export function WorkspaceCanvas() {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
-        const local = worldToPieceLocal(world, piece)
-        // Grundverhalten: Eck- und weiche Punkte verschieben direkt die cutLine-Vertices zur Mausposition.
-        // seamLine wird bei jedem Schritt aus der cutLine neu berechnet (updateVertex mit skipSeam=false).
+        let local = worldToPieceLocal(world, piece)
+        if (e.altKey) {
+          const SNAP_MM = 5
+          local = {
+            x: Math.round(local.x / SNAP_MM) * SNAP_MM,
+            y: Math.round(local.y / SNAP_MM) * SNAP_MM,
+          }
+        }
         updateVertex(dragging.pieceId, dragging.vertexIndex, local, false)
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -2525,24 +2540,25 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
-          {/* Eckpunkte und weiche Punkte: nur auf seamLine (wenn Naht), sonst cutLine – nur dort sichtbar und bearbeitbar */}
+          {/* Eckpunkte: Seam-as-Master = auf seamLine; sonst cut/seam je nach Ansicht */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / view.zoom
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
-                if (!piece || piece.cutLine.length === 0) return []
-                const cutLine = piece.cutLine
+                const useSeamMaster = piece != null && piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+                const curvesForVertices = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
+                if (!piece || curvesForVertices.length === 0) return []
                 const hasSeam = piece.seamLine.length >= 3
-                const n = cutLine.length
+                const n = curvesForVertices.length
                 return Array.from({ length: n }, (_, vi) => {
                   if (piece.notches.some((no) => no.vertexIndex === vi)) return null
-                  const cutV = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
+                  const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
                   const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
                   const useSeam = hasSeam && !solidIsCut
-                  const v = !useSeam
-                    ? cutV
-                    : (nearestCurveIndexAndPoint(cutV, piece.seamLine)?.point ?? cutV)
+                  const v = useSeamMaster || !useSeam
+                    ? vertexPos
+                    : (nearestCurveIndexAndPoint(vertexPos, piece.seamLine)?.point ?? vertexPos)
                   const w = pieceLocalToWorld(v, piece)
                   const isSoft = (piece.softVertices ?? []).includes(vi)
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT

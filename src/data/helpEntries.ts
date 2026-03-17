@@ -136,6 +136,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
+    name: 'Punkt in 5-mm-Schritten verschieben',
+    description: 'Beim Ziehen eines Eckpunkts die Alt-Taste gedrückt halten: Die Position springt nur in 5-mm-Schritten (0, 5, 10, 15 …). Nützlich zum angleichen von Nahtkanten.',
+    access: 'Punkt ziehen + Alt-Taste halten',
+    shortcut: 'Alt',
+  },
+  {
+    category: 'Werkzeuge',
     name: 'Laufrichtung (Grain) Kontextmenü',
     description: 'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln etc. öffnen.',
     access: 'Laufrichtungspfeil mit Maus anfahren → Leertaste',

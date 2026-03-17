@@ -348,10 +348,14 @@ export const useStore = create<Store>((set, get) => ({
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== id) return p
           const next = { ...p, ...upd }
-          // SeamLine nie willkürlich übernehmen: immer aus cutLine ableiten, wenn Nahtzugabe gesetzt
-          if (next.seamAllowanceMm != null && next.cutLine.length >= 3) {
-            next.seamLine = offsetCurvesInwardForSeam(next.cutLine, next.seamAllowanceMm)
-          } else if (next.seamAllowanceMm == null) {
+          // Seam-as-Master: bei Nahtzugabe cutLine aus seamLine ableiten; sonst umgekehrt
+          if (next.seamAllowanceMm != null) {
+            if (next.seamLine.length >= 3) {
+              next.cutLine = offsetCurvesOutwardForCut(next.seamLine, next.seamAllowanceMm)
+            } else if (next.cutLine.length >= 3) {
+              next.seamLine = offsetCurvesInwardForSeam(next.cutLine, next.seamAllowanceMm)
+            }
+          } else {
             next.seamLine = []
           }
           return next
@@ -901,12 +905,10 @@ export const useStore = create<Store>((set, get) => ({
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== pieceId || p.cutLine.length < 3) return p
-          // Nahtlinie = bestehende Kontur (beim ersten Mal: aktueller cutLine; sonst: seamLine)
+          // Seam-as-Master: Innere Kontur = Hauptkontur. Beim ersten Mal: cutLine wird zur Nahtlinie (Seam).
           const seamLine = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
           const cutLine = offsetCurvesOutwardForCut(seamLine, deltaMm)
           if (cutLine.length === 0) return p
-          // Notches behalten: vertexIndex entfernen, da die neue cutLine andere Segmentanzahl haben kann.
-          // Position bleibt; wird beim Zeichnen auf die neue Kontur projiziert.
           const notches = p.notches.map((n) => ({ ...n, vertexIndex: undefined }))
           return { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches }
         }),
@@ -962,29 +964,40 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
 
-  // Nur den gezogenen Vertex verschieben. Normale Punkte (Kurvenform) und Notches behalten ihre Koordinaten.
+  // Vertex verschieben. Seam-as-Master: Bei Nahtzugabe wird die seamLine (Innenkontur) bearbeitet, cutLine folgt.
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc) =>
     set((s) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
-          if (p.id !== pieceId || p.cutLine.length === 0) return p
-          const n = p.cutLine.length
-          const cutLine = p.cutLine.map((c) =>
+          const seamAllowance = p.seamAllowanceMm
+          const useSeamMaster = seamAllowance != null && p.seamLine.length >= 3
+          const curves = useSeamMaster ? p.seamLine : p.cutLine
+          if (p.id !== pieceId || curves.length === 0) return p
+          const n = curves.length
+          const nextCurves = curves.map((c) =>
             c.type === 'line'
               ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
               : { type: 'bezier' as const, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
           )
           if (vertexIndex === 0) {
-            cutLine[0] = { ...cutLine[0], start: point } as Curve
-            cutLine[n - 1] = { ...cutLine[n - 1], end: point } as Curve
+            nextCurves[0] = { ...nextCurves[0], start: point } as Curve
+            nextCurves[n - 1] = { ...nextCurves[n - 1], end: point } as Curve
           } else {
-            cutLine[vertexIndex - 1] = { ...cutLine[vertexIndex - 1], end: point } as Curve
-            cutLine[vertexIndex] = { ...cutLine[vertexIndex], start: point } as Curve
+            nextCurves[vertexIndex - 1] = { ...nextCurves[vertexIndex - 1], end: point } as Curve
+            nextCurves[vertexIndex] = { ...nextCurves[vertexIndex], start: point } as Curve
           }
-          const seamLine = skipSeamRecalc
-            ? p.seamLine
-            : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
+          let cutLine = p.cutLine
+          let seamLine = p.seamLine
+          if (useSeamMaster && !skipSeamRecalc && seamAllowance != null) {
+            seamLine = nextCurves
+            cutLine = offsetCurvesOutwardForCut(seamLine, seamAllowance)
+          } else if (!useSeamMaster) {
+            cutLine = nextCurves
+            seamLine = skipSeamRecalc
+              ? p.seamLine
+              : (seamAllowance != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, seamAllowance) : p.seamLine)
+          }
           const notches = p.notches.map((notch) =>
             notch.vertexIndex === vertexIndex ? { ...notch, vertexIndex: undefined } : notch
           )
