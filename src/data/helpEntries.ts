@@ -233,13 +233,6 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Naht',
-    name: 'Nahtecken',
-    description: 'Untermenü für Nahtecken-Typen (abgeschnitten, Faccete, Ecke usw.).',
-    access: 'Menü Naht → Nahtecken',
-    shortcut: undefined,
-  },
-  {
-    category: 'Naht',
     name: 'Nahtzugabe 5 mm (schnell)',
     description: 'Schnell 5 mm Nahtzugabe auf ausgewählte Teile anwenden.',
     access: 'Menü Bearbeiten → Nahtzugabe 5 mm',

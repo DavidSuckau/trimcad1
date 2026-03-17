@@ -549,11 +549,6 @@ export function Toolbar() {
                   Nahtzuordnung
                 </button>
               </li>
-              <li>
-                <span className="menubar-dropdown-btn menubar-dropdown-btn-disabled" title="Nahtecken-Typen (Abgeschnitten, Faccete, Ecke) kommen in einer späteren Version">
-                  Nahtecken (in Entwicklung)
-                </span>
-              </li>
             </ul>
           )}
         </div>

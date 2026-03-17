@@ -13,37 +13,7 @@ Stand: März 2025
   symmetrischen Teilen ist das mühsam.
 
   Vorschlag:
-  • „Naht-Ecken automatisch setzen“: Alle geometrischen Ecken (Knickpunkte
-    der cutLine) automatisch als softVertices markieren, sodass jede Kante
-    genau von Eckpunkt zu Eckpunkt verläuft. Optional: nur Ecken mit
-    Innenwinkel < 180° (echte Knicke).
-  • „Naht-Ecken an ausgewählten Vertices setzen“: Nur an den markierten
-    Vertices weiche Punkte setzen (z. B. nach Auswahl mehrerer Punkte).
-  • Nahtecken-Typen (bereits in der Toolbar angedeutet): Abgeschnitten,
-    Faccete, Ecke – automatisch je nach Winkel oder manuell wählbar.
-
-  Nutzen: Schnellere Nahtzuordnung, weniger Klicks, weniger Vergessen von
-  Ecken.
-
-
---- 2. NAHTECKEN-TYPEN (ABGESCHNITTEN / FACCETE / ECKE) --------------------
-
-  Kontext: In der Toolbar steht bereits „Nahtecken-Typen … kommen in einer
-  späteren Version“.
-
-  Vorschlag:
-  • Pro Vertex (oder pro softVertex) einen Typ: Abgeschnitten (cut-off),
-    Faccete (abgeschrägt), Ecke (rechter Winkel / Nahtzugabe-Falte).
-  • Darstellung: Leichte optische Unterscheidung (z. B. kleines Symbol oder
-    Linienführung an der Nahtzugabe).
-  • DXF: Falls AAMA/ASTM Ecken-Typen unterstützen, im Export abbilden;
-    sonst nur intern für Darstellung und ggf. spätere Cutter-Logik.
-
-  Nutzen: Professionelle Nahtzugabe-Darstellung und -Verarbeitung, weniger
-  manuelle Nacharbeit am Cutter.
-
-
---- 3. SYMMETRISCHES TEIL AUS EINER HÄLFTE ---------------------------------
+---- 2. SYMMETRISCHES TEIL AUS EINER HÄLFTE ---------------------------------
 
   Vorschlag:
   • „Spiegeln und duplizieren“: Ausgewähltes Teil an einer Achse (vertikal/
@@ -74,8 +44,6 @@ Stand: März 2025
   Vorschlag:
   • Pro Kante (Eckpunkt→Eckpunkt) eine optionale Nahtzugabe in mm. Wenn
     nicht gesetzt: Fallback auf piece.seamAllowanceMm.
-  • seamLine wird dann segmentweise aus cutLine + kantenweiser Nahtzugabe
-    berechnet (Ecken entsprechend Nahtecken-Typ falten/facettieren).
 
   Nutzen: Unterschiedliche Nahtzugaben pro Naht (z. B. Ärmel 1 cm, Saum
   4 cm) ohne mehrere Teile oder manuelle Offsets.
@@ -151,10 +119,8 @@ Stand: März 2025
   Die folgenden Punkte würden den Nutzer besonders stark entlasten, wenn
   du sie zuerst umsetzen würdest:
 
-  1. Automatisierte Naht-Ecken-Erstellung (alle Ecken = softVertices)
-  2. Nahtecken-Typen (Abgeschnitten / Faccete / Ecke) mit Darstellung
-  3. Notches gleichmäßig auf Kante verteilen
-  4. Undo/Redo
+  1. Notches gleichmäßig auf Kante verteilen
+  2. Undo/Redo
   5. Nahtzugabe pro Kante (optional)
 
   Die Reihenfolge kann je nach Nutzer-Feedback angepasst werden.

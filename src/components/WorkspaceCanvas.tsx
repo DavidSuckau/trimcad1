@@ -860,12 +860,14 @@ export function WorkspaceCanvas() {
               bestPointOnCurve = { dist: d, pieceId: p.id, curveIndex: ci, t: 0.5 }
             }
           }
-          // Eckpunkte – nur auf seamLine sichtbar/treffbar (wenn Naht vorhanden), sonst auf cutLine
+          // Eckpunkte – je nach Ansicht Cut- oder Seam-Linie (siehe Regel cut/seam swapped)
           const n = cutLine.length
           for (let vi = 0; vi < n; vi++) {
             if (notchVIs.has(vi)) continue
             const cutV = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
-            const hitPos = !hasSeam
+            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
+            const useSeam = hasSeam && !solidIsCut
+            const hitPos = !useSeam
               ? cutV
               : (nearestCurveIndexAndPoint(cutV, p.seamLine)?.point ?? cutV)
             const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
@@ -2502,8 +2504,10 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === pointPreview.pieceId)
             if (!piece) return null
             const hasSeam = piece.seamLine.length >= 3
+            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
+            const useSeam = hasSeam && !solidIsCut
             const displayPoint =
-              !hasSeam
+              !useSeam
                 ? pointPreview.point
                 : (nearestCurveIndexAndPoint(pointPreview.point, piece.seamLine)?.point ?? pointPreview.point)
             const w = pieceLocalToWorld(displayPoint, piece)
@@ -2534,7 +2538,9 @@ export function WorkspaceCanvas() {
                 return Array.from({ length: n }, (_, vi) => {
                   if (piece.notches.some((no) => no.vertexIndex === vi)) return null
                   const cutV = vi === 0 ? cutLine[0].start : cutLine[vi - 1].end
-                  const v = !hasSeam
+                  const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
+                  const useSeam = hasSeam && !solidIsCut
+                  const v = !useSeam
                     ? cutV
                     : (nearestCurveIndexAndPoint(cutV, piece.seamLine)?.point ?? cutV)
                   const w = pieceLocalToWorld(v, piece)
