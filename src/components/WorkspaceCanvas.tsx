@@ -2227,8 +2227,8 @@ export function WorkspaceCanvas() {
       // Fuer MVP: Referenzlinie darf auch "kurz" (in Pixeln) sein.
       // Nur exakt/nahezu Null wird abgelehnt, weil sonst die Skalierung
       // (mmPerPixel = lengthMm / pixelLength) nicht sinnvoll berechenbar ist.
-      if (!Number.isFinite(pixelLength) || pixelLength <= 1e-12) {
-        setToastMessage('error:Referenzlinie ungueltig (zu kurz)')
+      if (!Number.isFinite(pixelLength)) {
+        setToastMessage('error:Referenzlinie ungueltig')
         setImageReferenceLineDraftPx(null)
         setDragging(null)
         return

@@ -42,6 +42,7 @@ export function ImageReferenceModal({
             type="number"
             step={0.1}
             value={lengthMmStr}
+            autoFocus
             onChange={(e) => {
               // Erlaubt auch Eingaben mit deutschem Komma.
               const raw = e.target.value
