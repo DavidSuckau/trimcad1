@@ -22,7 +22,8 @@ export function ImageReferenceModal({
   const [lengthMmStr, setLengthMmStr] = useState('100')
 
   const lengthMm = useMemo(() => parseFloat(lengthMmStr), [lengthMmStr])
-  const canConfirm = Number.isFinite(lengthMm) && lengthMm > 0 && pixelLength >= 1e-9
+  const MIN_REFERENCE_LENGTH_MM = 100
+  const canConfirm = Number.isFinite(lengthMm) && lengthMm >= MIN_REFERENCE_LENGTH_MM && pixelLength >= 1e-9
 
   return (
     <div className="nahtzugabe-dialog-overlay" onClick={onCancel}>
@@ -39,7 +40,7 @@ export function ImageReferenceModal({
           </label>
           <input
             type="number"
-            min={0.01}
+            min={MIN_REFERENCE_LENGTH_MM}
             step={0.1}
             value={lengthMmStr}
             onChange={(e) => setLengthMmStr(e.target.value)}
@@ -53,7 +54,7 @@ export function ImageReferenceModal({
           />
           {!canConfirm && (
             <div style={{ color: '#c62828', fontSize: '0.8125rem' }}>
-              Bitte eine gueltige Laenge eingeben (mm &gt; 0).
+              Bitte mindestens {MIN_REFERENCE_LENGTH_MM} mm eingeben.
             </div>
           )}
         </div>
