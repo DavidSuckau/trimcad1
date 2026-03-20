@@ -1464,7 +1464,7 @@ export const useStore = create<Store>((set, get) => ({
       tool: 'image-digitize',
     }),
   cancelImageDigitizeRun: () =>
-    set((s) => ({
+    set(() => ({
       digitizeState: null,
       tool: 'image-move',
     })),
