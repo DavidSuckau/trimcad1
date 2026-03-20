@@ -21,10 +21,19 @@ export function ImageReferenceModal({
 
   const [lengthMmStr, setLengthMmStr] = useState('100')
 
-  const lengthMm = useMemo(() => parseFloat(lengthMmStr), [lengthMmStr])
+  // Fuer MVP: Nutzer kann auch "400 mm" oder "400,5" eingeben.
+  // Extrahiert die erste Zahl aus dem String und interpretiert sie als mm.
+  const lengthMm = useMemo(() => {
+    const normalized = lengthMmStr.trim().replace(',', '.')
+    const match = normalized.match(/-?\d+(\.\d+)?/)
+    if (!match) return NaN
+    return parseFloat(match[0])
+  }, [lengthMmStr])
   // Fuer MVP: keine harte Mindestlaenge erzwingen.
   // Entscheidend ist nur: reale Laenge > 0 und Pixellaenge ist nicht praktisch 0.
-  const canConfirm = Number.isFinite(lengthMm) && lengthMm > 0 && pixelLength >= 1e-12
+  const lengthOk = Number.isFinite(lengthMm) && lengthMm > 0
+  const pixelOk = Number.isFinite(pixelLength) && pixelLength > 0
+  const canConfirm = lengthOk && pixelOk
 
   return (
     <div className="nahtzugabe-dialog-overlay" onClick={onCancel}>
@@ -40,14 +49,11 @@ export function ImageReferenceModal({
             Reale Länge der Referenzlinie (mm)
           </label>
           <input
-            type="number"
             step={0.1}
             value={lengthMmStr}
             autoFocus
             onChange={(e) => {
-              // Erlaubt auch Eingaben mit deutschem Komma.
-              const raw = e.target.value
-              setLengthMmStr(raw.replace(',', '.'))
+              setLengthMmStr(e.target.value)
             }}
             style={{
               width: '100%',
@@ -59,7 +65,11 @@ export function ImageReferenceModal({
           />
           {!canConfirm && (
             <div style={{ color: '#c62828', fontSize: '0.8125rem' }}>
-              Bitte eine gueltige Laenge eingeben (mm &gt; 0).
+              {!lengthOk ? (
+                <>Bitte eine gueltige Laenge eingeben (Einheit: mm).</>
+              ) : (
+                <>Die Referenzlinie ist ungueltig (Pixellaenge zu klein).</>
+              )}
             </div>
           )}
         </div>
