@@ -40,10 +40,13 @@ export function ImageReferenceModal({
           </label>
           <input
             type="number"
-            min={MIN_REFERENCE_LENGTH_MM}
             step={0.1}
             value={lengthMmStr}
-            onChange={(e) => setLengthMmStr(e.target.value)}
+            onChange={(e) => {
+              // Erlaubt auch Eingaben mit deutschem Komma.
+              const raw = e.target.value
+              setLengthMmStr(raw.replace(',', '.'))
+            }}
             style={{
               width: '100%',
               padding: '0.5rem 0.6rem',
