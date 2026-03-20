@@ -2222,11 +2222,12 @@ export function WorkspaceCanvas() {
       return
     }
     if (dragging?.kind === 'image-reference-line') {
-      const MIN_REFERENCE_PX = 50
       const { startPx, currentPx } = dragging
       const pixelLength = Math.hypot(currentPx.x - startPx.x, currentPx.y - startPx.y)
-      if (!Number.isFinite(pixelLength) || pixelLength < MIN_REFERENCE_PX) {
-        setToastMessage('error:Referenzlinie zu kurz fuer zuverlaessige Kalibrierung')
+      // Fuer MVP: Keine harte Mindest-Pixel-Länge erzwingen.
+      // Entscheidend ist, dass der Nutzer im Dialog eine sinnvolle reale Länge eingibt.
+      if (!Number.isFinite(pixelLength) || pixelLength <= 0.0001) {
+        setToastMessage('error:Referenzlinie ungueltig (zu kurz)')
         setImageReferenceLineDraftPx(null)
         setDragging(null)
         return
