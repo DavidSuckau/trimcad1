@@ -22,8 +22,9 @@ export function ImageReferenceModal({
   const [lengthMmStr, setLengthMmStr] = useState('100')
 
   const lengthMm = useMemo(() => parseFloat(lengthMmStr), [lengthMmStr])
-  const MIN_REFERENCE_LENGTH_MM = 100
-  const canConfirm = Number.isFinite(lengthMm) && lengthMm >= MIN_REFERENCE_LENGTH_MM && pixelLength >= 1e-9
+  // Fuer MVP: keine harte Mindestlaenge erzwingen.
+  // Entscheidend ist nur: reale Laenge > 0 und Pixellaenge ist nicht praktisch 0.
+  const canConfirm = Number.isFinite(lengthMm) && lengthMm > 0 && pixelLength >= 1e-12
 
   return (
     <div className="nahtzugabe-dialog-overlay" onClick={onCancel}>
@@ -58,7 +59,7 @@ export function ImageReferenceModal({
           />
           {!canConfirm && (
             <div style={{ color: '#c62828', fontSize: '0.8125rem' }}>
-              Bitte mindestens {MIN_REFERENCE_LENGTH_MM} mm eingeben.
+              Bitte eine gueltige Laenge eingeben (mm &gt; 0).
             </div>
           )}
         </div>
