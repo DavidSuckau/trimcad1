@@ -106,7 +106,34 @@ function createDefaultPiece(id: string, number: string): PatternPiece {
   }
 }
 
-type Tool = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle' | 'point' | 'curvepoint' | 'internalLine' | 'internalCircle' | 'kante' | 'digitize'
+type Tool =
+  | 'select'
+  | 'pan'
+  | 'line'
+  | 'bezier'
+  | 'notch'
+  | 'drill'
+  | 'rectangle'
+  | 'point'
+  | 'curvepoint'
+  | 'internalLine'
+  | 'internalCircle'
+  | 'kante'
+  | 'digitize'
+  | 'image-move'
+  | 'image-reference-line'
+  | 'image-digitize'
+
+type ImageDigitizeSession = {
+  imageDataUrl: string | null
+  imageSizePx: { width: number; height: number } | null
+  /** Bildposition im Workspace (mm), Mittelpunkt entspricht dem Bildzentrum. */
+  imagePosition: Point
+  imageOpacity: number
+  /** mm pro Bildpixel nach Kalibrierung; wenn null, wird als Preview `1 px = 1 mm` genutzt. */
+  mmPerPixel: number | null
+  referenceLinePx: { start: Point; end: Point } | null
+}
 
 export type NotchType = 'strich' | 'kerbe'
 
@@ -144,6 +171,7 @@ type Store = {
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
   seamAdjustmentDialog: string | null
   digitizeState: DigitizeState | null
+  imageDigitizeSession: ImageDigitizeSession | null
 
   setView: (v: Partial<ViewState>) => void
   addPiece: (piece?: Partial<PatternPiece>) => string
@@ -182,6 +210,7 @@ type Store = {
   addCurveToCutLine: (pieceId: string, curve: Curve) => void
   addInternalLine: (pieceId: string, curve: Curve) => void
   addInternalLines: (pieceId: string, curves: Curve[]) => void
+  removeInternalLine: (pieceId: string, curveIndex: number) => void
   updateCurvePoint: (pieceId: string, curveIndex: number, pointKey: string, p: Point) => void
   addNotch: (pieceId: string, notch: Notch) => void
   removeNotch: (pieceId: string, notchId: string) => void
@@ -223,6 +252,16 @@ type Store = {
   finishDigitizeDrag: () => void
   cancelDigitize: () => void
   finishDigitize: () => void
+
+  // --- Bild-Digitalisierung (Foto → Schnittteil) ---
+  startImageSession: (args: { dataUrl: string; widthPx: number; heightPx: number }) => void
+  setImagePosition: (pos: Point) => void
+  setImageOpacity: (opacity: number) => void
+  clearImageReferenceLine: () => void
+  setImageCalibration: (args: { mmPerPixel: number; referenceLinePx: { start: Point; end: Point } }) => void
+  startImageDigitize: () => void
+  cancelImageDigitizeRun: () => void
+  cancelImageSession: () => void
 }
 
 function generateId(): string {
@@ -316,6 +355,7 @@ export const useStore = create<Store>((set, get) => ({
   toastMessage: null,
   seamAdjustmentDialog: null,
   digitizeState: null,
+  imageDigitizeSession: null,
   notchSettings: Array.from({ length: 10 }, () => ({
     type: 'strich' as NotchType,
     widthMm: 6,
@@ -613,6 +653,17 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
 
+  removeInternalLine: (pieceId, curveIndex) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.internalLines.length) return p
+          const internalLines = p.internalLines.filter((_, i) => i !== curveIndex)
+          return { ...p, internalLines }
+        }),
+      },
+    })),
 
   updateCurvePoint: (pieceId, curveIndex, pointKey, p) =>
     set((s) => ({
@@ -1059,24 +1110,41 @@ export const useStore = create<Store>((set, get) => ({
   removeVertex: (pieceId, vertexIndex) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
-      const oldN = piece?.cutLine.length ?? 0
+      const useSeamMaster =
+        piece != null && piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+      const master = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
+      const oldN = master.length
       return {
         workspace: {
           ...s.workspace,
           seamAssignments: oldN > 3 ? adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vertexIndex, oldN) : s.workspace.seamAssignments,
           pieces: s.workspace.pieces.map((p) => {
-            if (p.id !== pieceId || p.cutLine.length <= 3) return p
-            const n = p.cutLine.length
+            const seamAllowance = p.seamAllowanceMm
+            const seamMaster = seamAllowance != null && p.seamLine.length >= 3
+            const curves = seamMaster ? p.seamLine : p.cutLine
+            if (p.id !== pieceId || curves.length <= 3) return p
+            const n = curves.length
             const prevIdx = (vertexIndex - 1 + n) % n
             const nextIdx = vertexIndex
             const newSeg: Curve = {
               type: 'line',
-              start: { ...p.cutLine[prevIdx].start },
-              end: { ...p.cutLine[nextIdx].end },
+              start: { ...curves[prevIdx].start },
+              end: { ...curves[nextIdx].end },
             }
-            const cutLine = p.cutLine.filter((_, j) => j !== prevIdx && j !== nextIdx)
-            cutLine.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
-            const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+            const merged = curves.filter((_, j) => j !== prevIdx && j !== nextIdx)
+            merged.splice(Math.min(prevIdx, nextIdx), 0, newSeg)
+            let cutLine = p.cutLine
+            let seamLine = p.seamLine
+            if (seamMaster && seamAllowance != null) {
+              seamLine = merged
+              cutLine = offsetCurvesOutwardForCut(seamLine, seamAllowance)
+            } else {
+              cutLine = merged
+              seamLine =
+                seamAllowance != null && cutLine.length >= 3
+                  ? offsetCurvesInwardForSeam(cutLine, seamAllowance)
+                  : p.seamLine
+            }
             const notches = p.notches.map((n) =>
               n.vertexIndex === vertexIndex
                 ? (() => { const { vertexIndex: _v, ...rest } = n; return rest })()
@@ -1086,7 +1154,7 @@ export const useStore = create<Store>((set, get) => ({
             )
             const softVertices = (p.softVertices ?? [])
               .filter((vi) => vi !== vertexIndex)
-              .map((vi) => vi > vertexIndex ? vi - 1 : vi)
+              .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
             return { ...p, cutLine, seamLine, notches, softVertices }
           }),
         },
@@ -1351,5 +1419,60 @@ export const useStore = create<Store>((set, get) => ({
       tool: 'select',
     }))
   },
+
+  // --- Bild-Digitalisierung (Foto → Schnittteil) ---
+  startImageSession: ({ dataUrl, widthPx, heightPx }) => {
+    set({
+      imageDigitizeSession: {
+        imageDataUrl: dataUrl,
+        imageSizePx: { width: widthPx, height: heightPx },
+        imagePosition: { x: 0, y: 0 },
+        imageOpacity: 0.45,
+        mmPerPixel: null,
+        referenceLinePx: null,
+      },
+      tool: 'image-move',
+      digitizeState: null,
+    })
+  },
+  setImagePosition: (pos) =>
+    set((s) => ({
+      imageDigitizeSession: s.imageDigitizeSession ? { ...s.imageDigitizeSession, imagePosition: pos } : null,
+    })),
+  setImageOpacity: (opacity) =>
+    set((s) => ({
+      imageDigitizeSession: s.imageDigitizeSession
+        ? { ...s.imageDigitizeSession, imageOpacity: Math.max(0, Math.min(1, opacity)) }
+        : null,
+    })),
+  clearImageReferenceLine: () =>
+    set((s) => ({
+      imageDigitizeSession: s.imageDigitizeSession
+        ? { ...s.imageDigitizeSession, mmPerPixel: null, referenceLinePx: null }
+        : null,
+      digitizeState: null,
+    })),
+  setImageCalibration: ({ mmPerPixel, referenceLinePx }) =>
+    set((s) => ({
+      imageDigitizeSession: s.imageDigitizeSession
+        ? { ...s.imageDigitizeSession, mmPerPixel, referenceLinePx }
+        : null,
+    })),
+  startImageDigitize: () =>
+    set({
+      digitizeState: { nodes: [], isDragging: false, dragPosition: null },
+      tool: 'image-digitize',
+    }),
+  cancelImageDigitizeRun: () =>
+    set((s) => ({
+      digitizeState: null,
+      tool: 'image-move',
+    })),
+  cancelImageSession: () =>
+    set(() => ({
+      imageDigitizeSession: null,
+      digitizeState: null,
+      tool: 'select',
+    })),
 
 }))

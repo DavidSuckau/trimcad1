@@ -1,0 +1,347 @@
+================================================================================
+  TrimTex – Code-Review: Unklarheiten und potenzielle Inkonsistenzen
+  Aus Sicht eines erfahrenen Entwicklers
+================================================================================
+  Erstellt: März 2025
+  Zweck: Dokumentation von Stellen, die schwer nachvollziehbar sind oder
+          Widersprüche/Inkonsistenzen aufweisen.
+
+  Nachtrag März 2026 (teilweise behoben):
+  • Abschnitt 1 (NAMEN-KONVENTIONEN vs. Seam-as-Master): Abschnitt 7 in
+    NAMEN-KONVENTIONEN-LINIEN-PUNKTE-NOTCHES.txt angepasst; SeamAssignment-
+    Kommentar in model.ts an getCurvesForSeamEdge angeglichen.
+  • Abschnitt 2 / Priorität 1 removeVertex: useStore.removeVertex arbeitet bei
+    Nahtzugabe auf seamLine und leitet cutLine ab; adjustSeamAfterRemove
+    nutzt die Master-Kontur-Länge (wie Nahtzuordnung).
+  • Abschnitt 6 / Priorität 1 recomputeSeamLine: Nach Vertex-Drag in
+    WorkspaceCanvas nur noch bei Cut-as-Master (ohne Seam-as-Master).
+================================================================================
+
+
+--- 1. WIDERSPRUCH: NAMEN-KONVENTIONEN vs. CURSOR-RULES vs. CODE -----------------
+
+  Problem:
+  Die Datei docs/NAMEN-KONVENTIONEN-LINIEN-PUNKTE-NOTCHES.txt sagt in Abschnitt 7:
+  „Bearbeitung immer auf cutLine – Alle Änderungen an der Kontur modifizieren
+  die cutLine. Die seamLine wird daraus abgeleitet.“
+
+  Die Cursor-Rule (.cursor/rules/cutline-seamline-punkte.mdc) und der tatsächliche
+  Code (updateVertex, applyOffset, updatePiece) implementieren hingegen
+  „Seam-as-Master“: Bei Nahtzugabe ist seamLine die bearbeitbare Hauptkontur,
+  cutLine wird daraus abgeleitet.
+
+  Empfehlung:
+  NAMEN-KONVENTIONEN.txt Abschnitt 7 („Bearbeitung immer auf cutLine“) ist
+  veraltet und widerspricht der aktuellen Architektur. Sollte auf
+  Seam-as-Master umgeschrieben werden.
+
+
+--- 2. POTENZIELLE BUGS: removeVertex bei Seam-as-Master ------------------------
+
+  Problem:
+  removeVertex arbeitet ausschließlich auf piece.cutLine. Es mergiert zwei
+  Segmente der cutLine und leitet seamLine per offsetCurvesInwardForSeam ab.
+
+  Wenn Seam-as-Master aktiv ist (seamAllowanceMm gesetzt), kommen die im UI
+  angezeigten Eckpunkte und der hoveredDeletablePoint.vertexIndex jedoch aus
+  der seamLine. Die seamLine kann nach offsetCurvesOutwardForCut eine andere
+  Segmentanzahl haben als die cutLine (simplifyTolerance 0.06 reduziert Punkte).
+
+  Folge:
+  vertexIndex aus der UI (seamLine-basiert) wird an removeVertex übergeben,
+  das aber cutLine[vertexIndex] verwendet. Bei unterschiedlicher Segmentanzahl
+  würden falsche Segmente zusammengeführt → Dateninkonsistenz oder Crash.
+
+  Empfehlung:
+  removeVertex sollte bei Seam-as-Master analog zu updateVertex die seamLine
+  bearbeiten und cutLine daraus ableiten. Die Logik muss verzweigen:
+  - Ohne Nahtzugabe: wie bisher (cutLine merge → seamLine ableiten)
+  - Mit Nahtzugabe: seamLine merge → cutLine ableiten
+
+
+--- 3. insertPointOnCutLine: Immer cutLine, nie seamLine -----------------------
+
+  Problem:
+  insertPointOnCutLine fügt einen Punkt immer in die cutLine ein. Bei
+  Seam-as-Master wäre es konsequent, in die seamLine einzufügen und cutLine
+  daraus abzuleiten.
+
+  Aktuell:
+  - „Erzeuge Punkt“ (Punkt-Tool) ruft insertPointOnCutLine auf
+  - Das fügt einen neuen Vertex in die cutLine ein
+  - Bei Seam-as-Master wäre die seamLine die korrekte Zielkontur
+
+  Empfehlung:
+  Analog zu updateVertex: Bei seamAllowanceMm != null auf seamLine einfügen,
+  cutLine ableiten. Sonst weiterhin cutLine direkt bearbeiten.
+
+
+--- 4. replaceSegmentWithBezier, movePointOnCurve, convertBezierSegmentToLine -
+  --- 5. offsetSegment ---------------------------------------------------------
+
+  Problem:
+  Alle diese Funktionen operieren ausschließlich auf cutLine. Bei Seam-as-Master
+  müssten sie auf der seamLine arbeiten und cutLine daraus ableiten.
+
+  Besonders offsetSegment: Es verschiebt ein cutLine-Segment in Außenrichtung.
+  Bei Seam-as-Master wäre die logische Aktion: seamLine-Segment verschieben,
+  cutLine folgt. Die aktuelle Implementierung ignoriert Seam-as-Master.
+
+
+--- 6. recomputeSeamLine: cutLine → seamLine statt umgekehrt -------------------
+
+  Problem:
+  recomputeSeamLine berechnet die seamLine aus der cutLine per
+  offsetCurvesInwardForSeam(cutLine, seamAllowanceMm). Das entspricht
+  Cut-as-Master, nicht Seam-as-Master.
+
+  Wann wird es aufgerufen?
+  WorkspaceCanvas: beim PointerUp nach Vertex- oder Kurvenpunkt-Drag
+  (recomputeSeamLine(dragging.pieceId)).
+
+  Bei Seam-as-Master ist die seamLine jedoch die bearbeitete Kontur – sie
+  sollte nicht aus cutLine neu berechnet werden, denn cutLine ist das
+  abgeleitete Ergebnis. Ein Aufruf von recomputeSeamLine würde die
+  Nutzeränderungen an der seamLine überschreiben.
+
+  Empfehlung:
+  Bei Seam-as-Master: recomputeSeamLine nicht aufrufen oder die Logik
+  umkehren (cutLine aus seamLine neu ableiten, nicht seamLine aus cutLine).
+  Der aktuelle Aufruf nach updateVertex könnte bei Seam-as-Master
+  problematisch sein – updateVertex leitet bereits cutLine aus seamLine ab,
+  ein zusätzlicher recomputeSeamLine würde ggf. redundante oder widersprüchliche
+  Berechnungen auslösen. Prüfen, ob der Aufruf in diesem Fall nötig ist.
+
+
+--- 7. updateCurvePoint: Immer cutLine -----------------------------------------
+
+  Problem:
+  updateCurvePoint bearbeitet piece.cutLine[curveIndex] direkt und leitet
+  seamLine daraus ab. Bei Seam-as-Master müsste die seamLine bearbeitet und
+  cutLine abgeleitet werden.
+
+  Kontext:
+  updateCurvePoint wird z.B. für Control-Point-Drag bei Bézier-Kurven genutzt.
+  curveIndex und pointKey beziehen sich aktuell immer auf cutLine.
+
+
+--- 8. Segment-Highlight und Kante-Tool: cutLine statt Master -------------------
+
+  Problem:
+  Das Kante-Tool (tool === 'kante') und die Segment-Hervorhebung verwenden
+  stets piece.cutLine. nearestCurveIndexAndPoint(local, p.cutLine) liefert
+  curveIndex für cutLine.
+
+  Bei Seam-as-Master hat die cutLine eine andere Struktur (z.B. weniger
+  Segmente durch Simplify). Die sichtbare Hover-Highlight-Zeichnung nutzt
+  cutLine[hoveredSegmentCurveIndex]. Wenn der Nutzer aber an der seamLine
+  arbeitet, könnte die Anzeige verwirren: Es wird ein cutLine-Segment
+  hervorgehoben, nicht das entsprechende seamLine-Segment.
+
+  Offen:
+  Ob die räumliche Nähe von cutLine und seamLine dafür sorgt, dass die
+  Hervorhebung „gut genug“ ist, oder ob es zu Verwechslungen kommt,
+  müsste im UI getestet werden.
+
+
+--- 9. NotchType: Zwei verschiedene Typ-Systeme --------------------------------
+
+  Problem:
+  - model.ts: NotchType = 'single' | 'double' | 'v'
+  - useStore.ts: NotchSetting mit NotchType = 'strich' | 'kerbe'
+
+  Es gibt keine offensichtliche Zuordnung zwischen strich/kerbe und
+  single/double/v. Die notchSettings (Array mit type, widthMm, depthMm)
+  werden für die Notch-Erstellung genutzt; wie strich/kerbe in single/double/v
+  übersetzt wird, ist aus dem Code nicht sofort ersichtlich.
+
+  Empfehlung:
+  Mapping dokumentieren oder einheitliches Typsystem verwenden.
+
+
+--- 10. vertexIndex bei Notches: cutLine-zentriert ----------------------------
+
+  Problem:
+  notch.vertexIndex bezieht sich laut NAMEN-KONVENTIONEN immer auf die
+  cutLine. In notchOnCurve.ts: getNotchPositionAndAngle nutzt
+  cutLine[vi].start für verankerte Notches.
+
+  Bei Seam-as-Master kann die seamLine mehr Vertices haben als die cutLine
+  (z.B. vor dem ersten Offset) oder andersherum. Wenn Notches an Vertices
+  der seamLine verankert werden sollen, müsste vertexIndex ggf. die
+  seamLine referenzieren – was das bestehende Modell („immer cutLine“)
+  brüchig macht.
+
+  Offen:
+  Ob verankerte Notches bei Seam-as-Master korrekt funktionieren, wenn
+  vertexIndex weiterhin cutLine-indiziert ist. Die seamLine hat evtl. keine
+  1:1-Entsprechung zu cutLine-Vertices.
+
+
+--- 11. getSeamEdgeCurves: Komplexe Sonderfälle ---------------------------------
+
+  Die Funktion getSeamEdgeCurves in seamUtils.ts hat eine aufwändige Fallunterscheidung
+  (master === seamLine vs. master === cutLine) und nutzt offsetSegmentPoints,
+  nearestCurveIndexAndPoint, pathLengthAt etc. Die Logik ist schwer im Kopf
+  nachzuvollziehen. Ein Kommentar mit Beispiel-Fall oder ein kleines Diagramm
+  wäre hilfreich für zukünftige Änderungen.
+
+
+--- 12. adjustSeamAfterInsert / adjustSeamAfterRemove ------------------------
+
+  Die Anpassung der SeamAssignment-curveIndices nach Kurven-Insert oder
+  Vertex-Remove ist mathematisch korrekt, aber die vielen Randfälle
+  (isWrapping, prevIdx/nextIdx, mergedIdx) machen die Funktionen schwer
+  lesbar. Unit-Tests oder ausführliche Inline-Kommentare würden das
+  Verständnis und spätere Refactorings erleichtern.
+
+
+--- 13. Digitize: softVertices-Mapping ----------------------------------------
+
+  In finishDigitize: softVertices wird aus s.digitizeState.nodes erzeugt:
+  node.handleOut != null → softVertex. Die Indizes beziehen sich auf die
+  neu erzeugte cutLine (aus digitizeNodesToCurves). Das erscheint konsistent,
+  aber die Dokumentation zu „welcher Index welchem Node/Vertex entspricht“
+  fehlt. Bei Änderungen am Digitalisierungs-Flow könnte das zu Fehlern führen.
+
+
+--- 14. DXF-MASTER-SPEZIFIKATION vs. AAMA/ASTM ---------------------------------
+
+  Die DXF-MASTER-SPEZIFIKATION beschreibt ein „minimales“ DXF (nur CUT,
+  keine weiteren Layer). Die Workspace-Rule (zielformat-aama-astm.mdc)
+  verweist auf AAMA- und ASTM-konforme Layer (CUT, SEAM, NOTCH, DRILL, GRAIN,
+  TEXT etc.). Es existieren aamaWriter.ts und astmWriter.ts.
+
+  Unklar:
+  - Gilt die DXF-MASTER-SPEZIFIKATION als veraltet oder als zusätzliche
+    „minimale“ Variante?
+  - Welche Writer (dxfWriter, aamaWriter, astmWriter) werden wann eingesetzt?
+  - Sollen alle gleichzeitig angeboten werden?
+
+
+--- 15. PIECE.LAYER (string) ----------------------------------------------------
+
+  Im PatternPiece gibt es piece.layer mit Default 'CUT'. Die DXF-Layer-Namen
+  (CUT, SEAM, NOTCH, …) werden an anderer Stelle verwendet. Es ist unklar,
+  ob piece.layer für den DXF-Export genutzt wird oder welcher genaue Zweck
+  vorgesehen ist. Ein Kommentar im Modell oder in der DXF-Export-Logik
+  wäre hilfreich.
+
+
+================================================================================
+  SEAM-AS-MASTER: STATUS-ÜBERSICHT (Code-Verifizierung)
+================================================================================
+
+  Was KORREKT auf Seam-as-Master ausgelegt ist:
+  ✓ updateVertex (useStore.ts ~980): Bearbeitet seamLine bei Nahtzugabe, leitet cutLine ab
+  ✓ updatePiece: Bei seamAllowanceMm setzt cutLine aus seamLine ab
+  ✓ Eckpunkt-Hit/Hover: curvesForVertices = useSeamMaster ? seamLine : cutLine
+  ✓ getCurvesForSeamEdge (seamUtils): Liefert seamLine bei Seam-as-Master
+
+  Was NICHT auf Seam-as-Master ausgelegt ist (cutLine-zentriert):
+
+  1. removeVertex (useStore.ts ~1071)
+     - Iteriert über piece.cutLine, merge auf cutLine, seamLine aus cutLine abgeleitet
+     - Problem: hoveredDeletablePoint.vertexIndex kommt von curvesForHover = seamLine!
+     - seamLine und cutLine haben unterschiedliche Segmentanzahl (simplifyTolerance 0.06)
+     - → vertexIndex-Mismatch: falscher Vertex wird gelöscht oder Crash
+
+  2. insertPointOnCutLine (useStore.ts ~942)
+     - Fügt immer in cutLine ein, seamLine aus cutLine abgeleitet
+     - Aufrufer (Punkt-Tool, Kurvenpunkt-Tool): nearestCurveIndexAndPoint(local, piece.cutLine)
+     - → curveIndex ist cutLine-basiert, aber bei Seam-as-Master sollte auf seamLine eingefügt werden
+
+  3. replaceSegmentWithBezier (useStore.ts ~1021)
+     - Bearbeitet cutLine[curveIndex], seamLine abgeleitet
+     - Aufrufer nutzt piece.cutLine für nearest
+
+  4. movePointOnCurve (useStore.ts ~1044)
+     - Bearbeitet cutLine[curveIndex], seamLine abgeleitet
+     - Kurvenpunkt-Drag: curveIndex von cutLine (WorkspaceCanvas ~1774: outwardNormalAngleAt(piece.cutLine, ...))
+
+  5. convertBezierSegmentToLine (useStore.ts ~1108)
+     - Bearbeitet cutLine[curveIndex]
+     - hoveredDeletablePoint für pointOnCurve: immer p.cutLine (Zeile 1362)
+
+  6. updateCurvePoint (useStore.ts ~629)
+     - Bearbeitet piece.cutLine[curveIndex] direkt
+
+  7. offsetSegment (useStore.ts ~1125)
+     - Verschiebt cutLine-Segment, seamLine abgeleitet
+     - Bei Seam-as-Master: Segment auf seamLine verschieben, cutLine ableiten
+
+  8. recomputeSeamLine (useStore.ts ~1160)
+     - Berechnet seamLine aus cutLine (offsetCurvesInwardForSeam)
+     - Wird nach Vertex-Drag aufgerufen (WorkspaceCanvas ~2270)
+     - updateVertex leitet bereits cutLine aus seamLine ab – recomputeSeamLine überschreibt
+       die seamLine mit cutLine→seamLine! → Nutzeränderungen an seamLine gehen verloren.
+
+  9. removeNotchAnchor, toggleNotchAnchor, addCurveToCutLine
+     - Alle arbeiten auf cutLine
+
+  10. flipPieceAlongGrain (useStore.ts ~1174)
+      - Spiegelt cutLine, leitet seamLine aus cutLine ab
+      - Bei Seam-as-Master: seamLine spiegeln, cutLine ableiten
+
+
+================================================================================
+  KURZ-ZUSAMMENFASSUNG
+================================================================================
+
+  Kritische Punkte:
+  - removeVertex bei Seam-as-Master (vertexIndex-Mismatch)
+  - recomputeSeamLine könnte bei Seam-as-Master Nutzerdaten überschreiben
+  - insertPointOnCutLine, replaceSegmentWithBezier, movePointOnCurve,
+    convertBezierSegmentToLine, offsetSegment, updateCurvePoint: alle
+    cutLine-zentriert, sollten bei Seam-as-Master angepasst werden
+
+  Dokumentation:
+  - NAMEN-KONVENTIONEN Abschnitt 7 widerspricht Seam-as-Master
+  - NotchType strich/kerbe vs. single/double/v unklar
+  - piece.layer Zweck unklar
+  - DXF-Master vs. AAMA/ASTM Verhältnis unklar
+
+  Lesbarkeit:
+  - getSeamEdgeCurves, adjustSeamAfterInsert/Remove: komplex, würden von
+    Kommentaren/Tests profitieren
+
+
+================================================================================
+  EMPFEHLUNG: KONKRETE MASSNAHMEN FÜR SEAM-AS-MASTER
+================================================================================
+
+  Priorität 1 (kritisch – kann Daten zerstören):
+  1. recomputeSeamLine: Bei Seam-as-Master nicht aufrufen (oder Logik umkehren:
+     cutLine aus seamLine neu ableiten statt seamLine aus cutLine).
+     → In WorkspaceCanvas handlePointerUp: nur aufrufen wenn !useSeamMaster.
+
+  2. removeVertex: Bei seamAllowanceMm != null auf seamLine arbeiten:
+     - curves = p.seamLine
+     - merge auf seamLine, cutLine = offsetCurvesOutwardForCut(seamLine, mm)
+     - vertexIndex bezieht sich dann korrekt auf seamLine.
+
+  Priorität 2 (inkonsistent, aber evtl. weniger kritisch):
+  3. insertPointOnCutLine: Bei Seam-as-Master auf seamLine einfügen.
+     - Aufrufer müsste curveIndex von seamLine holen (nearestCurveIndexAndPoint(local, seamLine)).
+     - Achtung: curveIndex für adjustSeamAfterInsert bezieht sich auf Master-Kontur.
+
+  4. replaceSegmentWithBezier, movePointOnCurve, convertBezierSegmentToLine:
+     - Bei Seam-as-Master: curveIndex auf seamLine, Bearbeitung auf seamLine,
+       cutLine ableiten.
+     - Kurvenpunkt-Hover müsste bei Seam-as-Master seamLine nutzen.
+
+  5. updateCurvePoint: Analog – bei Seam-as-Master seamLine bearbeiten.
+
+  6. offsetSegment: Bei Seam-as-Master auf seamLine-Segment arbeiten.
+
+  7. flipPieceAlongGrain: Bei Seam-as-Master seamLine spiegeln, cutLine ableiten.
+
+  Priorität 3 (Notch/Drill – vertexIndex-Referenz):
+  - notch.vertexIndex: Soll auf Master-Kontur (seamLine bei Nahtzugabe) zeigen.
+  - getNotchPositionAndAngle, notchOnCurve.ts: Prüfen ob vertexIndex korrekt
+    auf seamLine/cutLine gemappt wird.
+
+
+================================================================================
+  Ende des Code-Reviews
+================================================================================

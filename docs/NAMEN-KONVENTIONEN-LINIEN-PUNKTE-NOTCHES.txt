@@ -65,8 +65,10 @@ Notches und Punkte im Code und Datenmodell.
   Kontur-Eckpunkte (Vertices):
   • Kein eigenes Array „vertices“ – die Eckpunkte ergeben sich aus den
     Kurven: cutLine[i].start / cutLine[i-1].end (bzw. seamLine analog).
-  • vertexIndex: Index i bezieht sich auf die cutLine: Vertex i = Endpunkt
-    von cutLine[i-1] = Startpunkt von cutLine[i] (i=0: Start von cutLine[0]).
+  • vertexIndex (UI / Eckpunkt-Löschen / updateVertex): bezieht sich auf die
+    Master-Kontur – bei gesetzter Nahtzugabe (seamAllowanceMm) und seamLine
+    die seamLine, sonst die cutLine. (Notch-Feld vertexIndex im Modell siehe
+    ENTWICKLER-CODE-REVIEW-UNKLARHEITEN.txt – teils noch cutLine-zentriert.)
 
   „Erzeuge Punkt“ (blaue Punkte, keine echten Eckpunkte):
   • piece.softVertices?: number[]   – Array von Vertex-Indices, die als
@@ -140,10 +142,11 @@ Notches und Punkte im Code und Datenmodell.
       seamLine. „Swapped“ heißt also: Anzeige so getauscht, dass die
       Außenlinie (cut) als solid erscheint.
 
-  • vertexIndex und curveIndex
-    Beziehen sich immer auf die CUTLINE (Anzahl Segmente = cutLine.length).
-    Die seamLine hat nach Offset+Simplify oft eine andere Segmentanzahl;
-    es gibt keine vertexIndex-/curveIndex-Zuordnung zur seamLine.
+  • vertexIndex und curveIndex (Bearbeitung / Hover der Eckpunkte)
+    Bei Nahtzugabe (Seam-as-Master): beziehen sich auf die seamLine
+    (Innenkontur), cutLine wird daraus abgeleitet – Segmentanzahl cut ≠ seam
+    möglich (Simplify beim Offset).
+    Ohne Nahtzugabe: beziehen sich auf die cutLine; seamLine leer oder abgeleitet.
 
   • offsetSegmentPoints(curves, curveIndex, deltaMm)
     Verschiebt ein Segment in „Außenrichtung“ (outwardNormal). Wird auf
@@ -158,12 +161,14 @@ Notches und Punkte im Code und Datenmodell.
     wird. Es wird immer die cutLine für die Kante genutzt; „Innenseite“ =
     entgegen der Außennormale der cutLine.
 
-  • Bearbeitung immer auf cutLine
-    Alle Änderungen an der Kontur (Punkte verschieben, Segment einfügen,
-    Vertex löschen, Nahtzugabe setzen) modifizieren die cutLine. Die seamLine
-    wird daraus abgeleitet (offsetCurvesInwardForSeam) oder explizit geleert
-    (removeSeam). Es wird nirgends „nur seamLine“ bearbeitet.
+  • Seam-as-Master vs. Cut-as-Master (Kontur bearbeiten)
+    Mit Nahtzugabe: Innenkontur (seamLine) ist die bearbeitbare Hauptkontur für
+    updateVertex und removeVertex; cutLine = offsetCurvesOutwardForCut(seamLine, mm).
+    Ohne Nahtzugabe: cutLine ist Master; seamLine wird ggf. aus cutLine nach
+    innen offsettet oder geleert (removeSeamAllowance).
+    Einige Werkzeuge (z. B. insertPointOnCutLine, Kante-Tool) sind noch
+    cutLine-zentriert – siehe docs/ENTWICKLER-CODE-REVIEW-UNKLARHEITEN.txt.
 
 ================================================================================
-Stand: März 2025 – für Weiterentwicklung und Onboarding.
+Stand: März 2026 – für Weiterentwicklung und Onboarding.
 ================================================================================

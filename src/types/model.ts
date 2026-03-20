@@ -79,11 +79,12 @@ export type ViewState = {
 export type SeamAssignment = {
   id: string
   pieceIdA: string
-  /** Curve-Indices der cutLine von Eckpunkt zu Eckpunkt (Notches/softVertices überbrückend) */
+  /** Curve-Indices der Master-Kontur (seamLine bei Nahtzugabe, sonst cutLine); siehe getCurvesForSeamEdge */
   curveIndicesA: number[]
   /** Vom Nutzer angeklickter curveIndex – definiert die Nährichtung auf Kante A */
   clickedCurveA: number
   pieceIdB: string
+  /** Wie curveIndicesA: Master-Kontur des anderen Teils */
   curveIndicesB: number[]
   clickedCurveB: number
 }

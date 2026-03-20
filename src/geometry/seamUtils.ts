@@ -5,11 +5,23 @@ import { getNotchCurveIndexAndT, extractCurvePortion } from './notchOnCurve'
 import { offsetSegmentPoints } from './offset'
 
 /**
+ * Kontur für Nahtzuordnung: seamLine wenn Nahtzugabe gesetzt (Master), sonst cutLine.
+ * Wichtig: Bei applyOffset wird cutLine neu berechnet, aber seamLine = alte cutLine.
+ * Die gespeicherten curveIndices beziehen sich daher auf seamLine nach Nahtzugabe-Hinzufügen.
+ */
+export function getCurvesForSeamEdge(piece: PatternPiece): Curve[] {
+  return piece.seamAllowanceMm != null && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+}
+
+/**
  * Erweitert einen einzelnen curveIndex zur Eckpunkt→Eckpunkt-Range.
  * Eckpunkt = Vertex der weder softVertex noch Notch-Vertex ist.
+ * Nutzt die Master-Kontur (seamLine bei Nahtzugabe, sonst cutLine) – wichtig für konsistente
+ * Nahtzuordnung nach applyOffset, da cutLine dann eine andere Struktur hat.
  */
 export function getCornerRange(piece: PatternPiece, curveIndex: number): number[] {
-  const n = piece.cutLine.length
+  const curves = getCurvesForSeamEdge(piece)
+  const n = curves.length
   if (n === 0) return []
   const softSet = new Set(piece.softVertices ?? [])
   const notchVIs = new Set(
@@ -39,8 +51,9 @@ export function getCornerRange(piece: PatternPiece, curveIndex: number): number[
 }
 
 /** Zählt Notches die auf einer Eckpunkt→Eckpunkt-Kante liegen (nicht an den Eck-Eckpunkten selbst). */
-export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[]): number {
+export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): number {
   if (curveIndices.length === 0) return 0
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
   const ciSet = new Set(curveIndices)
   const interiorVertices = new Set(curveIndices.slice(1))
   let count = 0
@@ -48,7 +61,7 @@ export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[]):
     if (n.vertexIndex != null) {
       if (interiorVertices.has(n.vertexIndex)) count++
     } else {
-      const nr = nearestCurveIndexAndPoint(n.position, piece.cutLine)
+      const nr = nearestCurveIndexAndPoint(n.position, curvs)
       if (nr && ciSet.has(nr.curveIndex)) count++
     }
   }
@@ -61,13 +74,14 @@ export type SubSegInfo = { length: number; midpoint: Point }
  * Teilt eine Eckpunkt→Eckpunkt-Kante an den Notch-Positionen in Teilstrecken auf.
  * Rückgabe: je Teilstrecke die Länge (mm) und den Mittelpunkt (piece-local).
  */
-export function getSubSegments(piece: PatternPiece, curveIndices: number[]): SubSegInfo[] {
+export function getSubSegments(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): SubSegInfo[] {
   if (curveIndices.length === 0) return []
 
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
   const segLengths: number[] = []
   const cumLengths: number[] = [0]
   for (const ci of curveIndices) {
-    const seg = piece.cutLine[ci]
+    const seg = curvs[ci]
     if (!seg) { segLengths.push(0); continue }
     const l = curveSegmentArcLength(seg, 0, 1)
     segLengths.push(l)
@@ -90,11 +104,11 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[]): Sub
         if (idx != null) notchPositions.push(cumLengths[idx])
       }
     } else {
-      const ct = getNotchCurveIndexAndT(n, piece.cutLine)
+      const ct = getNotchCurveIndexAndT(n, curvs)
       if (ct && ciSet.has(ct.curveIndex)) {
         const idx = ciToIdx.get(ct.curveIndex)
         if (idx != null) {
-          notchPositions.push(cumLengths[idx] + curveSegmentArcLength(piece.cutLine[ct.curveIndex], 0, ct.t))
+          notchPositions.push(cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t))
         }
       }
     }
@@ -109,7 +123,7 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[]): Sub
       const sl = segLengths[i]
       if (acc + sl >= L - 1e-9) {
         const local = Math.max(0, L - acc)
-        const c = piece.cutLine[curveIndices[i]]
+        const c = curvs[curveIndices[i]]
         if (!c) return { x: 0, y: 0 }
         if (c.type === 'line') {
           const t = sl > 0 ? local / sl : 0
@@ -124,7 +138,7 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[]): Sub
       }
       acc += sl
     }
-    const last = piece.cutLine[curveIndices[curveIndices.length - 1]]
+    const last = curvs[curveIndices[curveIndices.length - 1]]
     return last ? last.end : { x: 0, y: 0 }
   }
 
@@ -141,12 +155,13 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[]): Sub
  * Liefert die Notch-IDs die auf einer Kante (curveIndices) liegen,
  * in der Reihenfolge ihrer Bogenlängen-Position vom Kantenstart.
  */
-export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[]): { notchId: string; arcLength: number }[] {
+export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): { notchId: string; arcLength: number }[] {
   if (curveIndices.length === 0) return []
 
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
   const cumLengths: number[] = [0]
   for (const ci of curveIndices) {
-    const seg = piece.cutLine[ci]
+    const seg = curvs[ci]
     if (!seg) continue
     cumLengths.push(cumLengths[cumLengths.length - 1] + curveSegmentArcLength(seg, 0, 1))
   }
@@ -165,11 +180,11 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[]): {
         if (idx != null) result.push({ notchId: n.id, arcLength: cumLengths[idx] })
       }
     } else {
-      const ct = getNotchCurveIndexAndT(n, piece.cutLine)
+      const ct = getNotchCurveIndexAndT(n, curvs)
       if (ct && ciSet.has(ct.curveIndex)) {
         const idx = ciToIdx.get(ct.curveIndex)
         if (idx != null) {
-          result.push({ notchId: n.id, arcLength: cumLengths[idx] + curveSegmentArcLength(piece.cutLine[ct.curveIndex], 0, ct.t) })
+          result.push({ notchId: n.id, arcLength: cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t) })
         }
       }
     }
@@ -182,13 +197,27 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[]): {
 /**
  * Liefert die Seam-Linien-Kurven für eine Eckpunkt→Eckpunkt-Kante (nur auf der Nahtlinie, nicht darüber hinaus).
  * Nutzt die echte piece.seamLine und schneidet exakt von Eckpunkt zu Eckpunkt.
+ * curveIndices beziehen sich auf die Master-Kontur (seamLine bei Nahtzugabe) – hier ist das seamLine direkt.
  */
 export function getSeamEdgeCurves(piece: PatternPiece, curveIndices: number[]): Curve[] {
   if (curveIndices.length === 0 || piece.seamLine.length < 3 || piece.seamAllowanceMm == null) return []
-  const cutLine = piece.cutLine
   const seamLine = piece.seamLine
+  const master = getCurvesForSeamEdge(piece)
+  // curveIndices referenzieren die Master-Kontur = seamLine bei Nahtzugabe
+  if (master === seamLine) {
+    // Direkt aus seamLine extrahieren (curveIndices sind schon seamLine-Indices)
+    const firstCi = curveIndices[0]
+    const lastCi = curveIndices[curveIndices.length - 1]
+    const n = seamLine.length
+    if (firstCi <= lastCi) {
+      return extractCurvePortion(seamLine, firstCi, 0, lastCi, 1)
+    }
+    const part1 = extractCurvePortion(seamLine, firstCi, 0, n - 1, 1)
+    const part2 = extractCurvePortion(seamLine, 0, 0, lastCi, 1)
+    return [...part1, ...part2]
+  }
+  const cutLine = piece.cutLine
   const seamMm = piece.seamAllowanceMm
-
   const firstCi = curveIndices[0]
   const lastCi = curveIndices[curveIndices.length - 1]
   const ptsStart = offsetSegmentPoints(cutLine, firstCi, -seamMm)
@@ -234,10 +263,11 @@ export function getSeamEdgeCurves(piece: PatternPiece, curveIndices: number[]): 
 }
 
 /** Gesamtbogenlänge einer Kante (curveIndices) in mm. */
-export function edgeTotalLength(piece: PatternPiece, curveIndices: number[]): number {
+export function edgeTotalLength(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): number {
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
   let total = 0
   for (const ci of curveIndices) {
-    const seg = piece.cutLine[ci]
+    const seg = curvs[ci]
     if (seg) total += curveSegmentArcLength(seg, 0, 1)
   }
   return total
@@ -252,16 +282,18 @@ export function snapVertexToEdgeLength(
   piece: PatternPiece,
   curveIndices: number[],
   vertexIndex: number,
-  targetLength: number
+  targetLength: number,
+  curves?: Curve[]
 ): Point | null {
-  const n = piece.cutLine.length
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
+  const n = curvs.length
   if (curveIndices.length === 0 || n === 0) return null
   const firstCi = curveIndices[0]
   const lastCi = curveIndices[curveIndices.length - 1]
   const startVi = firstCi
   const endVi = (lastCi + 1) % n
 
-  const segs = curveIndices.map((ci) => piece.cutLine[ci]).filter(Boolean)
+  const segs = curveIndices.map((ci) => curvs[ci]).filter(Boolean)
   if (segs.length === 0) return null
 
   if (vertexIndex === startVi) {

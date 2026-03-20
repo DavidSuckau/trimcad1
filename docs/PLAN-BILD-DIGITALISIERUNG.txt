@@ -1,0 +1,389 @@
+================================================================================
+  TrimTex – Plan: Bild-Digitalisierung (Foto → Schnittteil)
+================================================================================
+  Erstellt: März 2025
+  Zweck: Analyse und Plan für eine Funktion, mit der Nutzer ein Foto im
+         Arbeitsbereich laden, den Maßstab kalibrieren und die Kontur
+         per Digitalisieren abfahren können.
+  Hinweis: Dieses Dokument beschreibt nur den Plan – keine Codeänderungen.
+================================================================================
+
+
+--- 1. ÜBERBLICK: WAS SOLL ENTSTEHEN? ------------------------------------------
+
+  Nutzer-Workflow:
+  1. Bild laden (Foto eines Schnittteils, z. B. auf Tisch liegend)
+  2. Referenzlinie anlegen mit bekanntem Maß (z. B. 10 cm Lineal sichtbar)
+  3. Maßstab berechnen (Pixel → mm)
+  4. Mit Digitalisier-Funktion die Kontur abfahren (Punkte setzen)
+  5. Ergebnis: Ein PatternPiece mit cutLine aus dem digitalisierten Pfad
+
+  Ziel: Schnittteile aus Fotos „abpausen“ können, ohne sie manuell zu messen
+        und neu zu zeichnen.
+
+
+--- 2. ABGRENZUNG ZUR BESTEHENDEN DIGITALISIER-FUNKTION ----------------------
+
+  TrimTex hat bereits ein „Digitalisieren“-Tool:
+  - Nutzer klickt Punkte im leeren Arbeitsbereich
+  - Punkte werden zu einer geschlossenen cutLine verbunden
+  - Kein Hintergrundbild, keine Maßstabs-Kalibrierung
+
+  Die neue Funktion erweitert das um:
+  - Hintergrundbild als Referenz
+  - Maßstabs-Kalibrierung über Referenzlinie
+  - Koordinaten-Transformation: Bild-Pixel → mm im Workspace
+
+
+--- 3. TEILBEREICHE UND AUFGABEN ----------------------------------------------
+
+
+  3.1 BILD LADEN UND ANZEIGEN
+  ---------------------------
+  Was muss gemacht werden:
+  - UI-Element zum Laden eines Bildes (Datei-Dialog oder Drag & Drop)
+  - Unterstützte Formate: PNG, JPEG, WebP (Browser-Standard)
+  - Bild im Workspace als Hintergrund-Ebene anzeigen
+  - Position und Zoom des Bildes: entweder fest (z. B. Bildmitte = 0,0)
+    oder Nutzer kann Bild verschieben/skalieren
+  - Entscheidung: Bild als Teil des Workspace-State oder als temporäre
+    „Digitize-Session“ (nur sichtbar, solange Digitalisieren aktiv)?
+
+  Offene Fragen:
+  - Soll das Bild im Projekt gespeichert werden (z. B. Base64 oder URL)?
+  - Oder nur temporär für die aktuelle Digitalisier-Session?
+  - Maximale Bildgröße (Performance bei großen Fotos)?
+
+
+  3.2 REFERENZLINIE MIT BEKANNTEM MASS
+  -------------------------------------
+  Was muss gemacht werden:
+  - Modus „Referenzlinie anlegen“: Nutzer zieht eine Linie im Bild
+    (z. B. von Lineal-Anfang zu Lineal-Ende)
+  - Dialog: Nutzer gibt die reale Länge in mm ein (z. B. 100 für 10 cm)
+  - Berechnung: Länge der Linie in Pixel → Skalierungsfaktor mm/Pixel
+  - Dieser Faktor wird für die Umrechnung aller Digitalisier-Punkte verwendet
+
+  Technische Schritte:
+  - Referenzlinie: zwei Punkte (Start, Ende) in Bild-Pixel-Koordinaten
+  - Länge in Pixel: sqrt((x2-x1)² + (y2-y1)²)
+  - Skalierung: mmProPixel = eingegebeneMm / pixelLaenge
+  - Bei Klick im Digitalisier-Modus: Bild-Pixel → mm = pixel * mmProPixel
+
+  Offene Fragen:
+  - Soll die Referenzlinie sichtbar bleiben (z. B. als gestrichelte Linie)?
+  - Kann der Nutzer die Referenzlinie später korrigieren?
+  - Mehrere Referenzlinien für bessere Genauigkeit (Mittelwert)?
+
+
+  3.3 KOORDINATEN-TRANSFORMATION
+  ------------------------------
+  Was muss gemacht werden:
+  - Bild liegt in Pixel-Koordinaten vor (0,0 = linke obere Ecke)
+  - Workspace nutzt mm, Ursprung in der Mitte oder links oben
+  - Transformation: Bild-Pixel (x,y) → Workspace-mm (x_mm, y_mm)
+  - Benötigt: Skalierung (aus Referenzlinie), ggf. Versatz (Bildposition),
+    ggf. Spiegelung (Bild kann gedreht sein – optional)
+
+  Formel (vereinfacht):
+  - x_mm = (x_pixel - origin_x) * mmProPixel
+  - y_mm = (y_pixel - origin_y) * mmProPixel
+  - Origin: z. B. Bildmitte oder Nutzer-definiert
+
+  Offene Fragen:
+  - Wo liegt der Ursprung? Bildmitte, linke obere Ecke, oder Nutzer wählt?
+  - Y-Achse: Bild-Y zeigt nach unten, Workspace-Y oft nach oben → invertieren?
+
+
+  3.4 DIGITALISIER-FUNKTION MIT BILD-HINTERGRUND
+  ----------------------------------------------
+  Was muss gemacht werden:
+  - Bestehende Digitalisier-Logik (addDigitizeNode, digitizeNodesToCurves)
+    wiederverwenden
+  - Klick-Position: nicht mehr direkt „World-mm“, sondern:
+    a) Klick auf Canvas → Bild-Pixel ermitteln (wo hat Nutzer geklickt,
+       relativ zum angezeigten Bild)
+    b) Pixel → mm transformieren (mit Referenzlinien-Skalierung)
+    c) Diese mm-Koordinaten als Digitize-Node speichern
+  - Voraussetzung: Bild muss geladen und Referenzlinie muss gesetzt sein,
+    sonst Fehlermeldung oder Hinweis
+
+  Anpassungen:
+  - WorkspaceCanvas: Bei aktivem Bild-Digitalisieren die toWorld-Funktion
+    oder die Klick-Handler so erweitern, dass sie Bild-Pixel → mm nutzen
+  - Oder: Separater „Bild-Digitalisieren“-Modus mit eigener Klick-Logik
+
+  Offene Fragen:
+  - Ein Modus „Digitalisieren (frei)“ und „Digitalisieren (über Bild)“?
+  - Oder: Wenn Bild geladen ist, nutzt Digitalisieren automatisch Bild-Koordinaten?
+
+
+  3.5 UI/UX FLOW
+  --------------
+  Vorgeschlagener Ablauf:
+  1. Menü „Bild laden“ oder Toolbar-Button → Datei auswählen → Bild erscheint
+  2. Button „Referenzlinie setzen“ → Nutzer zieht Linie im Bild
+  3. Dialog „Länge in mm:“ → Nutzer gibt z. B. 100 ein → OK
+  4. Button „Digitalisieren“ (oder bestehendes Tool) → Nutzer klickt Kontur ab
+  5. „Fertig“ → PatternPiece wird erstellt (wie bei normalem Digitalisieren)
+
+  Alternative: Wizard-artiger Flow (Schritt 1 → 2 → 3 → 4 nacheinander)
+
+  UI-Elemente:
+  - Status-Anzeige: „Bild geladen“, „Referenzlinie gesetzt“, „Bereit zum Digitalisieren“
+  - Möglichkeit, Bild auszublenden (nur Kontur sehen) oder Transparenz
+  - Möglichkeit, Digitalisieren abzubrechen und neu zu starten
+
+
+  3.6 DATENMODELL
+  --------------
+  Was muss erweitert/neu definiert werden:
+  - Neuer State: „Bild-Digitalisier-Session“
+    - imageData: URL oder Base64 (oder nur im Speicher)
+    - imageSize: { width, height } in Pixel
+    - imagePosition: { x, y } in mm (wo das Bild im Workspace liegt)
+    - referenceLine: { start: Point, end: Point } in Pixel
+    - referenceLengthMm: number
+    - scaleFactor: mmProPixel (berechnet)
+  - Oder: Alles in digitizeState erweitern (digitizeState.imageRef, …)
+
+  Keine Änderung an PatternPiece nötig – das Ergebnis ist wie bisher
+  ein Piece mit cutLine.
+
+
+  3.7 RANDBEDINGUNGEN
+  -------------------
+  - Bild muss flach abgebildet sein (keine 3D-Korrektur)
+  - Kamera sollte möglichst senkrecht zum Schnittteil sein (Verzerrung minimieren)
+  - Beleuchtung und Schatten können Kontur erschweren – Nutzer-Hinweis?
+  - Lineal/Referenz muss im Bild sichtbar sein
+
+
+--- 4. ABHÄNGIGKEITEN UND REIHENFOLGE -----------------------------------------
+
+  Empfohlene Implementierungsreihenfolge:
+  1. Bild laden und anzeigen (ohne Kalibrierung)
+  2. Referenzlinie anlegen (UI + Speicherung)
+  3. Maßstabsberechnung und Koordinaten-Transformation
+  4. Digitalisier-Klicks auf Bild-Pixel → mm umleiten
+  5. Integration in bestehenden Digitalisier-Flow
+  6. Feinschliff: Fehlermeldungen, Hinweise, Abbruch
+
+
+--- 5. DATEIEN UND STELLEN, DIE BETROFFEN WÄREN -------------------------------
+
+  (Ohne Code zu ändern – nur zur Orientierung)
+  - src/store/useStore.ts: Neuer State für Bild, Referenzlinie, Skalierung
+  - src/components/WorkspaceCanvas.tsx: Bild rendern, Klick-Koordinaten
+    transformieren, Referenzlinien-UI
+  - src/components/Toolbar.tsx: Buttons für „Bild laden“, „Referenzlinie“
+  - src/types/model.ts: Typen für ImageRef, ReferenceLine (falls nötig)
+  - Evtl. neues Modul: src/utils/imageCalibration.ts für Pixel→mm
+
+
+--- 6. ZUSAMMENFASSUNG --------------------------------------------------------
+
+  Die Bild-Digitalisierung gliedert sich in:
+  - Bild laden & anzeigen
+  - Referenzlinie mit bekanntem Maß → Skalierung
+  - Koordinaten-Transformation Pixel → mm
+  - Anbindung an bestehende Digitalisier-Funktion
+  - UI-Flow und Datenmodell
+
+  Geschätzter Aufwand: Mittel bis hoch (mehrere Tage), abhängig von
+  gewählten Optionen (Bild speichern ja/nein, mehrere Referenzlinien, etc.).
+
+
+--- 7. QUALITÄT, FEHLERFÄLLE UND TESTPLAN --------------------------------------
+
+  7.1 AKZEPTANZKRITERIEN (DEFINITION OF DONE)
+  -------------------------------------------
+  Funktion gilt als erfolgreich, wenn:
+  - Nutzer ein Bild laden, eine Referenzlinie setzen und eine Länge in mm
+    eingeben kann, ohne den Workflow zu verlassen
+  - Der berechnete Maßstab stabil ist und für alle folgenden Klicks verwendet wird
+  - Digitalisierte Punkte korrekt in mm im Workspace landen
+  - Ergebnis als normales PatternPiece (cutLine) weiterbearbeitbar ist
+  - Bei typischem Referenzmaß (z. B. 100 mm) die Abweichung in der Praxis
+    innerhalb eines vorher definierten Toleranzbereichs bleibt (z. B. +/- 1 mm)
+
+
+  7.2 FEHLERFÄLLE UND VALIDIERUNG
+  -------------------------------
+  Validierungen:
+  - Referenzlänge muss > 0 sein
+  - Referenzlinie darf nicht zu kurz sein (Mindest-Pixellänge definieren)
+  - Bild muss geladen sein, bevor Referenzlinie gesetzt werden kann
+  - Referenzlinie muss gesetzt sein, bevor „Bild-Digitalisieren“ startet
+  - Nicht unterstützte Dateiformate mit klarer Meldung ablehnen
+
+  Typische Fehlerfälle:
+  - Nutzer bricht Dateiauswahl ab -> kein Fehler, nur neutraler Zustand
+  - Bilddatei defekt/nicht lesbar -> verständliche Fehlermeldung
+  - Extrem große Bilder -> Warnung und optionale interne Verkleinerung
+  - Referenzlinie versehentlich falsch gesetzt -> Korrektur/Reset anbieten
+
+
+  7.3 PERFORMANCE UND SPEICHER
+  ----------------------------
+  Empfehlungen:
+  - Maximalgröße für importierte Bilder definieren (Pixelkantenlänge)
+  - Für Anzeige optional Downscale/Preview-Render nutzen
+  - Pointer-Move-Berechnungen leicht halten (keine schweren Rechenwege pro Event)
+  - In Session-State nur notwendige Daten halten (bei Persistenz sparsam speichern)
+
+
+  7.4 UNDO/REDO UND NUTZERKONTROLLE
+  ---------------------------------
+  Vor Implementierung festlegen:
+  - Ob „Bild laden“ als Undo-Schritt zählt
+  - Ob „Referenzlinie setzen/ändern“ als Undo-Schritt zählt
+  - Ob jeder Digitize-Klick einzeln im Undo-Stack landet (wie bisher) oder
+    in Gruppen zusammengefasst wird
+  - Ob „Session zurücksetzen“ (Bild + Referenz + Digitize-Punkte löschen)
+    als eigene Aktion verfügbar ist
+
+
+  7.5 PERSISTENZ UND DATENSCHUTZ
+  ------------------------------
+  Entscheidungspunkt:
+  - Option A: Bild nur temporär in der laufenden Session halten
+  - Option B: Bild im Projekt mit speichern
+
+  Auswirkungen:
+  - Option A: Kleine Projektdateien, aber Bild nach Neustart weg
+  - Option B: Bessere Nachvollziehbarkeit, aber größere Dateien und mögliche
+    Datenschutz-/Urheberrechtsfragen bei Foto-Inhalten
+
+
+  7.6 TESTPLAN (MINDESTUMFANG)
+  ----------------------------
+  Unit-Tests:
+  - Kalibrierungsformel (mmProPixel) mit bekannten Zahlen
+  - Pixel->mm-Transformation inkl. Origin-/Y-Achsen-Fall
+
+  Integrations-Tests:
+  - Laden -> Referenz setzen -> Digitalisieren -> Piece entsteht
+  - Fehlerfälle: Keine Referenz gesetzt, ungültige Länge, ungültige Datei
+
+  Manuelle UI-Checks:
+  - Workflow auf Desktop mit typischen Bildgrößen
+  - Genauigkeit mit Testbild + bekanntem Referenzmaß
+  - Abbruch/Reset/Neustart ohne inkonsistenten State
+
+
+  7.7 MVP VS. PHASE 2
+  -------------------
+  MVP (erste Lieferung):
+  - Ein Bild laden
+  - Eine Referenzlinie
+  - Ein globaler Skalierungsfaktor
+  - Manuelles Abfahren der Kontur
+
+  Phase 2 (Erweiterungen):
+  - Mehrere Referenzlinien mit Mittelwert/Qualitätsindikator
+  - Teilautomatische Kantenhilfe (Snap/Assist)
+  - Erweiterte Bildkorrekturen (z. B. perspektivische Entzerrung)
+  - Komfortfunktionen wie Transparenz-Presets und Vergleichsansicht
+
+--- 8. FESTLEGUNGEN AUS ARCHITEKTUR-REVIEW (VERBINDLICH FUER MVP) --------------
+
+  8.1 KOORDINATENSYSTEM (FIX)
+  ---------------------------
+  Fuer das Bild-Digitalisieren wird verbindlich festgelegt:
+  - Ursprung (0,0) in der Bildmitte
+  - X-Achse nach rechts positiv
+  - Y-Achse nach oben positiv (invertiert zur Bild-Pixelachse)
+
+  Transformationskette:
+  - x_centered = x_pixel - imageWidth / 2
+  - y_centered = imageHeight / 2 - y_pixel
+  - x_mm = x_centered * mmPerPixel
+  - y_mm = y_centered * mmPerPixel
+
+  Hinweis:
+  - Diese Logik wird zentral in einer Utility gekapselt
+    (z. B. src/utils/imageCalibration.ts), nicht verteilt in mehreren
+    Event-Handlern.
+
+
+  8.2 REFERENZLINIE (MVP-ENTSCHEIDUNG)
+  ------------------------------------
+  Fuer MVP gilt:
+  - Genau eine Referenzlinie
+  - Genau ein Wert mmPerPixel
+  - Keine Mittelwertbildung, keine Mehrfach-Statistik
+
+  Zukunftssicher:
+  - Datenstruktur so vorbereiten, dass spaeter referenceLines[] moeglich ist
+  - MVP nutzt intern nur die erste/aktive Referenzlinie
+
+
+  8.3 PERSISTENZ-STRATEGIE (MVP-ENTSCHEIDUNG)
+  -------------------------------------------
+  Fuer MVP gilt:
+  - Bild als temporaere Session-Daten
+  - Kein Mitspeichern im Projekt
+
+  Konsequenz:
+  - Nach Reload ist das Bild weg (erwartetes Verhalten)
+  - Das erzeugte PatternPiece bleibt erhalten
+  - Kleinere Projektdateien und weniger Datenschutz-/Copyright-Risiko
+
+
+  8.4 MODUS-TRENNUNG (WICHTIGE ARCHITEKTURREGEL)
+  ----------------------------------------------
+  Bestehender Digitize-Flow wird nicht "verbogen".
+
+  Empfohlene Modi:
+  - idle
+  - digitize
+  - image-digitize
+  - reference-line
+
+  Regel:
+  - digitize: bestehende World-Klick-Logik unveraendert
+  - image-digitize: Screen/Canvas -> Bild-Pixel -> mm-Transformation
+  - reference-line: nur Referenzlinie setzen/veraendern
+
+
+  8.5 STORE-SCHNITT (MVP)
+  -----------------------
+  Ziel: klarer, schlanker Session-State.
+
+  Beispielstruktur:
+  - imageDigitizeSession:
+    - imageUrl: string | null
+    - imageSize: { width: number; height: number } | null
+    - referenceLine: { start: Point; end: Point; lengthMm: number } | null
+    - mmPerPixel: number | null
+    - isActive: boolean
+
+  Hinweis:
+  - mmPerPixel explizit speichern (nicht bei jedem Klick neu berechnen)
+
+
+  8.6 RISIKEN UND HARTE SCHUTZMASSNAHMEN
+  --------------------------------------
+  Risiko 1: Falsches Klick-Mapping durch Zoom/Pan/Canvas-Offset
+  - Massnahme: exakte, getestete Mapping-Kette und zentrale Utility-Funktionen
+
+  Risiko 2: Unzuverlaessige Kalibrierung durch zu kurze Referenzlinie
+  - Massnahme: Mindestlaenge erzwingen (z. B. >= 50 Pixel)
+  - Fehlermeldung: "Referenzlinie zu kurz fuer zuverlaessige Kalibrierung"
+
+  Risiko 3: Performance-Probleme bei grossen Bildern
+  - Massnahme: Maximaldimension definieren (z. B. 2000-3000 px),
+    bei Bedarf clientseitig downscalen
+
+
+  8.7 UX-MINDESTUMFANG FUER GUTE NUTZBARKEIT
+  ------------------------------------------
+  Soll in MVP enthalten sein:
+  - Transparenz-Slider fuer Hintergrundbild
+  - Bild ein/aus Toggle
+  - Referenzlinie sichtbar lassen (z. B. gestrichelt)
+  - Statusanzeige inkl. Kalibrierungsstatus (z. B. "1 px = 0.23 mm")
+  - Kurz-Hinweis zur Genauigkeit ("Kamera moeglichst senkrecht")
+
+================================================================================

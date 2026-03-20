@@ -57,6 +57,7 @@ export function Toolbar() {
     setShowHelpModal,
     dxfExportScale,
     startDigitize,
+    startImageSession,
     setToastMessage,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
@@ -68,6 +69,9 @@ export function Toolbar() {
   const menuRef = useRef<HTMLDivElement>(null)
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const dxfImportInputRef = useRef<HTMLInputElement>(null)
+  const imageImportInputRef = useRef<HTMLInputElement>(null)
+
+  const MAX_IMAGE_DIMENSION_PX = 3000
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -220,6 +224,57 @@ export function Toolbar() {
         style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
         onChange={handleDxfFileChange}
       />
+      <input
+        ref={imageImportInputRef}
+        type="file"
+        accept="image/*"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (!file) return
+          closeMenu()
+
+          const reader = new FileReader()
+          reader.onerror = () => setToastMessage('error:Bild konnte nicht gelesen werden')
+          reader.onload = () => {
+            const originalDataUrl = reader.result as string
+
+            const img = new Image()
+            img.onerror = () => setToastMessage('error:Bild konnte nicht decodiert werden')
+            img.onload = () => {
+              const w = img.naturalWidth || 0
+              const h = img.naturalHeight || 0
+              if (!w || !h) {
+                setToastMessage('error:Bild hat keine gueltigen Abmessungen')
+                return
+              }
+
+              const scale = Math.min(1, MAX_IMAGE_DIMENSION_PX / Math.max(w, h))
+              const targetW = Math.max(1, Math.round(w * scale))
+              const targetH = Math.max(1, Math.round(h * scale))
+
+              if (scale < 1) {
+                const canvas = document.createElement('canvas')
+                canvas.width = targetW
+                canvas.height = targetH
+                const ctx = canvas.getContext('2d')
+                if (!ctx) {
+                  setToastMessage('error:Canvas ist nicht verfuegbar')
+                  return
+                }
+                ctx.drawImage(img, 0, 0, targetW, targetH)
+                const downscaledDataUrl = canvas.toDataURL('image/jpeg', 0.92)
+                startImageSession({ dataUrl: downscaledDataUrl, widthPx: targetW, heightPx: targetH })
+              } else {
+                startImageSession({ dataUrl: originalDataUrl, widthPx: w, heightPx: h })
+              }
+            }
+            img.src = originalDataUrl
+          }
+          reader.readAsDataURL(file)
+        }}
+      />
       <img src="/logo-trimcad.png" alt="TrimCAD" className="menubar-logo" />
       <nav className="menubar-nav">
         <div className="menubar-item-wrap">
@@ -301,6 +356,20 @@ export function Toolbar() {
                   }}
                 >
                   Digitalisieren <span className="menubar-shortcut">D</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className={`menubar-dropdown-btn ${
+                    tool === 'image-move' || tool === 'image-reference-line' || tool === 'image-digitize' ? 'active' : ''
+                  }`}
+                  onClick={() => {
+                    imageImportInputRef.current?.click()
+                    closeMenu()
+                  }}
+                >
+                  Bild-Digitalisierung
                 </button>
               </li>
               <li className="menubar-separator" />

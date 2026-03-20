@@ -59,6 +59,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
+    name: 'Bild-Digitalisierung',
+    description: 'Foto laden, Referenzlinie setzen (Skalierung) und Kontur digitalisieren (Foto → Schnittteil).',
+    access: 'Menü Erzeugen → Bild-Digitalisierung',
+    shortcut: undefined,
+  },
+  {
+    category: 'Werkzeuge',
     name: 'Rechteck',
     description: 'Neues Schnittteil als Rechteck auf der Arbeitsfläche zeichnen (Drag).',
     access: 'Menü Erzeugen → Rechteck',
@@ -137,7 +144,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Punkt in 5-mm-Schritten verschieben',
-    description: 'Beim Ziehen eines Eckpunkts die Alt-Taste gedrückt halten: Die Position springt nur in 5-mm-Schritten (0, 5, 10, 15 …). Nützlich zum angleichen von Nahtkanten.',
+    description: 'Beim Ziehen eines Eckpunkts die Alt-Taste gedrückt halten: Die Bewegung erfolgt nur in 5-mm-Schritten relativ zur Startposition (±5, ±10, ±15 …). So kann man Kantenlängen gezielt angleichen, bis die Differenz 0 ist.',
     access: 'Punkt ziehen + Alt-Taste halten',
     shortcut: 'Alt',
   },
@@ -384,6 +391,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
     name: 'Digitize abbrechen',
     description: 'Digitalisieren-Modus beenden ohne neues Teil zu erzeugen.',
     access: 'Während Digitalisieren aktiv',
+    shortcut: 'Escape',
+  },
+  {
+    category: 'Sonstiges',
+    name: 'Bild-Digitalisierung abbrechen',
+    description: 'Abbrechen je Schritt: bei laufendem Abfahren wird der Digitalize-Run beendet (Bild bleibt), bei Referenz-/Move-Schritt wird die Session beendet oder zurückgesetzt.',
+    access: 'Während Bild-Digitalisierung aktiv',
     shortcut: 'Escape',
   },
 ]
