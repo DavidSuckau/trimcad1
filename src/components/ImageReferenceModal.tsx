@@ -53,7 +53,7 @@ export function ImageReferenceModal({
           />
           {!canConfirm && (
             <div style={{ color: '#c62828', fontSize: '0.8125rem' }}>
-              Bitte eine gueltige Laenge eingeben (mm > 0).
+              Bitte eine gueltige Laenge eingeben (mm &gt; 0).
             </div>
           )}
         </div>
