@@ -1459,14 +1459,23 @@ export const useStore = create<Store>((set, get) => ({
         : null,
     })),
   startImageDigitize: () =>
-    set({
-      digitizeState: { nodes: [], isDragging: false, dragPosition: null },
-      tool: 'image-digitize',
+    set(() => {
+      const session = get().imageDigitizeSession
+      if (!session || session.mmPerPixel == null || session.referenceLinePx == null) {
+        return { toastMessage: 'error:Bitte zuerst Bild kalibrieren (Referenzlinie setzen).' }
+      }
+      if (!Number.isFinite(session.mmPerPixel) || session.mmPerPixel <= 0) {
+        return { toastMessage: 'error:Kalibrierung ungültig. Bitte erneut kalibrieren.' }
+      }
+      return {
+        digitizeState: { nodes: [], isDragging: false, dragPosition: null },
+        tool: 'image-digitize',
+      }
     }),
   cancelImageDigitizeRun: () =>
     set(() => ({
-      digitizeState: null,
-      tool: 'image-move',
+      digitizeState: { nodes: [], isDragging: false, dragPosition: null },
+      tool: 'image-digitize',
     })),
   cancelImageSession: () =>
     set(() => ({

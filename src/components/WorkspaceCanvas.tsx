@@ -9,6 +9,7 @@ import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves, 
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
 import { ImageReferenceModal } from './ImageReferenceModal'
+import { imagePixelToWorld, worldToImagePixel } from '../utils/imageCalibration'
 
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
@@ -874,10 +875,12 @@ export function WorkspaceCanvas() {
         const session = imageDigitizeSession
         const effMmPerPixel = session.mmPerPixel ?? 1
         const imageSizePx = session.imageSizePx!
-        const startPx = {
-          x: (world.x - session.imagePosition.x) / effMmPerPixel + imageSizePx.width / 2,
-          y: (world.y - session.imagePosition.y) / effMmPerPixel + imageSizePx.height / 2,
-        }
+        const startPx = worldToImagePixel({
+          world,
+          imagePosition: session.imagePosition,
+          imageSizePx,
+          mmPerPixelEffective: effMmPerPixel,
+        })
         setImageReferenceLineDraftPx({ start: startPx, end: startPx })
         setDragging({
           kind: 'image-reference-line',
@@ -1326,7 +1329,6 @@ export function WorkspaceCanvas() {
         const dy = world.y - dragging.startWorld.y
         const nextPos = { x: dragging.startImagePos.x + dx, y: dragging.startImagePos.y + dy }
         setImagePosition(nextPos)
-        setDragging((d) => (d && d.kind === 'image-move' ? { ...d, startWorld: world, startImagePos: nextPos } : d))
         return
       }
 
@@ -1335,10 +1337,12 @@ export function WorkspaceCanvas() {
         const session = imageDigitizeSession
         const effMmPerPixel = session.mmPerPixel ?? 1
         const imageSizePx = session.imageSizePx!
-        const endPx = {
-          x: (world.x - session.imagePosition.x) / effMmPerPixel + imageSizePx.width / 2,
-          y: (world.y - session.imagePosition.y) / effMmPerPixel + imageSizePx.height / 2,
-        }
+        const endPx = worldToImagePixel({
+          world,
+          imagePosition: session.imagePosition,
+          imageSizePx,
+          mmPerPixelEffective: effMmPerPixel,
+        })
         setImageReferenceLineDraftPx({ start: dragging.startPx, end: endPx })
         setDragging((d) =>
           d && d.kind === 'image-reference-line' ? { ...d, currentPx: endPx } : d
@@ -2470,59 +2474,82 @@ export function WorkspaceCanvas() {
             )}
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-            <button
-              type="button"
-              style={{
-                padding: '6px 10px',
-                fontSize: 12,
-                border: '1px solid #ccc',
-                borderRadius: 6,
-                background: '#fff',
-                cursor: 'pointer',
-              }}
-              onClick={() => {
-                clearImageReferenceLine()
-                setImageReferenceLineDraftPx(null)
-                setImageReferenceLengthDialog(null)
-                setTool('image-reference-line')
-              }}
-            >
-              Referenz setzen
-            </button>
-            <button
-              type="button"
-              disabled={imageDigitizeSession.mmPerPixel == null}
-              style={{
-                padding: '6px 10px',
-                fontSize: 12,
-                border: '1px solid #ccc',
-                borderRadius: 6,
-                background: imageDigitizeSession.mmPerPixel == null ? '#e0e0e0' : '#1976d2',
-                color: imageDigitizeSession.mmPerPixel == null ? '#999' : '#fff',
-                cursor: imageDigitizeSession.mmPerPixel == null ? 'default' : 'pointer',
-              }}
-              onClick={() => startImageDigitize()}
-            >
-              Digitalisieren
-            </button>
-            <button
-              type="button"
-              style={{
-                padding: '6px 10px',
-                fontSize: 12,
-                border: '1px solid #ccc',
-                borderRadius: 6,
-                background: '#fff',
-                cursor: 'pointer',
-              }}
-              onClick={() => {
-                setImageReferenceLineDraftPx(null)
-                setImageReferenceLengthDialog(null)
-                cancelImageSession()
-              }}
-            >
-              Abbrechen
-            </button>
+            {tool === 'image-digitize' ? (
+              <button
+                type="button"
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  border: '1px solid #ccc',
+                  borderRadius: 6,
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+                onClick={() => {
+                  setImageReferenceLineDraftPx(null)
+                  setImageReferenceLengthDialog(null)
+                  cancelImageSession()
+                }}
+              >
+                Abbrechen
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  style={{
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    border: '1px solid #ccc',
+                    borderRadius: 6,
+                    background: '#fff',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    clearImageReferenceLine()
+                    setImageReferenceLineDraftPx(null)
+                    setImageReferenceLengthDialog(null)
+                    setTool('image-reference-line')
+                  }}
+                >
+                  Referenz setzen
+                </button>
+                <button
+                  type="button"
+                  disabled={imageDigitizeSession.mmPerPixel == null}
+                  style={{
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    border: '1px solid #ccc',
+                    borderRadius: 6,
+                    background: imageDigitizeSession.mmPerPixel == null ? '#e0e0e0' : '#1976d2',
+                    color: imageDigitizeSession.mmPerPixel == null ? '#999' : '#fff',
+                    cursor: imageDigitizeSession.mmPerPixel == null ? 'default' : 'pointer',
+                  }}
+                  onClick={() => startImageDigitize()}
+                >
+                  Digitalisieren
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    border: '1px solid #ccc',
+                    borderRadius: 6,
+                    background: '#fff',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    setImageReferenceLineDraftPx(null)
+                    setImageReferenceLengthDialog(null)
+                    cancelImageSession()
+                  }}
+                >
+                  Abbrechen
+                </button>
+              </>
+            )}
           </div>
           <div style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>Transparenz</div>
           <input
@@ -2911,12 +2938,18 @@ export function WorkspaceCanvas() {
                     {(imageReferenceLineDraftPx ?? session.referenceLinePx) && (
                       (() => {
                         const { start, end } = imageReferenceLineDraftPx ?? session.referenceLinePx!
-                        const toWorld = (p: Point): Point => ({
-                          x: session.imagePosition.x + (p.x - imageSizePx.width / 2) * effMmPerPixel,
-                          y: session.imagePosition.y + (p.y - imageSizePx.height / 2) * effMmPerPixel,
+                        const a = imagePixelToWorld({
+                          pixel: start,
+                          imagePosition: session.imagePosition,
+                          imageSizePx,
+                          mmPerPixelEffective: effMmPerPixel,
                         })
-                        const a = toWorld(start)
-                        const b = toWorld(end)
+                        const b = imagePixelToWorld({
+                          pixel: end,
+                          imagePosition: session.imagePosition,
+                          imageSizePx,
+                          mmPerPixelEffective: effMmPerPixel,
+                        })
                         return (
                           <line
                             x1={a.x}

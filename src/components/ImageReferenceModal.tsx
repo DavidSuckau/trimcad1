@@ -35,6 +35,11 @@ export function ImageReferenceModal({
   const pixelOk = Number.isFinite(pixelLength) && pixelLength > 0
   const canConfirm = lengthOk && pixelOk
 
+  const mmPerPixelPreview = useMemo(() => {
+    if (!canConfirm) return null
+    return lengthMm / pixelLength
+  }, [canConfirm, lengthMm, pixelLength])
+
   return (
     <div className="nahtzugabe-dialog-overlay" onClick={onCancel}>
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 320 }}>
@@ -43,6 +48,11 @@ export function ImageReferenceModal({
         <div style={{ fontSize: '0.8125rem', color: '#333', marginBottom: '0.75rem', lineHeight: 1.5 }}>
           Referenzlinie: {pixelLength.toFixed(1)} px
         </div>
+        {mmPerPixelPreview != null && (
+          <div style={{ fontSize: '0.8125rem', color: '#1565c0', marginBottom: '0.75rem', lineHeight: 1.5 }}>
+            Skalierung: 1 px = {mmPerPixelPreview.toFixed(4)} mm
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: '1rem' }}>
           <label style={{ fontSize: '0.8125rem', color: '#555' }}>
