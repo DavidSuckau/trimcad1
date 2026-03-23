@@ -273,6 +273,9 @@ export function edgeTotalLength(piece: PatternPiece, curveIndices: number[], cur
   return total
 }
 
+/** Wenn |Länge A − Länge B| unter diesem Wert (mm) liegt, kann snapSeamEdgeToMatch per Alt/⌘/Strg auf exakt 0 springen. */
+export const SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM = 5
+
 /**
  * Ermittelt die exakte Vertex-Position, sodass die Kantenlänge targetLength mm ergibt.
  * vertexIndex muss Start oder Ende der Kante sein (curveIndices[0] oder curveIndices[last]+1).

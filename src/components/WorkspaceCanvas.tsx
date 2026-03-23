@@ -2285,6 +2285,10 @@ export function WorkspaceCanvas() {
           }
         }
         updateVertex(dragging.pieceId, dragging.vertexIndex, local, false)
+        // Nahtzuordnung: bei Längendifferenz < 5 mm und Alt/⌘/Strg → exakt auf gleiche Kantenlänge wie Gegenstück (Store: snapSeamEdgeToMatch).
+        if (e.altKey || e.metaKey || e.ctrlKey) {
+          snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
+        }
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -2444,6 +2448,21 @@ export function WorkspaceCanvas() {
     document.addEventListener('pointerdown', onClose)
     return () => document.removeEventListener('pointerdown', onClose)
   }, [workspaceImageQuickMenu])
+
+  /** Eckpunkt ziehen: Taste Alt/⌘/Strg drücken, wenn Nahtlänge schon < 5 mm daneben → sofort exakt angleichen (ohne erneute Mausbewegung). */
+  useEffect(() => {
+    if (!dragging || dragging.kind !== 'vertex') return
+    const pieceId = dragging.pieceId
+    const vertexIndex = dragging.vertexIndex
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.repeat) return
+      if (ev.altKey || ev.metaKey || ev.ctrlKey) {
+        snapSeamEdgeToMatch(pieceId, vertexIndex)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [dragging, snapSeamEdgeToMatch])
 
   /** Mittelklick (Mausrad): alle Modi abbrechen — überall außer in Eingabefeldern und auf Links (Neuer Tab). */
   const resetCanvasTransientState = useCallback(() => {
@@ -3011,6 +3030,9 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'vertex') {
+      if (_e && (_e.altKey || _e.metaKey || _e.ctrlKey)) {
+        snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
+      }
       // Cut-as-Master: Nahtlinie aus Schnittkante nachziehen. Bei Seam-as-Master ist seamLine die
       // bearbeitete Kontur (updateVertex leitet cutLine schon ab) – recomputeSeamLine würde seam überschreiben.
       const draggedPiece = pieces.find((p) => p.id === dragging.pieceId)
@@ -3059,6 +3081,7 @@ export function WorkspaceCanvas() {
     setToastMessage,
     finishDigitizeDrag,
     recomputeSeamLine,
+    snapSeamEdgeToMatch,
     lineLengthEditor,
     toWorld,
     setGrainLine,
@@ -3109,7 +3132,7 @@ export function WorkspaceCanvas() {
           rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' ? 'crosshair' : 'default',
       }}
     >
-      <div className="workspace-version">Aktuell V. 0.0.4</div>
+      <div className="workspace-version">Aktuell V. 0.0.5</div>
       {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"

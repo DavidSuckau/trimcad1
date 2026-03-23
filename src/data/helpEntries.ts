@@ -155,9 +155,18 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Punkt in 5-mm-Schritten verschieben',
-    description: 'Beim Ziehen eines Eckpunkts die Alt-Taste gedrückt halten: Die Bewegung erfolgt nur in 5-mm-Schritten relativ zur Startposition (±5, ±10, ±15 …). So kann man Kantenlängen gezielt angleichen, bis die Differenz 0 ist.',
+    description:
+      'Beim Ziehen eines Eckpunkts die Alt-Taste gedrückt halten: Die Bewegung erfolgt nur in 5-mm-Schritten relativ zur Startposition (±5, ±10, ±15 …).',
     access: 'Punkt ziehen + Alt-Taste halten',
     shortcut: 'Alt',
+  },
+  {
+    category: 'Werkzeuge',
+    name: 'Nahtkante exakt auf Längengleichheit (0 mm Differenz)',
+    description:
+      'Bei zugeordneter Naht: Wenn die Kantenlänge zum Gegenstück schon unter 5 mm abweicht, während des Ziehens Alt, ⌘ (Mac) oder Strg (Windows) halten bzw. drücken — der Eckpunkt springt dann auf exakt dieselbe Gesamtlänge wie die andere Seite (nur bei geraden Nahtsegmenten). Funktioniert auch, wenn du die Taste drückst, ohne die Maus zu bewegen.',
+    access: 'Eckpunkt auf Nahtkante ziehen + Alt / ⌘ / Strg',
+    shortcut: 'Alt, ⌘, Strg',
   },
   {
     category: 'Werkzeuge',

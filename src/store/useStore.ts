@@ -3,7 +3,14 @@ import type { Workspace, PatternPiece, ViewState, Point, Line, Curve, Notch, Dri
 import { offsetCurvesInwardForSeam, offsetCurvesOutwardForCut, offsetSegmentPoints } from '../geometry/offset'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
-import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
+import {
+  getSubSegments,
+  countNotchesOnEdge,
+  getNotchesOnEdge,
+  edgeTotalLength,
+  snapVertexToEdgeLength,
+  SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
+} from '../geometry/seamUtils'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
@@ -633,7 +640,7 @@ export const useStore = create<Store>((set, get) => ({
       const refLen = edgeTotalLength(refPiece, isA ? a.curveIndicesB : a.curveIndicesA)
       const currLen = edgeTotalLength(piece, curveIndices)
       const diff = Math.abs(currLen - refLen)
-      if (diff >= 5) continue
+      if (diff >= SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM) continue
       const snapPt = snapVertexToEdgeLength(piece, curveIndices, vertexIndex, refLen)
       if (snapPt) {
         get().updateVertex(pieceId, vertexIndex, snapPt)
