@@ -913,7 +913,18 @@ export const useStore = create<Store>((set, get) => ({
           }
         }
       }
-      if (piece && notch && notch.vertexIndex != null && isPositionUpdate && piece.cutLine.length > 3) {
+      // Kerbe entlang Kontur verschieben (notchMove): liefert position + vertexIndex: undefined.
+      // Dann nur Notch-Daten ändern — niemals cutLine mergen/splitten, sonst verzieht sich die Kurve.
+      const unanchorOnly =
+        isPositionUpdate && 'vertexIndex' in upd && upd.vertexIndex === undefined
+      if (
+        piece &&
+        notch &&
+        notch.vertexIndex != null &&
+        isPositionUpdate &&
+        piece.cutLine.length > 3 &&
+        !unanchorOnly
+      ) {
         const vi = notch.vertexIndex
         const oldN = piece.cutLine.length
         const prevIdx = (vi - 1 + oldN) % oldN
