@@ -32,14 +32,24 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Kurvenpunkt',
-    description: 'Punkt auf der Kontur einfügen oder Linie in Bézier-Kurve umwandeln. Klick auf Linie = Kurve, Klick auf Kurve = Punkt.',
+    description:
+      'Punkt auf der Kontur einfügen oder Linie in Bézier-Kurve umwandeln. Klick auf Linie = Kurve, Klick auf Kurve = Punkt. Mit „Punkte anzeigen“: Mittelpunkte von Bézier-Segmenten grün (zum Ziehen der Kurvenform).',
     access: 'Menü Erzeugen → Kurvenpunkt',
     shortcut: 'C',
   },
   {
     category: 'Werkzeuge',
+    name: 'Spitze und rechte Winkel → fester Eckpunkt',
+    description:
+      'Weiche Punkte (blau) werden an der Hauptkontur automatisch zu festen Eckpunkten, sobald der Innenwinkel dort spitz oder rechtwinklig ist (≤ ca. 90°). Stumpfe Winkel bleiben weich, wenn der Punkt als weich markiert ist.',
+    access: 'Automatisch nach jeder Konturänderung',
+    shortcut: undefined,
+  },
+  {
+    category: 'Werkzeuge',
     name: 'Notch',
-    description: 'Setzt eine Kerbe (Notch) auf der Kontur oder Nahtlinie zur Ausrichtung beim Nähen.',
+    description:
+      'Setzt eine Kerbe (Notch) auf der Kontur oder Nahtlinie zur Ausrichtung beim Nähen. Zwischen zwei Kerben muss entlang der Schnittkontur mindestens 4 mm Abstand sein (kein Übereinanderlegen).',
     access: 'Menü Erzeugen → Notch, Menü Bearbeiten → Notch',
     shortcut: 'N',
   },
@@ -59,9 +69,10 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
-    name: 'Bild-Digitalisierung',
-    description: 'Foto laden, Referenzlinie setzen (Skalierung) und Kontur digitalisieren (Foto → Schnittteil).',
-    access: 'Menü Erzeugen → Bild-Digitalisierung',
+    name: 'Bild einfügen',
+    description:
+      'Hintergrundbild auf die Arbeitsfläche legen (nur Anzeige). Auswahlwerkzeug: Bild anklicken zum Verschieben, Ecken ziehen für Größe. Entf/Backspace: Bild entfernen. Escape: Auswahl aufheben.',
+    access: 'Menü Erzeugen → Bild einfügen',
     shortcut: undefined,
   },
   {
@@ -151,8 +162,9 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Laufrichtung (Grain) Kontextmenü',
-    description: 'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln etc. öffnen.',
-    access: 'Laufrichtungspfeil mit Maus anfahren → Leertaste',
+    description:
+      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln etc. öffnen. Teil ausgewählt: Pfeil am Schaft (nicht an den blauen Endpunkten) ziehen, um die ganze Linie parallel zu verschieben. Loslassen nahe einer Schnittkontur-Kante (Linie oder Kurve): Laufrichtung wird parallel zu dieser Kante ausgerichtet (waagerecht, senkrecht oder schräg). Endpunkte einzeln ziehen weiterhin möglich.',
+    access: 'Laufrichtungspfeil mit Maus anfahren → Leertaste bzw. Ziehen',
     shortcut: 'Leertaste',
   },
   {
@@ -168,6 +180,22 @@ export const HELP_ENTRIES: HelpEntry[] = [
     description: 'Teil so drehen, dass der Laufrichtungspfeil senkrecht nach oben zeigt.',
     access: 'Menü Bearbeiten → An Laufrichtung ausrichten',
     shortcut: 'A',
+  },
+  {
+    category: 'Werkzeuge',
+    name: 'Alles abbrechen (Mittelklick)',
+    description:
+      'Mit einem Klick auf das Mausrad (mittlere Taste) beenden Sie alle aktiven Modi: Werkzeug wird Auswahl, offene Dialoge schließen, Digitalisieren/Lineal/Nahtzuordnung usw. enden. Teile bleiben ausgewählt, das Hintergrundbild bleibt erhalten (nur die Bild-Auswahl wird aufgehoben). In Eingabefeldern und auf Links (neuer Tab) passiert nichts.',
+    access: 'Überall in der App · Mausrad-Klick (Mitte)',
+    shortcut: 'Mittelklick',
+  },
+  {
+    category: 'Werkzeuge',
+    name: 'Drehpunkt auf Ecke, Kerbe oder Kurve setzen',
+    description:
+      'Ohne extra Menü: Teil auswählen, gewünschten Punkt mit der Maus anfahren (wie beim Löschen), dann Alt+P. Kerben gehen immer; Ecken und Bézier-Kurvenpunkte, wenn „Punkte anzeigen“ aktiv ist. Der Drehpunkt (Kreuz) springt dorthin — drehen wie gewohnt am blauen Griff.',
+    access: 'Auswahl-Werkzeug · Punkt/Kerbe hovern · Alt+P',
+    shortcut: 'Alt+P',
   },
 
   // —— Datei ——
@@ -395,9 +423,9 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Sonstiges',
-    name: 'Bild-Digitalisierung abbrechen',
-    description: 'Abbrechen je Schritt: bei laufendem Abfahren wird der Digitalize-Run beendet (Bild bleibt), bei Referenz-/Move-Schritt wird die Session beendet oder zurückgesetzt.',
-    access: 'Während Bild-Digitalisierung aktiv',
+    name: 'Hintergrundbild Auswahl aufheben',
+    description: 'Auswahl des Hintergrundbilds aufheben (Bild bleibt sichtbar).',
+    access: 'Wenn Hintergrundbild ausgewählt',
     shortcut: 'Escape',
   },
 ]
@@ -413,3 +441,53 @@ export const HELP_CATEGORIES_ORDER = [
   'Prüfen',
   'Sonstiges',
 ]
+
+/** Zeile für die kompakte Shortcut-Übersicht (Hilfe → Tastenkürzel). */
+export type ShortcutListRow = { category: string; name: string; shortcut: string }
+
+/** Kürzel, die nicht als `shortcut` in HELP_ENTRIES stehen. */
+const SHORTCUT_LIST_EXTRA: ShortcutListRow[] = [
+  { category: 'Allgemein', name: 'Anleitung öffnen', shortcut: 'F1 oder ?' },
+]
+
+/**
+ * Alle Tastenkürzel gruppiert nach Kategorie (für die Übersichtsliste).
+ * Pro Kategorie alphabetisch nach Funktionsname.
+ */
+export function getShortcutListGrouped(): { category: string; rows: ShortcutListRow[] }[] {
+  const map = new Map<string, ShortcutListRow[]>()
+
+  const push = (row: ShortcutListRow) => {
+    if (!map.has(row.category)) map.set(row.category, [])
+    map.get(row.category)!.push(row)
+  }
+
+  for (const row of SHORTCUT_LIST_EXTRA) push(row)
+
+  for (const e of HELP_ENTRIES) {
+    const sc = e.shortcut
+    if (sc == null || String(sc).trim() === '') continue
+    push({ category: e.category, name: e.name, shortcut: sc })
+  }
+
+  for (const rows of map.values()) {
+    rows.sort((a, b) => a.name.localeCompare(b.name, 'de'))
+  }
+
+  const catOrder = ['Allgemein', ...HELP_CATEGORIES_ORDER]
+  const out: { category: string; rows: ShortcutListRow[] }[] = []
+  const seen = new Set<string>()
+
+  for (const cat of catOrder) {
+    const rows = map.get(cat)
+    if (rows && rows.length > 0) {
+      out.push({ category: cat, rows })
+      seen.add(cat)
+    }
+  }
+  for (const [cat, rows] of map) {
+    if (!seen.has(cat) && rows.length > 0) out.push({ category: cat, rows })
+  }
+
+  return out
+}

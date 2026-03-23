@@ -55,6 +55,7 @@ export function Toolbar() {
     setNahtzuordnungMode,
     setShowSettingsModal,
     setShowHelpModal,
+    setShowShortcutListModal,
     dxfExportScale,
     startDigitize,
     startImageSession,
@@ -361,15 +362,13 @@ export function Toolbar() {
               <li>
                 <button
                   type="button"
-                  className={`menubar-dropdown-btn ${
-                    tool === 'image-move' || tool === 'image-reference-line' || tool === 'image-digitize' ? 'active' : ''
-                  }`}
+                  className="menubar-dropdown-btn"
                   onClick={() => {
                     imageImportInputRef.current?.click()
                     closeMenu()
                   }}
                 >
-                  Bild-Digitalisierung
+                  Bild einfügen
                 </button>
               </li>
               <li className="menubar-separator" />
@@ -700,6 +699,18 @@ export function Toolbar() {
                   }}
                 >
                   Anleitung <span className="menubar-shortcut">F1</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setShowShortcutListModal(true)
+                    closeMenu()
+                  }}
+                >
+                  Tastenkürzel
                 </button>
               </li>
             </ul>

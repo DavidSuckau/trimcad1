@@ -78,6 +78,15 @@ export function Sidebar() {
               onChange={(e) => updatePiece(selectedPiece.id, { number: e.target.value })}
             />
           </label>
+          <label className="sidebar-label">
+            <span>Teilename</span>
+            <input
+              type="text"
+              className="sidebar-input"
+              value={selectedPiece.name}
+              onChange={(e) => updatePiece(selectedPiece.id, { name: e.target.value })}
+            />
+          </label>
           {selectedPiece.seamAllowanceMm != null && (
             <div className="sidebar-label" style={{ flexDirection: 'row', alignItems: 'center', gap: '6px' }}>
               <span>Nahtzugabe: {selectedPiece.seamAllowanceMm} mm</span>

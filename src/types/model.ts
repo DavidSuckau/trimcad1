@@ -67,6 +67,11 @@ export type PatternPiece = {
   transform: PatternPieceTransform
   /** Vertex-Indices die per "Erzeuge Punkt" eingefügt wurden (blaue Punkte, keine Eckpunkte). */
   softVertices?: number[]
+  /**
+   * Flächenfüllung im Editor (hellgelb). false = nur Kontur, Füllung transparent.
+   * Fehlt bei alten Daten → wie true behandeln.
+   */
+  fillInterior?: boolean
 }
 
 export type ViewState = {

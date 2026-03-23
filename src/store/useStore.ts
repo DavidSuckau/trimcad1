@@ -5,6 +5,8 @@ import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, 
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { getSubSegments, countNotchesOnEdge, getNotchesOnEdge, edgeTotalLength, snapVertexToEdgeLength } from '../geometry/seamUtils'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
+import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
+import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -103,6 +105,7 @@ function createDefaultPiece(id: string, number: string): PatternPiece {
     layer: 'CUT',
     transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     softVertices: [],
+    fillInterior: true,
   }
 }
 
@@ -120,19 +123,17 @@ type Tool =
   | 'internalCircle'
   | 'kante'
   | 'digitize'
-  | 'image-move'
-  | 'image-reference-line'
-  | 'image-digitize'
 
+/** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
 type ImageDigitizeSession = {
   imageDataUrl: string | null
   imageSizePx: { width: number; height: number } | null
   /** Bildposition im Workspace (mm), Mittelpunkt entspricht dem Bildzentrum. */
   imagePosition: Point
-  imageOpacity: number
-  /** mm pro Bildpixel nach Kalibrierung; wenn null, wird als Preview `1 px = 1 mm` genutzt. */
-  mmPerPixel: number | null
-  referenceLinePx: { start: Point; end: Point } | null
+  /** mm pro Bildpixel für Darstellung (Skalierung auf der Fläche). */
+  renderMmPerPixel: number
+  /** true: Bild nicht mehr verschieben/skalieren (nur Auswahl aufheben / wieder freigeben). */
+  locked?: boolean
 }
 
 export type NotchType = 'strich' | 'kerbe'
@@ -160,11 +161,15 @@ type Store = {
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
   nahtzugabeDialogPieceId: string | null
+  /** Dialog „Teil-Eigenschaften“ (Name, Flächenfüllung). */
+  piecePropertiesDialogPieceId: string | null
   /** Nahtzuordnung: 'first' = erste Naht anklicken, 'second' = zweite Naht (anderes Teil) anklicken */
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
   showSettingsModal: boolean
   showHelpModal: boolean
+  /** Kompakte Tastenkürzel-Übersicht (Hilfe-Menü). */
+  showShortcutListModal: boolean
   dxfExportScale: number
   notchSettings: NotchSetting[]
   toastMessage: string | null
@@ -172,6 +177,8 @@ type Store = {
   seamAdjustmentDialog: string | null
   digitizeState: DigitizeState | null
   imageDigitizeSession: ImageDigitizeSession | null
+  /** Hintergrundbild ist ausgewählt (wie ein Teil). */
+  workspaceImageSelected: boolean
 
   setView: (v: Partial<ViewState>) => void
   addPiece: (piece?: Partial<PatternPiece>) => string
@@ -190,10 +197,12 @@ type Store = {
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
   setNahtzugabeDialogPieceId: (v: string | null) => void
+  setPiecePropertiesDialogPieceId: (v: string | null) => void
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
   setShowHelpModal: (v: boolean) => void
+  setShowShortcutListModal: (v: boolean) => void
   setDxfExportScale: (v: number) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
@@ -253,14 +262,18 @@ type Store = {
   cancelDigitize: () => void
   finishDigitize: () => void
 
-  // --- Bild-Digitalisierung (Foto → Schnittteil) ---
+  /**
+   * Alle aktiven Werkzeug-/UI-Modi beenden (Auswahl-Werkzeug, Dialoge zu, kein Digitalisieren usw.).
+   * Teile-Auswahl und Arbeitsfläche bleiben; Hintergrundbild bleibt, nur Auswahlrahmen weg.
+   */
+  exitAllModes: () => void
+
+  // --- Hintergrundbild ---
   startImageSession: (args: { dataUrl: string; widthPx: number; heightPx: number }) => void
   setImagePosition: (pos: Point) => void
-  setImageOpacity: (opacity: number) => void
-  clearImageReferenceLine: () => void
-  setImageCalibration: (args: { mmPerPixel: number; referenceLinePx: { start: Point; end: Point } }) => void
-  startImageDigitize: () => void
-  cancelImageDigitizeRun: () => void
+  setImageRenderMmPerPixel: (mmPerPixel: number) => void
+  setWorkspaceImageSelected: (selected: boolean) => void
+  setWorkspaceImageLocked: (locked: boolean) => void
   cancelImageSession: () => void
 }
 
@@ -347,15 +360,18 @@ export const useStore = create<Store>((set, get) => ({
   rulerLine: null,
   pendingNahtzugabeClick: false,
   nahtzugabeDialogPieceId: null,
+  piecePropertiesDialogPieceId: null,
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   showSettingsModal: false,
   showHelpModal: false,
+  showShortcutListModal: false,
   dxfExportScale: 1,
   toastMessage: null,
   seamAdjustmentDialog: null,
   digitizeState: null,
   imageDigitizeSession: null,
+  workspaceImageSelected: false,
   notchSettings: Array.from({ length: 10 }, () => ({
     type: 'strich' as NotchType,
     widthMm: 6,
@@ -373,7 +389,7 @@ export const useStore = create<Store>((set, get) => ({
   addPiece: (piece) => {
     const id = piece?.id ?? generateId()
     const number = piece?.number ?? String(get().workspace.pieces.length + 1).padStart(3, '0')
-    const newPiece = { ...createDefaultPiece(id, number), ...piece, id, number }
+    const newPiece = applySharpCornerPromotion({ ...createDefaultPiece(id, number), ...piece, id, number })
     set((s) => ({
       workspace: { ...s.workspace, pieces: [...s.workspace.pieces, newPiece] },
       selectedPieceIds: [id],
@@ -398,7 +414,7 @@ export const useStore = create<Store>((set, get) => ({
           } else {
             next.seamLine = []
           }
-          return next
+          return applySharpCornerPromotion(next)
         }),
       },
     })),
@@ -407,6 +423,8 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({
       workspace: { ...s.workspace, pieces: s.workspace.pieces.filter((p) => p.id !== id) },
       selectedPieceIds: s.selectedPieceIds.filter((x) => x !== id),
+      piecePropertiesDialogPieceId: s.piecePropertiesDialogPieceId === id ? null : s.piecePropertiesDialogPieceId,
+      nahtzugabeDialogPieceId: s.nahtzugabeDialogPieceId === id ? null : s.nahtzugabeDialogPieceId,
     })),
 
   selectPiece: (id, addToSelection) =>
@@ -419,6 +437,7 @@ export const useStore = create<Store>((set, get) => ({
               ? s.selectedPieceIds.filter((x) => x !== id)
               : [...s.selectedPieceIds, id]
             : [id],
+      workspaceImageSelected: id != null ? false : s.workspaceImageSelected,
     })),
 
   setTool: (t) => set({ tool: t }),
@@ -433,10 +452,12 @@ export const useStore = create<Store>((set, get) => ({
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
   setNahtzugabeDialogPieceId: (v) => set({ nahtzugabeDialogPieceId: v }),
+  setPiecePropertiesDialogPieceId: (v) => set({ piecePropertiesDialogPieceId: v }),
   setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
   setShowHelpModal: (v) => set({ showHelpModal: v }),
+  setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
   setDxfExportScale: (v) => set({ dxfExportScale: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
@@ -628,7 +649,7 @@ export const useStore = create<Store>((set, get) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) =>
-          p.id === pieceId ? { ...p, cutLine: [...p.cutLine, curve] } : p
+          p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine: [...p.cutLine, curve] }) : p
         ),
       },
     })),
@@ -679,20 +700,31 @@ export const useStore = create<Store>((set, get) => ({
           const cutLine = [...piece.cutLine]
           cutLine[curveIndex] = updated
           const seamLine = piece.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm) : piece.seamLine
-          return { ...piece, cutLine, seamLine }
+          return applySharpCornerPromotion({ ...piece, cutLine, seamLine })
         }),
       },
     })),
 
   addNotch: (pieceId, notch) =>
-    set((s) => ({
-      workspace: {
-        ...s.workspace,
-        pieces: s.workspace.pieces.map((p) =>
-          p.id === pieceId ? { ...p, notches: [...p.notches, notch] } : p
-        ),
-      },
-    })),
+    set((s) => {
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      if (!piece) return s
+      if (!isNotchSpacingValidForCandidate(piece, notch)) {
+        return {
+          ...s,
+          toastMessage:
+            'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
+        }
+      }
+      return {
+        workspace: {
+          ...s.workspace,
+          pieces: s.workspace.pieces.map((p) =>
+            p.id === pieceId ? { ...p, notches: [...p.notches, notch] } : p
+          ),
+        },
+      }
+    }),
 
   removeNotch: (pieceId, notchId) =>
     set((s) => {
@@ -716,7 +748,7 @@ export const useStore = create<Store>((set, get) => ({
             ...s.workspace,
             seamAssignments: adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vi, oldN),
             pieces: s.workspace.pieces.map((p) =>
-              p.id === pieceId ? { ...p, cutLine, seamLine, notches } : p
+              p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches }) : p
             ),
           },
         }
@@ -758,7 +790,7 @@ export const useStore = create<Store>((set, get) => ({
           ...s.workspace,
           seamAssignments: adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vi, oldN),
           pieces: s.workspace.pieces.map((p) =>
-            p.id === pieceId ? { ...p, cutLine, seamLine, notches } : p
+            p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches }) : p
           ),
         },
       }
@@ -800,7 +832,7 @@ export const useStore = create<Store>((set, get) => ({
             ...s.workspace,
             seamAssignments: adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vi, oldN),
             pieces: s.workspace.pieces.map((p) =>
-              p.id === pieceId ? { ...p, cutLine, seamLine, notches, softVertices } : p
+              p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices }) : p
             ),
           },
         }
@@ -838,7 +870,7 @@ export const useStore = create<Store>((set, get) => ({
               ...s.workspace,
               seamAssignments: adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
               pieces: s.workspace.pieces.map((p) =>
-                p.id === pieceId ? { ...p, cutLine, seamLine, notches, softVertices } : p
+                p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices }) : p
               ),
             },
           }
@@ -864,6 +896,16 @@ export const useStore = create<Store>((set, get) => ({
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       const notch = piece?.notches.find((n) => n.id === notchId)
       const isPositionUpdate = upd.position != null
+      if (piece && notch && isPositionUpdate) {
+        const candidate = { ...notch, ...upd }
+        if (!isNotchSpacingValidForCandidate(piece, candidate, notchId)) {
+          return {
+            ...s,
+            toastMessage:
+              'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
+          }
+        }
+      }
       if (piece && notch && notch.vertexIndex != null && isPositionUpdate && piece.cutLine.length > 3) {
         const vi = notch.vertexIndex
         const oldN = piece.cutLine.length
@@ -911,7 +953,7 @@ export const useStore = create<Store>((set, get) => ({
             ...s.workspace,
             seamAssignments: sa,
             pieces: s.workspace.pieces.map((p) =>
-              p.id === pieceId ? { ...p, cutLine, seamLine, notches } : p
+              p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches }) : p
             ),
           },
         }
@@ -961,7 +1003,7 @@ export const useStore = create<Store>((set, get) => ({
           const cutLine = offsetCurvesOutwardForCut(seamLine, deltaMm)
           if (cutLine.length === 0) return p
           const notches = p.notches.map((n) => ({ ...n, vertexIndex: undefined }))
-          return { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches }
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches })
         }),
       },
     })),
@@ -973,7 +1015,12 @@ export const useStore = create<Store>((set, get) => ({
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== pieceId) return p
           // Nahtlinie wird wieder zur einzigen Kontur (cutLine)
-          return { ...p, cutLine: p.seamLine.length >= 3 ? p.seamLine : p.cutLine, seamLine: [], seamAllowanceMm: null }
+          return applySharpCornerPromotion({
+            ...p,
+            cutLine: p.seamLine.length >= 3 ? p.seamLine : p.cutLine,
+            seamLine: [],
+            seamAllowanceMm: null,
+          })
         }),
       },
     })),
@@ -1010,7 +1057,7 @@ export const useStore = create<Store>((set, get) => ({
             newVertexIdx,
           ]
           const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-          return { ...p, cutLine, seamLine, notches, softVertices }
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
         }),
       },
     })),
@@ -1052,7 +1099,7 @@ export const useStore = create<Store>((set, get) => ({
           const notches = p.notches.map((notch) =>
             notch.vertexIndex === vertexIndex ? { ...notch, vertexIndex: undefined } : notch
           )
-          return { ...p, cutLine, seamLine, notches }
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
         }),
       },
     })),
@@ -1075,7 +1122,7 @@ export const useStore = create<Store>((set, get) => ({
           const cutLine = [...p.cutLine]
           cutLine[curveIndex] = bezier
           const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-          return { ...p, cutLine, seamLine }
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine })
         }),
       },
     })),
@@ -1102,7 +1149,7 @@ export const useStore = create<Store>((set, get) => ({
           const seamLine = skipSeamRecalc
             ? p.seamLine
             : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
-          return { ...p, cutLine, seamLine }
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine })
         }),
       },
     })),
@@ -1155,7 +1202,7 @@ export const useStore = create<Store>((set, get) => ({
             const softVertices = (p.softVertices ?? [])
               .filter((vi) => vi !== vertexIndex)
               .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
-            return { ...p, cutLine, seamLine, notches, softVertices }
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
           }),
         },
       }
@@ -1173,7 +1220,7 @@ export const useStore = create<Store>((set, get) => ({
           const cutLine = [...p.cutLine]
           cutLine[curveIndex] = lineSeg
           const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-          return { ...p, cutLine, seamLine }
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine })
         }),
       },
     })),
@@ -1207,7 +1254,7 @@ export const useStore = create<Store>((set, get) => ({
             cutLine[nextIdx] = { ...cutLine[nextIdx], start: pts.end } as Curve
             const seamLine =
               p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-            return { ...p, cutLine, seamLine }
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine })
           }),
         },
       }
@@ -1220,7 +1267,7 @@ export const useStore = create<Store>((set, get) => ({
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== pieceId || p.seamAllowanceMm == null || p.cutLine.length < 3) return p
           const seamLine = offsetCurvesInwardForSeam(p.cutLine, p.seamAllowanceMm)
-          return { ...p, seamLine }
+          return applySharpCornerPromotion({ ...p, seamLine })
         }),
       },
     })),
@@ -1253,7 +1300,7 @@ export const useStore = create<Store>((set, get) => ({
           ...s.workspace,
           pieces: s.workspace.pieces.map((p) =>
             p.id === pieceId
-              ? {
+              ? applySharpCornerPromotion({
                   ...p,
                   cutLine,
                   seamLine,
@@ -1261,7 +1308,7 @@ export const useStore = create<Store>((set, get) => ({
                   drills,
                   internalLines,
                   grainLine,
-                }
+                })
               : p
           ),
         },
@@ -1397,9 +1444,30 @@ export const useStore = create<Store>((set, get) => ({
 
   cancelDigitize: () => set({ digitizeState: null, tool: 'select' }),
 
+  exitAllModes: () =>
+    set(() => ({
+      tool: 'select',
+      selectedPoint: null,
+      digitizeState: null,
+      pendingNahtzugabeClick: false,
+      nahtzugabeDialogPieceId: null,
+      piecePropertiesDialogPieceId: null,
+      nahtzuordnungMode: 'idle',
+      pendingNahtzuordnungFirst: null,
+      rulerMode: false,
+      rulerLine: null,
+      seamAdjustmentDialog: null,
+      showHelpModal: false,
+      showShortcutListModal: false,
+      showSettingsModal: false,
+      workspaceImageSelected: false,
+      toastMessage: null,
+    })),
+
   finishDigitize: () => {
     const s = get()
     if (!s.digitizeState || s.digitizeState.nodes.length < 3) return
+
     const curves = digitizeNodesToCurves(s.digitizeState.nodes)
     if (curves.length < 3) return
     const id = generateId()
@@ -1407,11 +1475,11 @@ export const useStore = create<Store>((set, get) => ({
     const softVertices = s.digitizeState.nodes
       .map((node, i) => node.handleOut != null ? i : -1)
       .filter((i) => i >= 0)
-    const newPiece: PatternPiece = {
+    const newPiece: PatternPiece = applySharpCornerPromotion({
       ...createDefaultPiece(id, number),
       cutLine: curves,
       softVertices,
-    }
+    })
     set((st) => ({
       workspace: { ...st.workspace, pieces: [...st.workspace.pieces, newPiece] },
       selectedPieceIds: [id],
@@ -1420,66 +1488,53 @@ export const useStore = create<Store>((set, get) => ({
     }))
   },
 
-  // --- Bild-Digitalisierung (Foto → Schnittteil) ---
+  // --- Hintergrundbild ---
   startImageSession: ({ dataUrl, widthPx, heightPx }) => {
+    const VIEWBOX_WIDTH = 800
+    const VIEWBOX_HEIGHT = 600
+    const padding = 0.95
+    const raw = Math.min((VIEWBOX_WIDTH * padding) / widthPx, (VIEWBOX_HEIGHT * padding) / heightPx)
+    const renderMmPerPixel = Number.isFinite(raw) && raw > 0 ? raw : 1
+
     set({
       imageDigitizeSession: {
         imageDataUrl: dataUrl,
         imageSizePx: { width: widthPx, height: heightPx },
         imagePosition: { x: 0, y: 0 },
-        imageOpacity: 0.45,
-        mmPerPixel: null,
-        referenceLinePx: null,
+        renderMmPerPixel,
+        locked: false,
       },
-      tool: 'image-move',
+      tool: 'select',
+      workspaceImageSelected: true,
+      selectedPieceIds: [],
       digitizeState: null,
     })
   },
   setImagePosition: (pos) =>
-    set((s) => ({
-      imageDigitizeSession: s.imageDigitizeSession ? { ...s.imageDigitizeSession, imagePosition: pos } : null,
-    })),
-  setImageOpacity: (opacity) =>
-    set((s) => ({
-      imageDigitizeSession: s.imageDigitizeSession
-        ? { ...s.imageDigitizeSession, imageOpacity: Math.max(0, Math.min(1, opacity)) }
-        : null,
-    })),
-  clearImageReferenceLine: () =>
-    set((s) => ({
-      imageDigitizeSession: s.imageDigitizeSession
-        ? { ...s.imageDigitizeSession, mmPerPixel: null, referenceLinePx: null }
-        : null,
-      digitizeState: null,
-    })),
-  setImageCalibration: ({ mmPerPixel, referenceLinePx }) =>
-    set((s) => ({
-      imageDigitizeSession: s.imageDigitizeSession
-        ? { ...s.imageDigitizeSession, mmPerPixel, referenceLinePx }
-        : null,
-    })),
-  startImageDigitize: () =>
-    set(() => {
-      const session = get().imageDigitizeSession
-      if (!session || session.mmPerPixel == null || session.referenceLinePx == null) {
-        return { toastMessage: 'error:Bitte zuerst Bild kalibrieren (Referenzlinie setzen).' }
-      }
-      if (!Number.isFinite(session.mmPerPixel) || session.mmPerPixel <= 0) {
-        return { toastMessage: 'error:Kalibrierung ungültig. Bitte erneut kalibrieren.' }
-      }
+    set((s) => {
+      if (!s.imageDigitizeSession || s.imageDigitizeSession.locked) return s
       return {
-        digitizeState: { nodes: [], isDragging: false, dragPosition: null },
-        tool: 'image-digitize',
+        imageDigitizeSession: { ...s.imageDigitizeSession, imagePosition: pos },
       }
     }),
-  cancelImageDigitizeRun: () =>
-    set(() => ({
-      digitizeState: { nodes: [], isDragging: false, dragPosition: null },
-      tool: 'image-digitize',
+  setImageRenderMmPerPixel: (mmPerPixel) =>
+    set((s) => {
+      if (!s.imageDigitizeSession || s.imageDigitizeSession.locked) return s
+      const v = Number.isFinite(mmPerPixel) ? mmPerPixel : s.imageDigitizeSession.renderMmPerPixel
+      const clamped = Math.min(500, Math.max(1e-4, v))
+      return {
+        imageDigitizeSession: { ...s.imageDigitizeSession, renderMmPerPixel: clamped },
+      }
+    }),
+  setWorkspaceImageSelected: (selected) => set({ workspaceImageSelected: selected }),
+  setWorkspaceImageLocked: (locked) =>
+    set((s) => ({
+      imageDigitizeSession: s.imageDigitizeSession ? { ...s.imageDigitizeSession, locked } : null,
     })),
   cancelImageSession: () =>
     set(() => ({
       imageDigitizeSession: null,
+      workspaceImageSelected: false,
       digitizeState: null,
       tool: 'select',
     })),

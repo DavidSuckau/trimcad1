@@ -254,6 +254,8 @@ export function importDxfFromString(content: string): ImportDxfResult {
         internalLines: [],
         layer: 'CUT',
         transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+        softVertices: [],
+        fillInterior: true,
       }
       pieces.push(piece)
     }

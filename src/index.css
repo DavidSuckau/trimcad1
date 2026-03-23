@@ -886,6 +886,51 @@ body {
   color: #333;
 }
 
+/* Kompakte Shortcut-Liste (Hilfe → Tastenkürzel) */
+.shortcut-list-modal.help-modal {
+  width: 480px;
+}
+.shortcut-list-ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shortcut-list-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.8125rem;
+}
+.shortcut-list-row:last-child {
+  border-bottom: none;
+}
+.shortcut-list-name {
+  color: #222;
+  line-height: 1.35;
+}
+.shortcut-list-kbd {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
+  font-family: ui-monospace, monospace;
+  background: #f4f4f4;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #111;
+  white-space: nowrap;
+  max-width: 55%;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shortcut-list-category .help-category-title {
+  margin-top: 0.25rem;
+}
+
 /* DesignBar: untere Anzeige-Leiste im Arbeitsbereich */
 .design-bar {
   flex-shrink: 0;

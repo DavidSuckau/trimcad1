@@ -1,18 +1,92 @@
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
-import { closedPathD, curveToPathD, bezierAt, curveSegmentArcLength, curvesBounds, outwardNormalAngleAt, pointAtPathLength } from '../geometry/curveToPath'
+import {
+  closedPathD,
+  curveToPathD,
+  bezierAt,
+  bezierDerivativeAt,
+  curveSegmentArcLength,
+  curvesBounds,
+  outwardNormalAngleAt,
+  pointAtPathLength,
+} from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { offsetSegmentPoints } from '../geometry/offset'
 import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPositionAndAngleOnSeamLine, notchTriangleCorners, notchCutoutPoints, cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
+import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
 import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves, getCurvesForSeamEdge } from '../geometry/seamUtils'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
-import { ImageReferenceModal } from './ImageReferenceModal'
-import { imagePixelToWorld, worldToImagePixel } from '../utils/imageCalibration'
-
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
+
+/**
+ * Kontur-/Bearbeitungspunkte: Größe in „Bildschirm-SVG-Einheiten“ (nach view.zoom im Parent).
+ * r * (1/zoom) hält die sichtbare Größe beim Zoomen etwa konstant.
+ */
+const POINT_SCREEN_R = 2.45
+const POINT_SCREEN_STROKE = 0.8
+const POINT_SCREEN_RECT = 4.9
+/** Digitalisieren: etwas größer, gleiches Zoom-Verhalten */
+const DIGITIZE_NODE_R = 3.1
+const DIGITIZE_NODE_R_NEAR = 5.2
+const DIGITIZE_HANDLE_R = 2.35
+const DIGITIZE_HANDLE_REFLECT_R = 1.9
+
+/** Hintergrundbild: feste Transparenz, kein eigener Schieberegler mehr. */
+const WORKSPACE_IMAGE_OPACITY = 0.42
+const IMAGE_CORNER_HIT_MM = 12
+
+function workspaceImageLayout(session: {
+  imagePosition: Point
+  imageSizePx: { width: number; height: number } | null
+  renderMmPerPixel: number
+}): {
+  cx: number
+  cy: number
+  w: number
+  h: number
+  left: number
+  right: number
+  top: number
+  bottom: number
+} | null {
+  if (!session.imageSizePx) return null
+  const imageSizePx = session.imageSizePx
+  const w = imageSizePx.width * session.renderMmPerPixel
+  const h = imageSizePx.height * session.renderMmPerPixel
+  const cx = session.imagePosition.x
+  const cy = session.imagePosition.y
+  return {
+    cx,
+    cy,
+    w,
+    h,
+    left: cx - w / 2,
+    right: cx + w / 2,
+    top: cy - h / 2,
+    bottom: cy + h / 2,
+  }
+}
+
+/** Vertex-Position auf der Master-Kontur (Seam bei Nahtzugabe, sonst Cut) — gleiche Logik wie Hover. */
+function getMasterContourVertexLocal(piece: PatternPiece, vertexIndex: number): Point | null {
+  const useSeamMaster = piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+  const curves = useSeamMaster ? piece.seamLine : piece.cutLine
+  if (!curves.length || vertexIndex < 0 || vertexIndex >= curves.length) return null
+  return vertexIndex === 0 ? { ...curves[0].start } : { ...curves[vertexIndex - 1].end }
+}
+
+function isWorldInsideWorkspaceImage(
+  world: Point,
+  session: { imagePosition: Point; imageSizePx: { width: number; height: number } | null; renderMmPerPixel: number }
+): boolean {
+  const lay = workspaceImageLayout(session)
+  if (!lay) return false
+  const { left, right, top, bottom } = lay
+  return world.x >= left && world.x <= right && world.y >= top && world.y <= bottom
+}
 
 /** t vom Vertex weghalten, damit ein verschobener Notch nicht exakt auf einen Eckpunkt fällt. */
 const NOTCH_MOVE_T_MIN = 0.05
@@ -23,6 +97,29 @@ function pointOnCurveAt(c: Curve, t: number): Point {
     return { x: c.start.x + t * (c.end.x - c.start.x), y: c.start.y + t * (c.end.y - c.start.y) }
   }
   return bezierAt(c, t)
+}
+
+function pointAtDistanceOnRay(start: Point, current: Point, distanceMm: number): Point {
+  const dx = current.x - start.x
+  const dy = current.y - start.y
+  const len = Math.hypot(dx, dy)
+  if (len <= 1e-6) return { x: start.x + distanceMm, y: start.y }
+  const s = distanceMm / len
+  return { x: start.x + dx * s, y: start.y + dy * s }
+}
+
+function snapLineTo45Deg(start: Point, current: Point): Point {
+  const dx = current.x - start.x
+  const dy = current.y - start.y
+  const len = Math.hypot(dx, dy)
+  if (len <= 1e-6) return current
+  const angle = Math.atan2(dy, dx)
+  const step = Math.PI / 4
+  const snappedAngle = Math.round(angle / step) * step
+  return {
+    x: start.x + Math.cos(snappedAngle) * len,
+    y: start.y + Math.sin(snappedAngle) * len,
+  }
 }
 
 function worldToPieceLocal(
@@ -69,17 +166,199 @@ function getPieceGrainLine(piece: PatternPiece): Line {
   return { start: { x: grainCx, y: topY }, end: { x: grainCx, y: bottomY } }
 }
 
-const GRAIN_ARROW_HIT_PAD = 14
-/** Prüft, ob ein Punkt (Teilkoordinaten) im Klickbereich des Laufrichtungspfeils liegt. */
-function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
-  if (piece.cutLine.length < 3) return false
-  const line = getPieceGrainLine(piece)
-  const minX = Math.min(line.start.x, line.end.x) - GRAIN_ARROW_HIT_PAD
-  const minY = Math.min(line.start.y, line.end.y) - 4
-  const w = Math.abs(line.end.x - line.start.x) + GRAIN_ARROW_HIT_PAD * 2
-  const h = Math.abs(line.end.y - line.start.y) + 8
-  return local.x >= minX && local.x <= minX + w && local.y >= minY && local.y <= minY + h
+/** Abstand Punkt → Strecke [a,b] in mm; t = Projektion auf die Strecke, auf [0,1] geklemmt. */
+function distPointToSegmentMm(p: Point, a: Point, b: Point): { d: number; t: number } {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const apx = p.x - a.x
+  const apy = p.y - a.y
+  const lenSq = abx * abx + aby * aby
+  if (lenSq < 1e-18) return { d: Math.hypot(apx, apy), t: 0 }
+  let t = (apx * abx + apy * aby) / lenSq
+  t = Math.max(0, Math.min(1, t))
+  const cx = a.x + t * abx
+  const cy = a.y + t * aby
+  return { d: Math.hypot(p.x - cx, p.y - cy), t }
 }
+
+function minDistToTriangleEdgesMm(p: Point, t1: Point, t2: Point, t3: Point): number {
+  return Math.min(
+    distPointToSegmentMm(p, t1, t2).d,
+    distPointToSegmentMm(p, t2, t3).d,
+    distPointToSegmentMm(p, t3, t1).d
+  )
+}
+
+/**
+ * Geometrie des gezeichneten Laufrichtungspfeils (Teilkoordinaten) — wie in PieceGroup gerendert.
+ */
+function getGrainArrowLayout(piece: PatternPiece): {
+  line: Line
+  tickStart: Point
+  tickEnd: Point
+  endTip: Point
+  baseLeft: Point
+  baseRight: Point
+  triangleD: string
+} | null {
+  if (piece.cutLine.length < 3) return null
+  const bounds = curvesBounds(piece.cutLine)
+  if (!bounds) return null
+  const line = getPieceGrainLine(piece)
+  const w = bounds.maxX - bounds.minX
+  const shaftH = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y) || 1
+  const awNom = 6
+  const ahNom = 8
+  const tickLenNom = 3
+  const scale = Math.min(1, w / (2 * awNom), shaftH / (2 * ahNom))
+  const aw = awNom * scale
+  const ah = ahNom * scale
+  const tickLen = tickLenNom * scale
+  const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x)
+  const midX = (line.start.x + line.end.x) / 2
+  const midY = (line.start.y + line.end.y) / 2
+  const endTip = { ...line.end }
+  const baseMidX = endTip.x - ah * Math.cos(angle)
+  const baseMidY = endTip.y - ah * Math.sin(angle)
+  const baseLeft = { x: baseMidX - aw * Math.sin(angle), y: baseMidY + aw * Math.cos(angle) }
+  const baseRight = { x: baseMidX + aw * Math.sin(angle), y: baseMidY - aw * Math.cos(angle) }
+  const perpX = -Math.sin(angle)
+  const perpY = Math.cos(angle)
+  const tickStart = { x: midX - perpX * (tickLen / 2), y: midY - perpY * (tickLen / 2) }
+  const tickEnd = { x: midX + perpX * (tickLen / 2), y: midY + perpY * (tickLen / 2) }
+  const triangleD = `M ${endTip.x} ${endTip.y} L ${baseLeft.x} ${baseLeft.y} L ${baseRight.x} ${baseRight.y} Z`
+  return { line, tickStart, tickEnd, endTip, baseLeft, baseRight, triangleD }
+}
+
+/** Halbe Trefferbreite senkrecht zur Achse (mm) — schmal, folgt der Pfeilrichtung (kein AABB-Rechteck). */
+const GRAIN_HIT_SHAFT_HALF_MM = 5
+const GRAIN_HIT_TICK_HALF_MM = 4
+const GRAIN_HIT_HEAD_MM = 4.5
+
+/** Prüft, ob ein Punkt (Teilkoordinaten) im Klick-/Hover-Bereich des Laufrichtungspfeils liegt. */
+function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
+  const g = getGrainArrowLayout(piece)
+  if (!g) return false
+  const { line, tickStart, tickEnd, endTip, baseLeft, baseRight } = g
+  const shaft = distPointToSegmentMm(local, line.start, line.end)
+  if (shaft.d <= GRAIN_HIT_SHAFT_HALF_MM) return true
+  const tick = distPointToSegmentMm(local, tickStart, tickEnd)
+  if (tick.d <= GRAIN_HIT_TICK_HALF_MM) return true
+  if (isPointInPolygon(local, [endTip, baseLeft, baseRight])) return true
+  if (minDistToTriangleEdgesMm(local, endTip, baseLeft, baseRight) <= GRAIN_HIT_HEAD_MM) return true
+  return false
+}
+
+/** Verschiebt die Laufrichtungslinie parallel; skaliert den Vektor so, dass beide Enden in der Bounding-Box der Kontur bleiben. */
+function clampGrainLineParallelTranslation(
+  line: Line,
+  dx: number,
+  dy: number,
+  b: { minX: number; maxX: number; minY: number; maxY: number }
+): Line {
+  const inBox = (x: number, y: number) =>
+    x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY
+  const ax = line.start.x + dx
+  const ay = line.start.y + dy
+  const bx = line.end.x + dx
+  const by = line.end.y + dy
+  if (inBox(ax, ay) && inBox(bx, by)) {
+    return { start: { x: ax, y: ay }, end: { x: bx, y: by } }
+  }
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 28; i++) {
+    const m = (lo + hi) / 2
+    const sx = line.start.x + dx * m
+    const sy = line.start.y + dy * m
+    const ex = line.end.x + dx * m
+    const ey = line.end.y + dy * m
+    if (inBox(sx, sy) && inBox(ex, ey)) lo = m
+    else hi = m
+  }
+  const s = lo
+  return {
+    start: { x: line.start.x + dx * s, y: line.start.y + dy * s },
+    end: { x: line.end.x + dx * s, y: line.end.y + dy * s },
+  }
+}
+
+/** Kürzeste Winkel-Differenz in Grad (−180 … 180). */
+function smallestAngleDiffDeg(a: number, b: number): number {
+  return ((((a - b) % 360) + 540) % 360) - 180
+}
+
+/** Tangentenrichtung der Schnittkontur bei (curveIndex, t) in Grad (Richtung wachsender Parameter). */
+function contourTangentAngleDeg(curves: Curve[], curveIndex: number, t: number): number {
+  const c = curves[curveIndex]
+  if (!c) return 0
+  if (c.type === 'line') {
+    return (Math.atan2(c.end.y - c.start.y, c.end.x - c.start.x) * 180) / Math.PI
+  }
+  const d = bezierDerivativeAt(c, t)
+  if (Math.hypot(d.x, d.y) < 1e-12) return 0
+  return (Math.atan2(d.y, d.x) * 180) / Math.PI
+}
+
+/**
+ * Laufrichtungslinie parallel zur Kontur-Tangente; wählt die der bisherigen Ausrichtung nähere der beiden
+ * entgegengesetzten Richtungen (0° / 180°).
+ */
+function alignGrainLineToContourTangent(line: Line, tangentDeg: number): Line {
+  const curDeg =
+    (Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x) * 180) / Math.PI
+  const opt0 = tangentDeg
+  const opt1 = tangentDeg + 180
+  const use1 = Math.abs(smallestAngleDiffDeg(curDeg, opt1)) < Math.abs(smallestAngleDiffDeg(curDeg, opt0))
+  const dirDeg = use1 ? opt1 : opt0
+  const rad = (dirDeg * Math.PI) / 180
+  const ux = Math.cos(rad)
+  const uy = Math.sin(rad)
+  const mx = (line.start.x + line.end.x) / 2
+  const my = (line.start.y + line.end.y) / 2
+  let L = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y)
+  if (L < 1e-6) L = 20
+  const half = L / 2
+  return {
+    start: { x: mx - ux * half, y: my - uy * half },
+    end: { x: mx + ux * half, y: my + uy * half },
+  }
+}
+
+/** Streckt oder staucht die Strecke vom Mittelpunkt aus, bis beide Enden in der AABB liegen. */
+function clampLineSegmentInAabb(
+  line: Line,
+  b: { minX: number; maxX: number; minY: number; maxY: number }
+): Line {
+  const inBox = (x: number, y: number) =>
+    x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY
+  const mx = (line.start.x + line.end.x) / 2
+  const my = (line.start.y + line.end.y) / 2
+  const vx = line.end.x - line.start.x
+  const vy = line.end.y - line.start.y
+  const L = Math.hypot(vx, vy) || 1
+  const ux = vx / L
+  const uy = vy / L
+  const half = L / 2
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 28; i++) {
+    const m = (lo + hi) / 2
+    const h = half * m
+    const s = { x: mx - ux * h, y: my - uy * h }
+    const e = { x: mx + ux * h, y: my + uy * h }
+    if (inBox(s.x, s.y) && inBox(e.x, e.y)) lo = m
+    else hi = m
+  }
+  const h = half * lo
+  return {
+    start: { x: mx - ux * h, y: my - uy * h },
+    end: { x: mx + ux * h, y: my + uy * h },
+  }
+}
+
+/** Max. Abstand Maus→Kontur (mm), damit die Laufrichtung an die Kante „snappt“. */
+const GRAIN_SNAP_TO_EDGE_MM = 14
 
 /** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe)
  *  oder nah genug an der Konturlinie (cutLine/seamLine) ist. */
@@ -175,11 +454,11 @@ function isClickOnInnerSideOfEdge(
   return dot <= 0 // Innenseite = entgegen der Außennormale
 }
 
-/** Eckpunkte (rot), eingefügte Punkte (blau), Kurvenpunkte (orange) */
+/** Eckpunkte (rot), eingefügte Punkte (blau), Kurvenpunkte (grün) */
 const COLOR_ECKPUNKT: [string, string] = ['#ef5350', '#b71c1c']
 const COLOR_SOFT_PUNKT: [string, string] = ['#42a5f5', '#1565c0']
 /** Punkt auf der Kurve (ziehen = Kurve glatt verschieben, keine Ecke) */
-const COLOR_PUNKT_AUF_KURVE: [string, string] = ['#42a5f5', '#1565c0']
+const COLOR_PUNKT_AUF_KURVE: [string, string] = ['#66bb6a', '#2e7d32']
 
 /** Farbe für Notch-Kerben – gleiche Farbe wie die Außenkontur. */
 const NOTCH_STROKE = '#000'
@@ -254,6 +533,7 @@ function PieceGroup({
   showPoints,
   hoveredInternalLineCurveIndex,
   onContextMenu,
+  viewZoom,
 }: {
   piece: PatternPiece
   isSelected: boolean
@@ -275,8 +555,11 @@ function PieceGroup({
   showPoints?: boolean
   hoveredInternalLineCurveIndex?: number | null
   onContextMenu?: (e: React.MouseEvent) => void
+  /** view.zoom – für Punkt-Marker, die auf dem Bildschirm gleich groß bleiben sollen */
+  viewZoom: number
 }) {
   const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
+  const ptPs = 1 / Math.max(viewZoom, 1e-6)
   const tx = `translate(${transform.x},${transform.y}) rotate(${transform.rotation}) scale(${transform.mirrored ? -1 : 1},1)`
   const notchesForCutouts = notchIdBeingDragged ? notches.filter((n) => n.id !== notchIdBeingDragged) : notches
   const mergedCutLine = cutLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
@@ -284,6 +567,9 @@ function PieceGroup({
   const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
   const seamPath = closedPathD(mergedSeamLine)
   const fillHellgelb = '#fef9c3'
+  const useInteriorFill = piece.fillInterior !== false
+  const interiorFill = useInteriorFill ? fillHellgelb : 'none'
+  const interiorFillOpacity = useInteriorFill ? 0.82 : undefined
   const hasSeam = !!(seamPath && seamLine.length >= 3)
   const solidIsCut = !hasSeam || !!cutSeamSwapped
   const solidPath = solidIsCut ? cutPath : seamPath
@@ -298,8 +584,8 @@ function PieceGroup({
       {hasSeam && dashedPath && (
         <path
           d={dashedPath}
-          fill={fillHellgelb}
-          fillOpacity={0.82}
+          fill={interiorFill}
+          fillOpacity={interiorFillOpacity}
           stroke="#888"
           strokeWidth={0.5}
           pointerEvents="none"
@@ -308,8 +594,8 @@ function PieceGroup({
       {solidPath && (
         <path
           d={solidPath}
-          fill={fillHellgelb}
-          fillOpacity={0.82}
+          fill={interiorFill}
+          fillOpacity={interiorFillOpacity}
           stroke={isHovered ? '#e53935' : '#000'}
           strokeWidth={isHovered ? 0.8 : 0.5}
           pointerEvents="none"
@@ -327,7 +613,15 @@ function PieceGroup({
         />
       )}
       {cutLine.length === 0 && (
-        <circle cx={0} cy={0} r={2} fill="none" stroke="#ccc" strokeWidth={0.5} pointerEvents="none" />
+        <circle
+          cx={0}
+          cy={0}
+          r={2.2 * ptPs}
+          fill="none"
+          stroke="#ccc"
+          strokeWidth={0.55 * ptPs}
+          pointerEvents="none"
+        />
       )}
       {showInternalLines !== false && internalLines.map((curve, i) => {
         const isHovered = hoveredInternalLineCurveIndex === i
@@ -407,40 +701,17 @@ function PieceGroup({
         />
       ))}
       {showGrain !== false && cutLine.length >= 3 && (() => {
-        const bounds = curvesBounds(cutLine)
-        if (!bounds) return null
-        const line = getPieceGrainLine(piece)
-        const w = bounds.maxX - bounds.minX
-        const shaftH = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y) || 1
-        const awNom = 6
-        const ahNom = 8
-        const tickLenNom = 3
-        const scale = Math.min(1, w / (2 * awNom), shaftH / (2 * ahNom))
-        const aw = awNom * scale
-        const ah = ahNom * scale
-        const tickLen = tickLenNom * scale
-        const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x)
+        const g = getGrainArrowLayout(piece)
+        if (!g) return null
+        const { line, tickStart, tickEnd, triangleD } = g
         const midX = (line.start.x + line.end.x) / 2
         const midY = (line.start.y + line.end.y) / 2
-        const hitPad = Math.max(14, aw + 2)
+        const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x)
         const hasGrainHandlers =
           onGrainArrowEnter != null &&
           onGrainArrowLeave != null &&
           onGrainArrowMove != null &&
           onGrainArrowClick != null
-        const endTip = line.end
-        const baseMidX = endTip.x - ah * Math.cos(angle)
-        const baseMidY = endTip.y - ah * Math.sin(angle)
-        const baseLeftX = baseMidX - aw * Math.sin(angle)
-        const baseLeftY = baseMidY + aw * Math.cos(angle)
-        const baseRightX = baseMidX + aw * Math.sin(angle)
-        const baseRightY = baseMidY - aw * Math.cos(angle)
-        const perpX = -Math.sin(angle)
-        const perpY = Math.cos(angle)
-        const tickStartX = midX - perpX * (tickLen / 2)
-        const tickStartY = midY - perpY * (tickLen / 2)
-        const tickEndX = midX + perpX * (tickLen / 2)
-        const tickEndY = midY + perpY * (tickLen / 2)
         return (
           <>
             <g
@@ -452,7 +723,7 @@ function PieceGroup({
                 e.stopPropagation()
                 onGrainArrowClick?.(e)
               }}
-              style={hasGrainHandlers ? { cursor: 'pointer' } : undefined}
+              style={hasGrainHandlers ? { cursor: isSelected ? 'grab' : 'pointer' } : undefined}
             >
               <line
                 x1={line.start.x}
@@ -465,51 +736,101 @@ function PieceGroup({
                 pointerEvents="none"
               />
               <line
-                x1={tickStartX}
-                y1={tickStartY}
-                x2={tickEndX}
-                y2={tickEndY}
+                x1={tickStart.x}
+                y1={tickStart.y}
+                x2={tickEnd.x}
+                y2={tickEnd.y}
                 stroke="#333"
                 strokeWidth={0.35}
                 pointerEvents="none"
               />
               <path
-                d={`M ${endTip.x} ${endTip.y} L ${baseLeftX} ${baseLeftY} L ${baseRightX} ${baseRightY} Z`}
+                d={triangleD}
                 fill="none"
                 stroke="#333"
                 strokeWidth={0.35}
                 pointerEvents="none"
               />
               {hasGrainHandlers && (
-                <rect
-                  x={Math.min(line.start.x, line.end.x) - hitPad}
-                  y={Math.min(line.start.y, line.end.y) - 4}
-                  width={Math.abs(line.end.x - line.start.x) + hitPad * 2}
-                  height={Math.abs(line.end.y - line.start.y) + 8}
-                  fill="transparent"
-                />
+                <>
+                  {/* Trefferzonen entlang der Pfeilachse (kein achsparalleles Rechteck bei schrägem Pfeil). */}
+                  <line
+                    x1={line.start.x}
+                    y1={line.start.y}
+                    x2={line.end.x}
+                    y2={line.end.y}
+                    stroke="transparent"
+                    strokeWidth={2 * GRAIN_HIT_SHAFT_HALF_MM}
+                    pointerEvents="stroke"
+                  />
+                  <line
+                    x1={tickStart.x}
+                    y1={tickStart.y}
+                    x2={tickEnd.x}
+                    y2={tickEnd.y}
+                    stroke="transparent"
+                    strokeWidth={2 * GRAIN_HIT_TICK_HALF_MM}
+                    pointerEvents="stroke"
+                  />
+                  <path
+                    d={triangleD}
+                    fill="rgba(0,0,0,0)"
+                    stroke="rgba(0,0,0,0)"
+                    strokeWidth={2 * GRAIN_HIT_HEAD_MM}
+                    strokeLinejoin="miter"
+                    pointerEvents="all"
+                  />
+                </>
               )}
             </g>
             {showPoints && (
               <>
-                <circle cx={line.start.x} cy={line.start.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
-                <circle cx={line.end.x} cy={line.end.y} r={4} fill="#1565c0" stroke="#fff" strokeWidth={1} pointerEvents="none" />
+                <circle
+                  cx={line.start.x}
+                  cy={line.start.y}
+                  r={4.2 * ptPs}
+                  fill="#1565c0"
+                  stroke="#fff"
+                  strokeWidth={1 * ptPs}
+                  pointerEvents="none"
+                />
+                <circle
+                  cx={line.end.x}
+                  cy={line.end.y}
+                  r={4.2 * ptPs}
+                  fill="#1565c0"
+                  stroke="#fff"
+                  strokeWidth={1 * ptPs}
+                  pointerEvents="none"
+                />
               </>
             )}
-            {showPieceNames !== false && (
-              <text
-                x={midX + 10 * Math.cos(angle) - 5 * Math.sin(angle)}
-                y={midY + 10 * Math.sin(angle) + 5 * Math.cos(angle)}
-                textAnchor="start"
-                dominantBaseline="middle"
-                fill="#333"
-                fontSize={3.5}
-                fontFamily="sans-serif"
-                pointerEvents="none"
-              >
-                {piece.name}
-              </text>
-            )}
+            {showPieceNames !== false && (() => {
+              // Text parallel zur Laufrichtungslinie (wie auf der Linie geschrieben); leicht seitlich versetzt, damit er die Striche nicht überdeckt.
+              const perpX = -Math.sin(angle)
+              const perpY = Math.cos(angle)
+              const offMm = 3.5
+              const tx = midX + perpX * offMm
+              const ty = midY + perpY * offMm
+              let rotDeg = (angle * 180) / Math.PI
+              if (Math.cos(angle) < 0) rotDeg += 180
+              return (
+                <text
+                  x={tx}
+                  y={ty}
+                  transform={`rotate(${rotDeg}, ${tx}, ${ty})`}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fill="#333"
+                  fontSize={3.8}
+                  fontFamily="sans-serif"
+                  fontWeight="600"
+                  pointerEvents="none"
+                >
+                  {piece.name}
+                </text>
+              )
+            })()}
           </>
         )
       })()}
@@ -532,31 +853,55 @@ function PieceGroup({
         return (
           <>
             <g style={{ cursor: 'grab' }} pointerEvents="all">
-              <title>Drehpunkt: Ziehen zum Verschieben, Doppelklick zum Zurücksetzen</title>
-              <circle cx={pivot.x} cy={pivot.y} r={16} fill="transparent" />
-              <circle cx={pivot.x} cy={pivot.y} r={4} fill="#333" stroke="#fff" strokeWidth={1} pointerEvents="none" />
-              <line x1={pivot.x - 6} y1={pivot.y} x2={pivot.x + 6} y2={pivot.y} stroke="#333" strokeWidth={0.8} pointerEvents="none" />
-              <line x1={pivot.x} y1={pivot.y - 6} x2={pivot.x} y2={pivot.y + 6} stroke="#333" strokeWidth={0.8} pointerEvents="none" />
+              <title>Drehpunkt: ziehen, Doppelklick zurücksetzen · Alt+P auf Ecke, Kerbe oder Kurvenpunkt (Punkte anzeigen)</title>
+              <circle cx={pivot.x} cy={pivot.y} r={16 * ptPs} fill="transparent" />
+              <circle
+                cx={pivot.x}
+                cy={pivot.y}
+                r={4.2 * ptPs}
+                fill="#333"
+                stroke="#fff"
+                strokeWidth={1 * ptPs}
+                pointerEvents="none"
+              />
+              <line
+                x1={pivot.x - 6 * ptPs}
+                y1={pivot.y}
+                x2={pivot.x + 6 * ptPs}
+                y2={pivot.y}
+                stroke="#333"
+                strokeWidth={0.8 * ptPs}
+                pointerEvents="none"
+              />
+              <line
+                x1={pivot.x}
+                y1={pivot.y - 6 * ptPs}
+                x2={pivot.x}
+                y2={pivot.y + 6 * ptPs}
+                stroke="#333"
+                strokeWidth={0.8 * ptPs}
+                pointerEvents="none"
+              />
             </g>
             <g style={{ cursor: 'grab' }}>
               <title>Drehgriff: Ziehen zum Drehen des Teils</title>
               <circle
                 cx={pivot.x}
                 cy={handleY}
-                r={10}
+                r={10 * ptPs}
                 fill="#e3f2fd"
                 stroke="#1565c0"
-                strokeWidth={1.2}
+                strokeWidth={1.2 * ptPs}
               />
               <path
-                d={`M ${pivot.x + 5} ${handleY} A 5 5 0 0 1 ${pivot.x - 5} ${handleY}`}
+                d={`M ${pivot.x + 5 * ptPs} ${handleY} A ${5 * ptPs} ${5 * ptPs} 0 0 1 ${pivot.x - 5 * ptPs} ${handleY}`}
                 fill="none"
                 stroke="#1565c0"
-                strokeWidth={1.1}
+                strokeWidth={1.1 * ptPs}
                 strokeLinecap="round"
               />
               <path
-                d={`M ${pivot.x - 5} ${handleY} L ${pivot.x - 6} ${handleY + 1.2} L ${pivot.x - 4.2} ${handleY + 0.4} Z`}
+                d={`M ${pivot.x - 5 * ptPs} ${handleY} L ${pivot.x - 6 * ptPs} ${handleY + 1.2 * ptPs} L ${pivot.x - 4.2 * ptPs} ${handleY + 0.4 * ptPs} Z`}
                 fill="#1565c0"
               />
             </g>
@@ -599,6 +944,7 @@ export function WorkspaceCanvas() {
     addCurveToCutLine,
     addInternalLine,
     addInternalLines,
+    updatePiece,
     removeInternalLine,
     offsetSegment,
     addNotch,
@@ -634,14 +980,16 @@ export function WorkspaceCanvas() {
     finishDigitize,
     startDigitize,
     imageDigitizeSession,
-    setImageOpacity,
-    clearImageReferenceLine,
-    cancelImageDigitizeRun,
+    workspaceImageSelected,
+    setWorkspaceImageSelected,
+    setImageRenderMmPerPixel,
     cancelImageSession,
-    startImageDigitize,
     setImagePosition,
     setShowHelpModal,
     deletePiece,
+    setPiecePropertiesDialogPieceId,
+    setWorkspaceImageLocked,
+    exitAllModes,
   } = useStore()
   const { pieces, view } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
@@ -666,6 +1014,8 @@ export function WorkspaceCanvas() {
     | { kind: 'rotate'; pieceId: string; startRotation: number; startWorldAngle: number }
     | { kind: 'pivot'; pieceId: string }
     | { kind: 'grainPoint'; pieceId: string; which: 'start' | 'end' }
+    /** Ganzen Laufrichtungspfeil parallel verschieben (Schaft/Pfeil, nicht Endpunkte einzeln). */
+    | { kind: 'grainLine'; pieceId: string; startLocal: Point; lineAtPointerDown: Line }
     | { kind: 'vertex'; pieceId: string; vertexIndex: number; startLocal: Point; seamDrag?: { startLocal: Point; cutVertexIndex: number } }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
@@ -677,7 +1027,14 @@ export function WorkspaceCanvas() {
     | { kind: 'internalCircle'; pieceId: string; center: Point; current: Point }
     | { kind: 'ruler'; start: Point; current: Point }
     | { kind: 'image-move'; startWorld: Point; startImagePos: Point }
-    | { kind: 'image-reference-line'; startWorld: Point; startPx: Point; currentPx: Point }
+    | {
+        kind: 'image-resize'
+        center: Point
+        ux: number
+        uy: number
+        d0: number
+        render0: number
+      }
     | { kind: 'digitizeDrag' }
     | null
   >(null)
@@ -721,11 +1078,28 @@ export function WorkspaceCanvas() {
   const [hoveredInternalLine, setHoveredInternalLine] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [digitizeMouseWorld, setDigitizeMouseWorld] = useState<Point | null>(null)
   const [digitizeNearFirst, setDigitizeNearFirst] = useState(false)
-
-  const [imageReferenceLineDraftPx, setImageReferenceLineDraftPx] = useState<{ start: Point; end: Point } | null>(null)
-  const [imageReferenceLengthDialog, setImageReferenceLengthDialog] = useState<{
-    referenceLinePx: { start: Point; end: Point }
+  const [lineLengthEditor, setLineLengthEditor] = useState<{
+    mode: 'draw' | 'hoverInternal'
+    pieceId: string
+    curveIndex?: number
+    start: Point
+    current: Point
+    value: string
   } | null>(null)
+  const lineLengthInputRef = useRef<HTMLInputElement | null>(null)
+  const lastPointerClientRef = useRef({ x: 0, y: 0 })
+  const [hoveredWorkspaceImage, setHoveredWorkspaceImage] = useState(false)
+  const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
+    null
+  )
+
+  // Nur beim Öffnen fokussieren + alles markieren – nicht bei jedem Tastendruck (value-Updates),
+  // sonst würde select() die Eingabe bei jeder Ziffer überschreiben.
+  useEffect(() => {
+    if (!lineLengthEditor) return
+    lineLengthInputRef.current?.focus()
+    lineLengthInputRef.current?.select()
+  }, [lineLengthEditor?.mode, lineLengthEditor?.pieceId, lineLengthEditor?.curveIndex])
 
   const segmentMenuVisible =
     (hoveredSegment != null && hoveredSegmentPos != null) ||
@@ -777,8 +1151,15 @@ export function WorkspaceCanvas() {
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!containerRef.current) return
+      /** Mittelklick: nur globaler Abbruch, kein Ziehen/Keine Punkte ändern (Propagation kommt i. d. R. nicht bis hier). */
+      if (e.button === 1) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       e.preventDefault()
       closeSegmentMenu()
+      setWorkspaceImageQuickMenu(null)
       const world = toWorld(e.clientX, e.clientY)
       if (tool === 'pan') {
         setDragging({
@@ -861,36 +1242,6 @@ export function WorkspaceCanvas() {
         return
       }
 
-      if (tool === 'image-move' && imageDigitizeSession?.imageSizePx) {
-        setDragging({
-          kind: 'image-move',
-          startWorld: world,
-          startImagePos: imageDigitizeSession.imagePosition,
-        })
-        ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-        return
-      }
-
-      if (tool === 'image-reference-line' && imageDigitizeSession?.imageSizePx) {
-        const session = imageDigitizeSession
-        const effMmPerPixel = session.mmPerPixel ?? 1
-        const imageSizePx = session.imageSizePx!
-        const startPx = worldToImagePixel({
-          world,
-          imagePosition: session.imagePosition,
-          imageSizePx,
-          mmPerPixelEffective: effMmPerPixel,
-        })
-        setImageReferenceLineDraftPx({ start: startPx, end: startPx })
-        setDragging({
-          kind: 'image-reference-line',
-          startWorld: world,
-          startPx,
-          currentPx: startPx,
-        })
-        ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-        return
-      }
       const VERTEX_HIT = 12
       const VERTEX_HIT_SEAM = 18
       const POINT_ON_CURVE_HIT = 12
@@ -1149,6 +1500,28 @@ export function WorkspaceCanvas() {
             return
           }
         }
+        const GRAIN_SHAFT_HIT = GRAIN_POINT_HIT
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+          if (tool !== 'select' || showGrain === false) continue
+          const local = worldToPieceLocal(world, p)
+          if (!isPointInGrainArrowArea(local, p)) continue
+          const grain = getPieceGrainLine(p)
+          const startW = pieceLocalToWorld(grain.start, p)
+          const endW = pieceLocalToWorld(grain.end, p)
+          const dStart = Math.hypot(world.x - startW.x, world.y - startW.y)
+          const dEnd = Math.hypot(world.x - endW.x, world.y - endW.y)
+          if (dStart < GRAIN_SHAFT_HIT || dEnd < GRAIN_SHAFT_HIT) continue
+          setDragging({
+            kind: 'grainLine',
+            pieceId: p.id,
+            startLocal: { ...local },
+            lineAtPointerDown: { start: { ...grain.start }, end: { ...grain.end } },
+          })
+          containerRef.current?.setPointerCapture?.(e.pointerId)
+          return
+        }
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
@@ -1178,6 +1551,58 @@ export function WorkspaceCanvas() {
             return
           }
         }
+        if (imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
+          const session = imageDigitizeSession
+          const lay = workspaceImageLayout(session)
+          if (session.locked) {
+            if (lay && isWorldInsideWorkspaceImage(world, session)) {
+              selectPiece(null)
+              setWorkspaceImageSelected(true)
+              ;(e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId)
+              return
+            }
+          } else {
+            if (!lay) return
+          const corners: { x: number; y: number }[] = [
+            { x: lay.left, y: lay.top },
+            { x: lay.right, y: lay.top },
+            { x: lay.left, y: lay.bottom },
+            { x: lay.right, y: lay.bottom },
+          ]
+          for (const c of corners) {
+            const d = Math.hypot(world.x - c.x, world.y - c.y)
+            if (d <= IMAGE_CORNER_HIT_MM) {
+              const ux = c.x - lay.cx
+              const uy = c.y - lay.cy
+              const d0 = Math.hypot(ux, uy) || 1
+              selectPiece(null)
+              setWorkspaceImageSelected(true)
+              setDragging({
+                kind: 'image-resize',
+                center: { x: lay.cx, y: lay.cy },
+                ux: ux / d0,
+                uy: uy / d0,
+                d0,
+                render0: session.renderMmPerPixel,
+              })
+              ;(e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId)
+              return
+            }
+          }
+          if (isWorldInsideWorkspaceImage(world, session)) {
+            selectPiece(null)
+            setWorkspaceImageSelected(true)
+            setDragging({
+              kind: 'image-move',
+              startWorld: world,
+              startImagePos: { ...session.imagePosition },
+            })
+            ;(e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
+          }
+        }
+        setWorkspaceImageSelected(false)
         selectPiece(null)
         return
       }
@@ -1253,7 +1678,7 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if ((tool === 'digitize' || tool === 'image-digitize') && digitizeState) {
+      if (tool === 'digitize' && digitizeState) {
         const CLOSE_HIT = 8
         const nodes = digitizeState.nodes
         if (nodes.length >= 3) {
@@ -1261,10 +1686,6 @@ export function WorkspaceCanvas() {
           const dist = Math.hypot(world.x - first.x, world.y - first.y)
           if (dist < CLOSE_HIT) {
             finishDigitize()
-            if (tool === 'image-digitize') {
-              setImageReferenceLineDraftPx(null)
-              cancelImageSession()
-            }
             return
           }
         }
@@ -1276,6 +1697,7 @@ export function WorkspaceCanvas() {
         return
       }
       // Klick ins leere Feld: keine Funktion mehr, Auswahl und Tool zurücksetzen
+      setWorkspaceImageSelected(false)
       selectPiece(null)
       setTool('select')
     },
@@ -1285,7 +1707,10 @@ export function WorkspaceCanvas() {
       view.panY,
       pieces,
       selectedPieceIds,
+      imageDigitizeSession,
+      workspaceImageSelected,
       showPoints,
+      showGrain,
       rulerMode,
       pendingNahtzugabeClick,
       setPendingNahtzugabeClick,
@@ -1298,6 +1723,7 @@ export function WorkspaceCanvas() {
       toWorld,
       setView,
       selectPiece,
+      setWorkspaceImageSelected,
       movePiece,
       addCurveToCutLine,
       addNotch,
@@ -1313,6 +1739,7 @@ export function WorkspaceCanvas() {
       digitizeState,
       addDigitizeNode,
       finishDigitize,
+      setImagePosition,
     ]
   )
 
@@ -1332,25 +1759,17 @@ export function WorkspaceCanvas() {
         return
       }
 
-      if (dragging?.kind === 'image-reference-line' && imageDigitizeSession?.imageSizePx) {
+      if (dragging?.kind === 'image-resize') {
         const world = toWorld(e.clientX, e.clientY)
-        const session = imageDigitizeSession
-        const effMmPerPixel = session.mmPerPixel ?? 1
-        const imageSizePx = session.imageSizePx!
-        const endPx = worldToImagePixel({
-          world,
-          imagePosition: session.imagePosition,
-          imageSizePx,
-          mmPerPixelEffective: effMmPerPixel,
-        })
-        setImageReferenceLineDraftPx({ start: dragging.startPx, end: endPx })
-        setDragging((d) =>
-          d && d.kind === 'image-reference-line' ? { ...d, currentPx: endPx } : d
-        )
+        const dx = world.x - dragging.center.x
+        const dy = world.y - dragging.center.y
+        const t = dx * dragging.ux + dy * dragging.uy
+        const factor = Math.max(0.12, t / dragging.d0)
+        setImageRenderMmPerPixel(dragging.render0 * factor)
         return
       }
 
-      if ((tool === 'digitize' || tool === 'image-digitize') && digitizeState && !dragging) {
+      if (tool === 'digitize' && digitizeState && !dragging) {
         const world = toWorld(e.clientX, e.clientY)
         setDigitizeMouseWorld(world)
         if (digitizeState.nodes.length >= 3) {
@@ -1360,7 +1779,7 @@ export function WorkspaceCanvas() {
           setDigitizeNearFirst(false)
         }
       }
-      if ((tool === 'digitize' || tool === 'image-digitize') && digitizeState?.isDragging) {
+      if (tool === 'digitize' && digitizeState?.isDragging) {
         const world = toWorld(e.clientX, e.clientY)
         updateDigitizeDrag(world)
         setDigitizeMouseWorld(world)
@@ -1373,6 +1792,21 @@ export function WorkspaceCanvas() {
         return
       }
       if (!dragging) {
+        const worldImg = toWorld(e.clientX, e.clientY)
+        lastPointerClientRef.current = { x: e.clientX, y: e.clientY }
+        let imgHover = false
+        if (imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
+          if (isWorldInsideWorkspaceImage(worldImg, imageDigitizeSession)) {
+            imgHover = true
+            for (const p of pieces) {
+              if (p.cutLine.length >= 3 && isPointInsidePiece(worldToPieceLocal(worldImg, p), p)) {
+                imgHover = false
+                break
+              }
+            }
+          }
+        }
+        setHoveredWorkspaceImage(imgHover)
         if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
           const world = toWorld(e.clientX, e.clientY)
           let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
@@ -1823,6 +2257,17 @@ export function WorkspaceCanvas() {
           ...currentLine,
           [dragging.which]: local,
         })
+      } else if (dragging.kind === 'grainLine') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece || piece.cutLine.length < 3) return
+        const bounds = curvesBounds(piece.cutLine)
+        if (!bounds) return
+        const world = toWorld(e.clientX, e.clientY)
+        const local = worldToPieceLocal(world, piece)
+        const dx = local.x - dragging.startLocal.x
+        const dy = local.y - dragging.startLocal.y
+        const newLine = clampGrainLineParallelTranslation(dragging.lineAtPointerDown, dx, dy, bounds)
+        setGrainLine(dragging.pieceId, newLine)
       } else if (dragging.kind === 'rectangle') {
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'rectangle' ? { ...d, current } : d))
@@ -1860,7 +2305,10 @@ export function WorkspaceCanvas() {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
-        const current = worldToPieceLocal(world, piece)
+        let current = worldToPieceLocal(world, piece)
+        if (e.altKey || e.metaKey) {
+          current = snapLineTo45Deg(dragging.start, current)
+        }
         setDragging((d) => (d && d.kind === 'line' ? { ...d, current } : d))
       } else if (dragging.kind === 'notch') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -1968,6 +2416,11 @@ export function WorkspaceCanvas() {
       snapSeamEdgeToMatch,
       setPieceRotation,
       setPiecePivot,
+      setGrainLine,
+      setImagePosition,
+      setImageRenderMmPerPixel,
+      imageDigitizeSession,
+      setHoveredWorkspaceImage,
     ]
   )
 
@@ -1986,40 +2439,129 @@ export function WorkspaceCanvas() {
   }, [pieceContextMenu])
 
   useEffect(() => {
+    if (!workspaceImageQuickMenu) return
+    const onClose = () => setWorkspaceImageQuickMenu(null)
+    document.addEventListener('pointerdown', onClose)
+    return () => document.removeEventListener('pointerdown', onClose)
+  }, [workspaceImageQuickMenu])
+
+  /** Mittelklick (Mausrad): alle Modi abbrechen — überall außer in Eingabefeldern und auf Links (Neuer Tab). */
+  const resetCanvasTransientState = useCallback(() => {
+    setDragging(null)
+    setLineLengthEditor(null)
+    setWorkspaceImageQuickMenu(null)
+    setGrainContextMenu(null)
+    setPieceContextMenu(null)
+    setGrainFlipHover(null)
+    setNotchPreview(null)
+    setPointPreview(null)
+    setDigitizeMouseWorld(null)
+    setDigitizeNearFirst(false)
+    setHoveredSeamForNahtzuordnung(null)
+    setHoveredPieceId(null)
+    setHoveredDeletablePoint(null)
+    setHoveredDeletableNotch(null)
+    setHoveredInternalLine(null)
+    setHoveredSeamAssignmentId(null)
+    setHoveredCurvepointSegment(null)
+    closeSegmentMenu()
+  }, [closeSegmentMenu])
+
+  useEffect(() => {
+    const skipMiddle = (el: HTMLElement | null) => {
+      if (!el) return true
+      if (el.closest('input, textarea, select, [contenteditable="true"]')) return true
+      if (el.closest('a[href]')) return true
+      return false
+    }
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 1) return
+      if (skipMiddle(e.target as HTMLElement | null)) return
+      e.preventDefault()
+      e.stopPropagation()
+      exitAllModes()
+      resetCanvasTransientState()
+    }
+    /** Ohne stopPropagation erreicht Mittelklick trotzdem ggf. noch SVG/React und startet Vertex-Drag. */
+    const onAuxClick = (e: MouseEvent) => {
+      if (e.button !== 1) return
+      if (skipMiddle(e.target as HTMLElement | null)) return
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    document.addEventListener('pointerdown', onPointerDown, { capture: true })
+    document.addEventListener('auxclick', onAuxClick, { capture: true })
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, { capture: true })
+      document.removeEventListener('auxclick', onAuxClick, { capture: true })
+    }
+  }, [exitAllModes, resetCanvasTransientState])
+
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (!inInput && lineLengthEditor && e.key === 'Escape') {
+        e.preventDefault()
+        if (lineLengthEditor.mode === 'draw') {
+          setDragging(null)
+          setTool('select')
+        }
+        setLineLengthEditor(null)
+        return
+      }
+      if (!inInput && dragging?.kind === 'line' && tool === 'internalLine' && e.key === ' ') {
+        e.preventDefault()
+        const len = Math.hypot(
+          dragging.current.x - dragging.start.x,
+          dragging.current.y - dragging.start.y
+        )
+        setLineLengthEditor({
+          mode: 'draw',
+          pieceId: dragging.pieceId,
+          start: dragging.start,
+          current: dragging.current,
+          value: len > 0 ? len.toFixed(1) : '100',
+        })
+        return
+      }
+      if (!inInput && !dragging && hoveredInternalLine && e.key === ' ') {
+        const piece = pieces.find((p) => p.id === hoveredInternalLine.pieceId)
+        const curve = piece?.internalLines[hoveredInternalLine.curveIndex]
+        if (piece && curve) {
+          e.preventDefault()
+          const len = Math.hypot(curve.end.x - curve.start.x, curve.end.y - curve.start.y)
+          setLineLengthEditor({
+            mode: 'hoverInternal',
+            pieceId: piece.id,
+            curveIndex: hoveredInternalLine.curveIndex,
+            start: curve.start,
+            current: curve.end,
+            value: len > 0 ? len.toFixed(1) : '100',
+          })
+          return
+        }
+      }
       if (!inInput && (e.key === 'F1' || e.key === '?')) {
         setShowHelpModal(true)
         e.preventDefault()
         return
       }
       const segmentActive = hoveredSegment ?? (segmentMenuPinned ? pinnedSegment : null)
+      if (!inInput && workspaceImageQuickMenu && e.key === 'Escape') {
+        e.preventDefault()
+        setWorkspaceImageQuickMenu(null)
+        return
+      }
       if (!inInput && e.key === 'Escape') {
         if (tool === 'digitize' && digitizeState) {
           e.preventDefault()
           cancelDigitize()
           return
         }
-        if (tool === 'image-digitize' && digitizeState) {
+        if (workspaceImageSelected) {
           e.preventDefault()
-          setImageReferenceLineDraftPx(null)
-          setImageReferenceLengthDialog(null)
-          cancelImageDigitizeRun()
-          return
-        }
-        if (tool === 'image-reference-line') {
-          e.preventDefault()
-          setImageReferenceLineDraftPx(null)
-          setImageReferenceLengthDialog(null)
-          setTool('image-move')
-          return
-        }
-        if (tool === 'image-move') {
-          e.preventDefault()
-          setImageReferenceLineDraftPx(null)
-          setImageReferenceLengthDialog(null)
-          cancelImageSession()
+          setWorkspaceImageSelected(false)
           return
         }
       }
@@ -2036,6 +2578,22 @@ export function WorkspaceCanvas() {
       if (grainFlipHover && !grainContextMenu && !inInput && e.key === ' ') {
         e.preventDefault()
         setGrainContextMenu({ pieceId: grainFlipHover.pieceId, clientX: grainFlipHover.clientX, clientY: grainFlipHover.clientY })
+        return
+      }
+      if (
+        !inInput &&
+        !dragging &&
+        !segmentActive &&
+        hoveredWorkspaceImage &&
+        imageDigitizeSession?.imageDataUrl &&
+        imageDigitizeSession.imageSizePx &&
+        e.key === ' '
+      ) {
+        e.preventDefault()
+        setWorkspaceImageQuickMenu({
+          clientX: lastPointerClientRef.current.x,
+          clientY: lastPointerClientRef.current.y,
+        })
         return
       }
       if (segmentActive && !inInput) {
@@ -2107,6 +2665,49 @@ export function WorkspaceCanvas() {
         }
         return
       }
+      if (!inInput && tool === 'select' && e.altKey && (e.key === 'p' || e.key === 'P')) {
+        let pivotLocal: Point | null = null
+        let pieceId: string | null = null
+        if (hoveredDeletableNotch) {
+          const piece = pieces.find((x) => x.id === hoveredDeletableNotch.pieceId)
+          const notch = piece?.notches.find((n) => n.id === hoveredDeletableNotch.notchId)
+          if (piece && notch) {
+            const { position } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+            pivotLocal = { ...position }
+            pieceId = piece.id
+          }
+        } else if (hoveredDeletablePoint?.kind === 'vertex') {
+          const piece = pieces.find((x) => x.id === hoveredDeletablePoint.pieceId)
+          if (piece) {
+            const p = getMasterContourVertexLocal(piece, hoveredDeletablePoint.vertexIndex)
+            if (p) {
+              pivotLocal = p
+              pieceId = piece.id
+            }
+          }
+        } else if (hoveredDeletablePoint?.kind === 'pointOnCurve') {
+          const piece = pieces.find((x) => x.id === hoveredDeletablePoint.pieceId)
+          if (piece) {
+            const c = piece.cutLine[hoveredDeletablePoint.curveIndex]
+            if (c?.type === 'bezier') {
+              pivotLocal = bezierAt(c, 0.5)
+              pieceId = piece.id
+            }
+          }
+        }
+        if (pivotLocal && pieceId && selectedPieceIds.includes(pieceId)) {
+          setPiecePivot(pieceId, pivotLocal)
+          setToastMessage('success:Drehpunkt hier gesetzt (Alt+P).')
+        } else if (!pivotLocal || !pieceId) {
+          setToastMessage(
+            'error:Kerbe hovern, oder mit „Punkte anzeigen“ Ecke bzw. Kurvenpunkt (Bézier-Mitte) hovern, dann Alt+P.'
+          )
+        } else {
+          setToastMessage('error:Teil auswählen, dann Alt+P auf dem gewünschten Punkt.')
+        }
+        e.preventDefault()
+        return
+      }
       if (e.key === 'p' || e.key === 'P') {
         if (!inInput) {
           setTool('point')
@@ -2152,6 +2753,11 @@ export function WorkspaceCanvas() {
         return
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (workspaceImageSelected && imageDigitizeSession && !hoveredDeletablePoint) {
+        e.preventDefault()
+        cancelImageSession()
+        return
+      }
       if (hoveredSeamAssignmentId) {
         e.preventDefault()
         removeSeamAssignment(hoveredSeamAssignmentId)
@@ -2200,6 +2806,9 @@ export function WorkspaceCanvas() {
     setTool,
     offsetSegment,
     addInternalLine,
+    addCurveToCutLine,
+    dragging,
+    lineLengthEditor,
     rotatePiece90,
     alignPieceToGrain,
     closeSegmentMenu,
@@ -2213,31 +2822,24 @@ export function WorkspaceCanvas() {
     cancelDigitize,
     startDigitize,
     setShowHelpModal,
+    workspaceImageSelected,
+    imageDigitizeSession,
+    cancelImageSession,
+    setWorkspaceImageSelected,
+    hoveredWorkspaceImage,
+    workspaceImageQuickMenu,
+    setPiecePivot,
+    setToastMessage,
+    tool,
   ])
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((_e?: React.PointerEvent) => {
     if (dragging?.kind === 'digitizeDrag') {
       finishDigitizeDrag()
       setDragging(null)
       return
     }
-    if (dragging?.kind === 'image-move') {
-      setDragging(null)
-      return
-    }
-    if (dragging?.kind === 'image-reference-line') {
-      const { startPx, currentPx } = dragging
-      const pixelLength = Math.hypot(currentPx.x - startPx.x, currentPx.y - startPx.y)
-      // Fuer MVP: Referenzlinie darf auch "kurz" (in Pixeln) sein.
-      // Nur exakt/nahezu Null wird abgelehnt, weil sonst die Skalierung
-      // (mmPerPixel = lengthMm / pixelLength) nicht sinnvoll berechenbar ist.
-      if (!Number.isFinite(pixelLength)) {
-        setToastMessage('error:Referenzlinie ungueltig')
-        setImageReferenceLineDraftPx(null)
-        setDragging(null)
-        return
-      }
-      setImageReferenceLengthDialog({ referenceLinePx: { start: startPx, end: currentPx } })
+    if (dragging?.kind === 'image-move' || dragging?.kind === 'image-resize') {
       setDragging(null)
       return
     }
@@ -2273,6 +2875,7 @@ export function WorkspaceCanvas() {
       }
     } else if (dragging?.kind === 'line') {
       const { pieceId, start, current } = dragging
+      if (lineLengthEditor && lineLengthEditor.pieceId === pieceId) return
       const piece = pieces.find((p) => p.id === pieceId)
       if (piece) {
         const len = Math.hypot(current.x - start.x, current.y - start.y)
@@ -2311,6 +2914,13 @@ export function WorkspaceCanvas() {
             ? (Math.atan2(dy, dx) * 180) / Math.PI
             : outwardNormalAngleAt(curves, curveIndex, t) + 180
         const id = 'n' + Math.random().toString(36).slice(2, 9)
+        const rejectNotchSpacing = () => {
+          setToastMessage(
+            'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).'
+          )
+          setDragging(null)
+          setTool('notch')
+        }
         if (useSeamLine && piece.seamLine.length >= 3) {
           let notchPos = position
           let notchAngle = angle
@@ -2321,6 +2931,11 @@ export function WorkspaceCanvas() {
               const ct = cutNearest.t ?? 0
               notchAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
             }
+          }
+          const nrOnCut = cutNearest ?? nearestCurveIndexAndPoint(notchPos, piece.cutLine)
+          if (!nrOnCut || !isNotchSpacingValid(piece, nrOnCut.curveIndex, nrOnCut.t ?? 0)) {
+            rejectNotchSpacing()
+            return
           }
           addNotch(pieceId, {
             id,
@@ -2335,6 +2950,10 @@ export function WorkspaceCanvas() {
           const n = piece.cutLine.length
           let vertexIndex: number | undefined
           if (inMiddle) {
+            if (!isNotchSpacingValid(piece, curveIndex, t)) {
+              rejectNotchSpacing()
+              return
+            }
             const curve = piece.cutLine[curveIndex]
             if (curve.type === 'bezier') {
               insertPointOnCutLine(pieceId, curveIndex, position, t)
@@ -2344,6 +2963,10 @@ export function WorkspaceCanvas() {
             vertexIndex = curveIndex + 1
           } else {
             vertexIndex = t < 0.5 ? curveIndex : (curveIndex + 1) % n
+            if (!isNotchSpacingValid(piece, vertexIndex, 0)) {
+              rejectNotchSpacing()
+              return
+            }
           }
           addNotch(pieceId, {
             id,
@@ -2399,9 +3022,47 @@ export function WorkspaceCanvas() {
         recomputeSeamLine(dragging.pieceId)
       }
     }
+    if (_e && dragging?.kind === 'grainLine') {
+      const pieceSnap = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
+      if (pieceSnap && pieceSnap.cutLine.length >= 3) {
+        const world = toWorld(_e.clientX, _e.clientY)
+        const local = worldToPieceLocal(world, pieceSnap)
+        const nr = nearestCurveIndexAndPoint(local, pieceSnap.cutLine)
+        if (nr && nr.distance <= GRAIN_SNAP_TO_EDGE_MM) {
+          const t = nr.t ?? 0
+          const tangDeg = contourTangentAngleDeg(pieceSnap.cutLine, nr.curveIndex, t)
+          const currentLine = pieceSnap.grainLine ?? getPieceGrainLine(pieceSnap)
+          const aligned = alignGrainLineToContourTangent(currentLine, tangDeg)
+          const bounds = curvesBounds(pieceSnap.cutLine)
+          if (bounds) {
+            setGrainLine(dragging.pieceId, clampLineSegmentInAabb(aligned, bounds))
+          }
+        }
+      }
+    }
     setDragging(null)
     setHoveredPieceId(null)
-  }, [dragging, pieces, tool, addPiece, addCurveToCutLine, addInternalLine, addInternalLines, insertPointOnCutLine, addNotch, addDrill, updateNotch, notchPreview, setTool, finishDigitizeDrag, recomputeSeamLine])
+  }, [
+    dragging,
+    pieces,
+    tool,
+    addPiece,
+    addCurveToCutLine,
+    addInternalLine,
+    addInternalLines,
+    insertPointOnCutLine,
+    addNotch,
+    addDrill,
+    updateNotch,
+    notchPreview,
+    setTool,
+    setToastMessage,
+    finishDigitizeDrag,
+    recomputeSeamLine,
+    lineLengthEditor,
+    toWorld,
+    setGrainLine,
+  ])
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault()
@@ -2445,124 +3106,10 @@ export function WorkspaceCanvas() {
       style={{
         touchAction: 'none',
         cursor:
-          rulerMode ? 'crosshair' : tool === 'pan' || tool === 'image-move' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' || tool === 'image-reference-line' || tool === 'image-digitize' ? 'crosshair' : 'default',
+          rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' ? 'crosshair' : 'default',
       }}
     >
       <div className="workspace-version">Aktuell V. 0.0.4</div>
-      {imageDigitizeSession && imageDigitizeSession.imageDataUrl && imageDigitizeSession.imageSizePx && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 12,
-            top: 36,
-            zIndex: 50,
-            background: 'rgba(255,255,255,0.95)',
-            border: '1px solid #ccc',
-            borderRadius: 8,
-            padding: 10,
-            fontSize: 13,
-            width: 280,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Bild-Digitalisierung</div>
-          <div style={{ color: '#444', marginBottom: 10 }}>
-            {imageDigitizeSession.mmPerPixel == null ? (
-              <>Keine Referenz</>
-            ) : (
-              <>Kalibriert (1 px = {imageDigitizeSession.mmPerPixel.toFixed(4)} mm)</>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-            {tool === 'image-digitize' ? (
-              <button
-                type="button"
-                style={{
-                  padding: '6px 10px',
-                  fontSize: 12,
-                  border: '1px solid #ccc',
-                  borderRadius: 6,
-                  background: '#fff',
-                  cursor: 'pointer',
-                }}
-                onClick={() => {
-                  setImageReferenceLineDraftPx(null)
-                  setImageReferenceLengthDialog(null)
-                  cancelImageSession()
-                }}
-              >
-                Abbrechen
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  style={{
-                    padding: '6px 10px',
-                    fontSize: 12,
-                    border: '1px solid #ccc',
-                    borderRadius: 6,
-                    background: '#fff',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => {
-                    clearImageReferenceLine()
-                    setImageReferenceLineDraftPx(null)
-                    setImageReferenceLengthDialog(null)
-                    setTool('image-reference-line')
-                  }}
-                >
-                  Referenz setzen
-                </button>
-                <button
-                  type="button"
-                  disabled={imageDigitizeSession.mmPerPixel == null}
-                  style={{
-                    padding: '6px 10px',
-                    fontSize: 12,
-                    border: '1px solid #ccc',
-                    borderRadius: 6,
-                    background: imageDigitizeSession.mmPerPixel == null ? '#e0e0e0' : '#1976d2',
-                    color: imageDigitizeSession.mmPerPixel == null ? '#999' : '#fff',
-                    cursor: imageDigitizeSession.mmPerPixel == null ? 'default' : 'pointer',
-                  }}
-                  onClick={() => startImageDigitize()}
-                >
-                  Digitalisieren
-                </button>
-                <button
-                  type="button"
-                  style={{
-                    padding: '6px 10px',
-                    fontSize: 12,
-                    border: '1px solid #ccc',
-                    borderRadius: 6,
-                    background: '#fff',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => {
-                    setImageReferenceLineDraftPx(null)
-                    setImageReferenceLengthDialog(null)
-                    cancelImageSession()
-                  }}
-                >
-                  Abbrechen
-                </button>
-              </>
-            )}
-          </div>
-          <div style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>Transparenz</div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={imageDigitizeSession.imageOpacity}
-            onChange={(e) => setImageOpacity(parseFloat(e.target.value))}
-            style={{ width: '100%' }}
-          />
-        </div>
-      )}
       {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"
@@ -2692,6 +3239,7 @@ export function WorkspaceCanvas() {
                 const piece = pieces.find((p) => p.id === grainContextMenu.pieceId)
                 if (!piece) return
                 selectPiece(piece.id)
+                setPiecePropertiesDialogPieceId(piece.id)
                 setGrainContextMenu(null)
                 setGrainFlipHover(null)
               }}
@@ -2765,6 +3313,28 @@ export function WorkspaceCanvas() {
               }}
             >
               An Laufrichtung ausrichten <span className="menubar-shortcut">A</span>
+            </button>
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                selectPiece(pieceContextMenu.pieceId)
+                setPiecePropertiesDialogPieceId(pieceContextMenu.pieceId)
+                setPieceContextMenu(null)
+              }}
+            >
+              Teil-Eigenschaften
             </button>
           </div>
         </div>
@@ -2915,13 +3485,22 @@ export function WorkspaceCanvas() {
             imageDigitizeSession.imageSizePx && (
               (() => {
                 const session = imageDigitizeSession
-                const effMmPerPixel = session.mmPerPixel ?? 1
+                const effMmPerPixel = session.renderMmPerPixel
                 const imageDataUrl = session.imageDataUrl ?? undefined
                 const imageSizePx = session.imageSizePx!
                 const imgW = imageSizePx.width * effMmPerPixel
                 const imgH = imageSizePx.height * effMmPerPixel
                 const x = session.imagePosition.x - imgW / 2
                 const y = session.imagePosition.y - imgH / 2
+                const lay = workspaceImageLayout(session)
+                if (!lay) return null
+                const corners = [
+                  { cx: lay.left, cy: lay.top },
+                  { cx: lay.right, cy: lay.top },
+                  { cx: lay.left, cy: lay.bottom },
+                  { cx: lay.right, cy: lay.bottom },
+                ]
+                const handleR = 5
 
                 return (
                   <g pointerEvents="none">
@@ -2931,37 +3510,36 @@ export function WorkspaceCanvas() {
                       y={y}
                       width={imgW}
                       height={imgH}
-                      opacity={session.imageOpacity}
+                      opacity={WORKSPACE_IMAGE_OPACITY}
                       preserveAspectRatio="xMidYMid meet"
                     />
-
-                    {(imageReferenceLineDraftPx ?? session.referenceLinePx) && (
-                      (() => {
-                        const { start, end } = imageReferenceLineDraftPx ?? session.referenceLinePx!
-                        const a = imagePixelToWorld({
-                          pixel: start,
-                          imagePosition: session.imagePosition,
-                          imageSizePx,
-                          mmPerPixelEffective: effMmPerPixel,
-                        })
-                        const b = imagePixelToWorld({
-                          pixel: end,
-                          imagePosition: session.imagePosition,
-                          imageSizePx,
-                          mmPerPixelEffective: effMmPerPixel,
-                        })
-                        return (
-                          <line
-                            x1={a.x}
-                            y1={a.y}
-                            x2={b.x}
-                            y2={b.y}
-                            stroke="#e65100"
-                            strokeWidth={0.9}
-                            strokeDasharray="4 2"
-                          />
-                        )
-                      })()
+                    {workspaceImageSelected && (
+                      <>
+                        <rect
+                          x={lay.left}
+                          y={lay.top}
+                          width={lay.w}
+                          height={lay.h}
+                          fill="none"
+                          stroke={session.locked ? '#e65100' : '#1976d2'}
+                          strokeWidth={1.2}
+                          strokeDasharray="6 4"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        {!session.locked &&
+                          corners.map((c, i) => (
+                            <circle
+                              key={`img-handle-${i}`}
+                              cx={c.cx}
+                              cy={c.cy}
+                              r={handleR}
+                              fill="#fff"
+                              stroke="#1976d2"
+                              strokeWidth={1.2}
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ))}
+                      </>
                     )}
                   </g>
                 )
@@ -2972,6 +3550,7 @@ export function WorkspaceCanvas() {
             <PieceGroup
               key={piece.id}
               piece={piece}
+              viewZoom={view.zoom}
               isSelected={selectedPieceIds.includes(piece.id)}
               isHovered={hoveredPieceId === piece.id}
               hoveredSegmentCurveIndex={effectiveSegmentForHighlight?.pieceId === piece.id ? effectiveSegmentForHighlight.curveIndex : null}
@@ -3072,16 +3651,16 @@ export function WorkspaceCanvas() {
                 ? pointPreview.point
                 : (nearestCurveIndexAndPoint(pointPreview.point, piece.seamLine)?.point ?? pointPreview.point)
             const w = pieceLocalToWorld(displayPoint, piece)
-            const ps = 1 / view.zoom
+            const ps = 1 / Math.max(view.zoom, 1e-6)
             const [fill, stroke] = COLOR_SOFT_PUNKT
             return (
               <circle
                 cx={w.x}
                 cy={w.y}
-                r={1.5 * ps}
+                r={POINT_SCREEN_R * ps}
                 fill={fill}
                 stroke={stroke}
-                strokeWidth={0.6 * ps}
+                strokeWidth={POINT_SCREEN_STROKE * ps}
                 pointerEvents="none"
               />
             )
@@ -3089,7 +3668,7 @@ export function WorkspaceCanvas() {
           {/* Eckpunkte: Seam-as-Master = auf seamLine; sonst cut/seam je nach Ansicht */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
-              const ps = 1 / view.zoom
+              const ps = 1 / Math.max(view.zoom, 1e-6)
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 const useSeamMaster = piece != null && piece.seamAllowanceMm != null && piece.seamLine.length >= 3
@@ -3108,16 +3687,16 @@ export function WorkspaceCanvas() {
                   const w = pieceLocalToWorld(v, piece)
                   const isSoft = (piece.softVertices ?? []).includes(vi)
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
-                  const eckSize = 3 * ps
+                  const eckSize = POINT_SCREEN_RECT * ps
                   return isSoft ? (
                     <circle
                       key={`${pieceId}-v-${vi}`}
                       cx={w.x}
                       cy={w.y}
-                      r={1.5 * ps}
+                      r={POINT_SCREEN_R * ps}
                       fill={fill}
                       stroke={stroke}
-                      strokeWidth={0.6 * ps}
+                      strokeWidth={POINT_SCREEN_STROKE * ps}
                       pointerEvents="none"
                     />
                   ) : (
@@ -3129,7 +3708,7 @@ export function WorkspaceCanvas() {
                       height={eckSize}
                       fill={fill}
                       stroke={stroke}
-                      strokeWidth={0.6 * ps}
+                      strokeWidth={POINT_SCREEN_STROKE * ps}
                       pointerEvents="none"
                     />
                   )
@@ -3140,7 +3719,7 @@ export function WorkspaceCanvas() {
           {/* Kurvenpunkte (Punkt auf Kurve): immer cutLine – Indizes für Ziehen eindeutig */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
-              const ps = 1 / view.zoom
+              const ps = 1 / Math.max(view.zoom, 1e-6)
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
@@ -3155,10 +3734,10 @@ export function WorkspaceCanvas() {
                       key={`${pieceId}-oncurve-${ci}`}
                       cx={w.x}
                       cy={w.y}
-                      r={1.5 * ps}
+                      r={POINT_SCREEN_R * ps}
                       fill={fill}
                       stroke={stroke}
-                      strokeWidth={0.6 * ps}
+                      strokeWidth={POINT_SCREEN_STROKE * ps}
                       pointerEvents="none"
                     />,
                   ]
@@ -3166,7 +3745,8 @@ export function WorkspaceCanvas() {
               })
             })()}
           {/* Digitalisierung: Linien/Kurven, Punkte, Handles, Vorschau, Close-Indikator */}
-          {(tool === 'digitize' || tool === 'image-digitize') && digitizeState && digitizeState.nodes.length > 0 && (() => {
+          {tool === 'digitize' && digitizeState && digitizeState.nodes.length > 0 && (() => {
+            const dps = 1 / Math.max(view.zoom, 1e-6)
             const nodes = digitizeState.nodes
             const segments: React.ReactNode[] = []
             for (let i = 0; i < nodes.length - 1; i++) {
@@ -3211,10 +3791,23 @@ export function WorkspaceCanvas() {
                       stroke="#e65100" strokeWidth={0.5} strokeDasharray="2 1.5" opacity={0.7} />
                     <line x1={n.point.x} y1={n.point.y} x2={reflected.x} y2={reflected.y}
                       stroke="#e65100" strokeWidth={0.5} strokeDasharray="2 1.5" opacity={0.5} />
-                    <circle cx={n.handleOut.x} cy={n.handleOut.y} r={1.5}
-                      fill="#e65100" stroke="#fff" strokeWidth={0.4} />
-                    <circle cx={reflected.x} cy={reflected.y} r={1.2}
-                      fill="none" stroke="#e65100" strokeWidth={0.4} opacity={0.5} />
+                    <circle
+                      cx={n.handleOut.x}
+                      cy={n.handleOut.y}
+                      r={DIGITIZE_HANDLE_R * dps}
+                      fill="#e65100"
+                      stroke="#fff"
+                      strokeWidth={0.5 * dps}
+                    />
+                    <circle
+                      cx={reflected.x}
+                      cy={reflected.y}
+                      r={DIGITIZE_HANDLE_REFLECT_R * dps}
+                      fill="none"
+                      stroke="#e65100"
+                      strokeWidth={0.45 * dps}
+                      opacity={0.5}
+                    />
                   </g>
                 )
               }
@@ -3234,11 +3827,12 @@ export function WorkspaceCanvas() {
                 {nodes.map((n, i) => (
                   <circle
                     key={`dig-pt-${i}`}
-                    cx={n.point.x} cy={n.point.y}
-                    r={i === 0 && digitizeNearFirst ? 3.5 : 2}
+                    cx={n.point.x}
+                    cy={n.point.y}
+                    r={(i === 0 && digitizeNearFirst ? DIGITIZE_NODE_R_NEAR : DIGITIZE_NODE_R) * dps}
                     fill={i === 0 && digitizeNearFirst ? '#4caf50' : '#2196F3'}
                     stroke={i === 0 && digitizeNearFirst ? '#1b5e20' : '#0d47a1'}
-                    strokeWidth={0.6}
+                    strokeWidth={0.75 * dps}
                   />
                 ))}
               </g>
@@ -3354,11 +3948,33 @@ export function WorkspaceCanvas() {
             const len = Math.hypot(end.x - start.x, end.y - start.y)
             const mx = (start.x + end.x) / 2
             const my = (start.y + end.y) / 2
+            const rps = 1 / Math.max(view.zoom, 1e-6)
             return (
               <g pointerEvents="none">
-                <line x1={start.x} y1={start.y} x2={end.x} y2={end.y} stroke="#1565c0" strokeWidth={1.2} />
-                <circle cx={start.x} cy={start.y} r={2} fill="#1565c0" stroke="#fff" strokeWidth={0.8} />
-                <circle cx={end.x} cy={end.y} r={2} fill="#1565c0" stroke="#fff" strokeWidth={0.8} />
+                <line
+                  x1={start.x}
+                  y1={start.y}
+                  x2={end.x}
+                  y2={end.y}
+                  stroke="#1565c0"
+                  strokeWidth={1.2 * rps}
+                />
+                <circle
+                  cx={start.x}
+                  cy={start.y}
+                  r={POINT_SCREEN_R * rps}
+                  fill="#1565c0"
+                  stroke="#fff"
+                  strokeWidth={POINT_SCREEN_STROKE * rps}
+                />
+                <circle
+                  cx={end.x}
+                  cy={end.y}
+                  r={POINT_SCREEN_R * rps}
+                  fill="#1565c0"
+                  stroke="#fff"
+                  strokeWidth={POINT_SCREEN_STROKE * rps}
+                />
                 <text x={mx} y={my - 6} textAnchor="middle" fontSize={10} fill="#1565c0" fontWeight="600">
                   {len.toFixed(1)} mm
                 </text>
@@ -3504,20 +4120,6 @@ export function WorkspaceCanvas() {
             })}
         </g>
       </svg>
-      {imageReferenceLengthDialog && (
-        <ImageReferenceModal
-          referenceLinePx={imageReferenceLengthDialog.referenceLinePx}
-          onConfirm={() => {
-            setImageReferenceLineDraftPx(null)
-            setImageReferenceLengthDialog(null)
-          }}
-          onCancel={() => {
-            setImageReferenceLineDraftPx(null)
-            setImageReferenceLengthDialog(null)
-            setTool('image-move')
-          }}
-        />
-      )}
       <div className="workspace-stoff-icon" title="So liegen die Teile auf dem Stoff beim Zuschneiden">
         <svg viewBox="0 0 48 44" width="44" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           {/* Stoffrolle links: Querschnitt */}
@@ -3532,6 +4134,240 @@ export function WorkspaceCanvas() {
           <path d="M 10 22 C 30 20 40 22 40 22" />
         </svg>
       </div>
+      {(dragging?.kind === 'line' && tool === 'internalLine' && !lineLengthEditor) && (
+        <div style={{
+          position: 'absolute',
+          top: 16,
+          right: 16,
+          background: 'rgba(21,101,192,0.92)',
+          color: '#fff',
+          padding: '6px 10px',
+          borderRadius: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          zIndex: 9998,
+          pointerEvents: 'none',
+        }}>
+          Leertaste: feste Laenge setzen
+        </div>
+      )}
+      {!dragging && hoveredInternalLine && !lineLengthEditor && (
+        <div style={{
+          position: 'absolute',
+          top: 16,
+          right: 16,
+          background: 'rgba(21,101,192,0.92)',
+          color: '#fff',
+          padding: '6px 10px',
+          borderRadius: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          zIndex: 9998,
+          pointerEvents: 'none',
+        }}>
+          Linie hovern + Leertaste: Laenge aendern
+        </div>
+      )}
+      {tool === 'select' &&
+        !dragging &&
+        hoveredWorkspaceImage &&
+        imageDigitizeSession?.imageDataUrl &&
+        !workspaceImageQuickMenu &&
+        !lineLengthEditor && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 56,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(21,101,192,0.92)',
+              color: '#fff',
+              padding: '6px 10px',
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 600,
+              zIndex: 9998,
+              pointerEvents: 'none',
+              maxWidth: '90%',
+              textAlign: 'center',
+            }}
+          >
+            {imageDigitizeSession.locked
+              ? 'Leertaste: Menü — Bild wieder freigeben oder Auswahl aufheben'
+              : 'Leertaste: Menü — Bild festsetzen (kein Verschieben/Größe)'}
+          </div>
+        )}
+      {workspaceImageQuickMenu && imageDigitizeSession?.imageDataUrl && (
+        <div
+          role="menu"
+          style={{
+            position: 'fixed',
+            left: Math.min(
+              workspaceImageQuickMenu.clientX + 6,
+              (typeof window !== 'undefined' ? window.innerWidth : 800) - 216
+            ),
+            top: workspaceImageQuickMenu.clientY + 6,
+            zIndex: 10002,
+            background: '#fff',
+            border: '1px solid #ccc',
+            borderRadius: 6,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+            padding: '4px 0',
+            minWidth: 200,
+            fontSize: 13,
+            fontFamily: 'sans-serif',
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div style={{ padding: '6px 12px', color: '#666', fontSize: 11, borderBottom: '1px solid #eee' }}>
+            Hintergrundbild
+          </div>
+          {!imageDigitizeSession.locked ? (
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '8px 14px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                setWorkspaceImageLocked(true)
+                setWorkspaceImageQuickMenu(null)
+              }}
+            >
+              Bild festsetzen
+            </button>
+          ) : (
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '8px 14px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                setWorkspaceImageLocked(false)
+                setWorkspaceImageQuickMenu(null)
+              }}
+            >
+              Bearbeiten freigeben
+            </button>
+          )}
+          <button
+            type="button"
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '8px 14px',
+              background: 'none',
+              border: 'none',
+              textAlign: 'left',
+              cursor: 'pointer',
+              fontSize: 13,
+              borderTop: '1px solid #eee',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+            onClick={() => {
+              setWorkspaceImageSelected(false)
+              setWorkspaceImageQuickMenu(null)
+            }}
+          >
+            Auswahl aufheben
+          </button>
+        </div>
+      )}
+      {lineLengthEditor && (
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            const mm = Number.parseFloat(lineLengthEditor.value)
+            if (!Number.isFinite(mm) || mm <= 0) {
+              setToastMessage('error: Bitte eine gueltige Laenge in mm eingeben.')
+              return
+            }
+            const end = pointAtDistanceOnRay(lineLengthEditor.start, lineLengthEditor.current, mm)
+            if (lineLengthEditor.mode === 'hoverInternal' && lineLengthEditor.curveIndex != null) {
+              const piece = pieces.find((p) => p.id === lineLengthEditor.pieceId)
+              if (!piece || lineLengthEditor.curveIndex < 0 || lineLengthEditor.curveIndex >= piece.internalLines.length) {
+                setToastMessage('error: Linie konnte nicht aktualisiert werden.')
+                return
+              }
+              const oldCurve = piece.internalLines[lineLengthEditor.curveIndex]
+              const nextCurve = { ...oldCurve, start: lineLengthEditor.start, end }
+              const internalLines = piece.internalLines.map((curve, idx) =>
+                idx === lineLengthEditor.curveIndex ? nextCurve : curve
+              )
+              updatePiece(piece.id, { internalLines })
+            } else {
+              addInternalLine(lineLengthEditor.pieceId, { type: 'line', start: lineLengthEditor.start, end })
+              setDragging(null)
+              setTool('select')
+            }
+            setLineLengthEditor(null)
+          }}
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '10px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            zIndex: 10000,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Laenge (mm)</span>
+          <input
+            ref={lineLengthInputRef}
+            type="text"
+            inputMode="decimal"
+            value={lineLengthEditor.value}
+            onChange={(ev) => setLineLengthEditor((s) => (s ? { ...s, value: ev.target.value } : s))}
+            style={{
+              width: 90,
+              padding: '4px 6px',
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+          />
+          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>OK</button>
+          <button
+            type="button"
+            onClick={() => {
+              if (lineLengthEditor.mode === 'draw') {
+                setDragging(null)
+                setTool('select')
+              }
+              setLineLengthEditor(null)
+            }}
+            style={{ padding: '5px 9px', fontSize: 12 }}
+          >
+            Abbrechen
+          </button>
+        </form>
+      )}
       {toastMessage && (
         <div style={{
           position: 'absolute',
