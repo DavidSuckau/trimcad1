@@ -9,6 +9,7 @@ export function DesignBar() {
     showDrills, setShowDrills,
     showInternalLines, setShowInternalLines,
     showPieceNames, setShowPieceNames,
+    showContourMeasurements, setShowContourMeasurements,
   } = useStore()
 
   const items: { label: string; checked: boolean; toggle: (v: boolean) => void }[] = [
@@ -19,6 +20,7 @@ export function DesignBar() {
     { label: 'Bohrungen', checked: showDrills, toggle: setShowDrills },
     { label: 'Interne Linien', checked: showInternalLines, toggle: setShowInternalLines },
     { label: 'Teilnamen', checked: showPieceNames, toggle: setShowPieceNames },
+    { label: 'Konturmaße', checked: showContourMeasurements, toggle: setShowContourMeasurements },
   ]
 
   return (

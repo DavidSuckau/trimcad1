@@ -361,6 +361,14 @@ export const HELP_ENTRIES: HelpEntry[] = [
     access: 'DesignBar unten → Teilnamen',
     shortcut: undefined,
   },
+  {
+    category: 'Ansicht',
+    name: 'Konturmaße',
+    description:
+      'Zeigt auf allen Teilen die Bogenlängen entlang der Schnittkontur (Außenkante): zwischen aufeinanderfolgenden Eckpunkten, zwischen Kerben und zwischen Ecke und Kerbe. Ein Klick auf die Checkbox schaltet die Anzeige für die ganze Arbeitsfläche ein oder aus.',
+    access: 'DesignBar unten → Konturmaße',
+    shortcut: undefined,
+  },
 
   // —— Sidebar & Teile ——
   {

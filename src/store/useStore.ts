@@ -13,6 +13,7 @@ import {
 } from '../geometry/seamUtils'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
+import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
@@ -164,6 +165,8 @@ type Store = {
   showDrills: boolean
   showInternalLines: boolean
   showPieceNames: boolean
+  /** Bogenlängen entlang der Schnittkontur (Ecke↔Ecke, Kerbe↔Kerbe, …) auf allen Teilen. */
+  showContourMeasurements: boolean
   rulerMode: boolean
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
@@ -200,6 +203,7 @@ type Store = {
   setShowDrills: (v: boolean) => void
   setShowInternalLines: (v: boolean) => void
   setShowPieceNames: (v: boolean) => void
+  setShowContourMeasurements: (v: boolean) => void
   setRulerMode: (v: boolean) => void
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
@@ -363,6 +367,7 @@ export const useStore = create<Store>((set, get) => ({
   showDrills: true,
   showInternalLines: true,
   showPieceNames: true,
+  showContourMeasurements: false,
   rulerMode: false,
   rulerLine: null,
   pendingNahtzugabeClick: false,
@@ -455,6 +460,7 @@ export const useStore = create<Store>((set, get) => ({
   setShowDrills: (v) => set({ showDrills: v }),
   setShowInternalLines: (v) => set({ showInternalLines: v }),
   setShowPieceNames: (v) => set({ showPieceNames: v }),
+  setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
@@ -1087,7 +1093,7 @@ export const useStore = create<Store>((set, get) => ({
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
           const seamAllowance = p.seamAllowanceMm
-          const useSeamMaster = seamAllowance != null && p.seamLine.length >= 3
+          const useSeamMaster = useSeamLineForVertexEditing(p)
           const curves = useSeamMaster ? p.seamLine : p.cutLine
           if (p.id !== pieceId || curves.length === 0) return p
           const n = curves.length
@@ -1175,8 +1181,7 @@ export const useStore = create<Store>((set, get) => ({
   removeVertex: (pieceId, vertexIndex) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
-      const useSeamMaster =
-        piece != null && piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+      const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
       const master = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
       const oldN = master.length
       return {
@@ -1185,7 +1190,7 @@ export const useStore = create<Store>((set, get) => ({
           seamAssignments: oldN > 3 ? adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vertexIndex, oldN) : s.workspace.seamAssignments,
           pieces: s.workspace.pieces.map((p) => {
             const seamAllowance = p.seamAllowanceMm
-            const seamMaster = seamAllowance != null && p.seamLine.length >= 3
+            const seamMaster = useSeamLineForVertexEditing(p)
             const curves = seamMaster ? p.seamLine : p.cutLine
             if (p.id !== pieceId || curves.length <= 3) return p
             const n = curves.length

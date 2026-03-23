@@ -16,6 +16,8 @@ import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPo
 import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
 import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves, getCurvesForSeamEdge } from '../geometry/seamUtils'
+import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
+import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
@@ -70,10 +72,10 @@ function workspaceImageLayout(session: {
   }
 }
 
-/** Vertex-Position auf der Master-Kontur (Seam bei Nahtzugabe, sonst Cut) — gleiche Logik wie Hover. */
+/** Vertex-Position auf der bearbeitbaren Kontur — gleiche Logik wie Hover (s. useSeamLineForVertexEditing). */
 function getMasterContourVertexLocal(piece: PatternPiece, vertexIndex: number): Point | null {
-  const useSeamMaster = piece.seamAllowanceMm != null && piece.seamLine.length >= 3
-  const curves = useSeamMaster ? piece.seamLine : piece.cutLine
+  const useSeamForVertices = useSeamLineForVertexEditing(piece)
+  const curves = useSeamForVertices ? piece.seamLine : piece.cutLine
   if (!curves.length || vertexIndex < 0 || vertexIndex >= curves.length) return null
   return vertexIndex === 0 ? { ...curves[0].start } : { ...curves[vertexIndex - 1].end }
 }
@@ -531,6 +533,7 @@ function PieceGroup({
   showInternalLines,
   showPieceNames,
   showPoints,
+  showContourMeasurements,
   hoveredInternalLineCurveIndex,
   onContextMenu,
   viewZoom,
@@ -553,6 +556,7 @@ function PieceGroup({
   showInternalLines?: boolean
   showPieceNames?: boolean
   showPoints?: boolean
+  showContourMeasurements?: boolean
   hoveredInternalLineCurveIndex?: number | null
   onContextMenu?: (e: React.MouseEvent) => void
   /** view.zoom – für Punkt-Marker, die auf dem Bildschirm gleich groß bleiben sollen */
@@ -834,6 +838,45 @@ function PieceGroup({
           </>
         )
       })()}
+      {showContourMeasurements !== false && cutLine.length >= 3 && (() => {
+        const meas = getCutLineContourMeasurements(piece)
+        if (meas.length === 0) return null
+        return (
+          <g pointerEvents="none">
+            {meas.map((m, idx) => {
+              const rad = (m.tangentDeg * Math.PI) / 180
+              let rotDeg = m.tangentDeg
+              if (Math.cos(rad) < 0) rotDeg += 180
+              const perpX = -Math.sin(rad)
+              const perpY = Math.cos(rad)
+              const offMm = 4.5
+              const tx = m.midpoint.x + perpX * offMm
+              const ty = m.midpoint.y + perpY * offMm
+              const n = m.lengthMm
+              const label = n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2)
+              return (
+                <text
+                  key={`cm-${piece.id}-${idx}`}
+                  x={tx}
+                  y={ty}
+                  transform={`rotate(${rotDeg}, ${tx}, ${ty})`}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={3.4}
+                  fontFamily="sans-serif"
+                  fontWeight={600}
+                  fill="#5d4037"
+                  stroke="#fff"
+                  strokeWidth={0.22}
+                  paintOrder="stroke fill"
+                >
+                  {label} mm
+                </text>
+              )
+            })}
+          </g>
+        )
+      })()}
       {isSelected && (
         <rect
           x={-2}
@@ -926,6 +969,7 @@ export function WorkspaceCanvas() {
     showDrills,
     showInternalLines,
     showPieceNames,
+    showContourMeasurements,
     rulerMode,
     rulerLine,
     setView,
@@ -1253,7 +1297,7 @@ export function WorkspaceCanvas() {
         const piecesForClick =
           selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
         for (const p of piecesForClick) {
-          const useSeamMaster = p != null && p.seamAllowanceMm != null && p.seamLine.length >= 3
+          const useSeamMaster = p != null && useSeamLineForVertexEditing(p)
           const curvesForVertices = useSeamMaster ? p!.seamLine : p?.cutLine ?? []
           if (!p || curvesForVertices.length === 0) continue
           const local = worldToPieceLocal(world, p)
@@ -1366,7 +1410,7 @@ export function WorkspaceCanvas() {
         if (useVertex && bestVertex) {
           if (bestVertex.dist <= bestVertex.hitRadius * 1.5) {
             const p = pieces.find((x) => x.id === bestVertex.pieceId)
-            const useSeamMaster = p != null && p.seamAllowanceMm != null && p.seamLine.length >= 3
+            const useSeamMaster = p != null && useSeamLineForVertexEditing(p)
             const curves = useSeamMaster ? p!.seamLine : p!.cutLine
             const startLocal = bestVertex.vertexIndex === 0
               ? curves[0].start
@@ -1856,7 +1900,7 @@ export function WorkspaceCanvas() {
             const local = worldToPieceLocal(world, p)
             const hasSeam = p.seamLine.length >= 3
             const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
-            const useSeamMaster = p.seamAllowanceMm != null && p.seamLine.length >= 3
+            const useSeamMaster = useSeamLineForVertexEditing(p)
             const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
             for (let vi = 0; vi < curvesForHover.length; vi++) {
               if (notchVIs.has(vi)) continue
@@ -3585,6 +3629,7 @@ export function WorkspaceCanvas() {
               showDrills={showDrills}
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
+              showContourMeasurements={showContourMeasurements}
               showPoints={showPoints}
               notchIdBeingDragged={
                 dragging?.kind === 'notchMove' &&
@@ -3694,7 +3739,7 @@ export function WorkspaceCanvas() {
               const ps = 1 / Math.max(view.zoom, 1e-6)
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
-                const useSeamMaster = piece != null && piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+                const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
                 const curvesForVertices = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
                 if (!piece || curvesForVertices.length === 0) return []
                 const hasSeam = piece.seamLine.length >= 3

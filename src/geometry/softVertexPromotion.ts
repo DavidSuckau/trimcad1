@@ -60,18 +60,17 @@ export function interiorAngleAtVertexDegrees(curves: Curve[], vertexIndex: numbe
   return (Math.acos(dot) * 180) / Math.PI
 }
 
-function masterCurves(piece: PatternPiece): Curve[] {
-  return piece.seamAllowanceMm != null && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
-}
-
 /**
  * Entfernt Indizes aus `softVertices`, an denen der Innenwinkel ≤ 90° ist
  * (rechter Winkel und spitze Winkel → fester Eckpunkt, nicht mehr „weicher Punkt“).
+ *
+ * `softVertices` sind immer Indizes in die **Schnittkontur** (`cutLine`), nie in die
+ * ggf. viel dichtere Nahtlinie aus Clipper — Innenwinkel daher immer an `cutLine` messen.
  */
 export function applySharpCornerPromotion(piece: PatternPiece): PatternPiece {
   const soft = piece.softVertices ?? []
   if (soft.length === 0) return piece
-  const curves = masterCurves(piece)
+  const curves = piece.cutLine
   if (curves.length < 3) return piece
 
   const nextSoft = soft.filter((vi) => {

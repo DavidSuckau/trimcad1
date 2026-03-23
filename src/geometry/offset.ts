@@ -173,10 +173,12 @@ function reverseCurves(curves: Curve[]): Curve[] {
 export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: number): Curve[] {
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
   // Keine Vereinfachung (0), damit Ecken beim Vertex-Ziehen nicht wegfallen und das Teil nicht „verzieht“
+  // Leichte Vereinfachung: reduziert künstliche „Eckpunkte“ auf glatten Naht-Verläufen
+  // (Bézier→Clipper), ohne echte Ecken zu zerstören (Toleranz klein).
   const raw = offsetCurves(cutLine, -seamAllowanceMm, {
     joinType: 'miter',
     miterLimit: 50,
-    simplifyTolerance: 0,
+    simplifyTolerance: 0.1,
   })
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)
