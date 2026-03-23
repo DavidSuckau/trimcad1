@@ -842,7 +842,7 @@ function PieceGroup({
         const meas = getCutLineContourMeasurements(piece)
         if (meas.length === 0) return null
         return (
-          <g pointerEvents="none">
+          <g pointerEvents="none" style={{ pointerEvents: 'none' }}>
             {meas.map((m, idx) => {
               const rad = (m.tangentDeg * Math.PI) / 180
               let rotDeg = m.tangentDeg
@@ -869,6 +869,8 @@ function PieceGroup({
                   stroke="#fff"
                   strokeWidth={0.22}
                   paintOrder="stroke fill"
+                  pointerEvents="none"
+                  style={{ pointerEvents: 'none' }}
                 >
                   {label} mm
                 </text>
