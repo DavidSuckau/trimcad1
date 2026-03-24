@@ -14,9 +14,10 @@ import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { offsetSegmentPoints } from '../geometry/offset'
 import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPositionAndAngleOnSeamLine, notchTriangleCorners, notchCutoutPoints, cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
 import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
+import { seamVertexNearProjectedNotch } from '../geometry/notchResyncCutLine'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
 import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves, getCurvesForSeamEdge } from '../geometry/seamUtils'
-import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
+import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
@@ -519,6 +520,7 @@ function PieceGroup({
   isSelected,
   isHovered,
   hoveredSegmentCurveIndex,
+  hoveredSegmentOnSeam = false,
   onPointerDown,
   onGrainArrowEnter,
   onGrainArrowLeave,
@@ -542,6 +544,8 @@ function PieceGroup({
   isSelected: boolean
   isHovered: boolean
   hoveredSegmentCurveIndex: number | null
+  /** Kurvenpunkt-Werkzeug: Segment-Index bezieht sich auf Naht statt Schnittkontur */
+  hoveredSegmentOnSeam?: boolean
   onPointerDown: (e: React.PointerEvent) => void
   onGrainArrowEnter?: (e: React.PointerEvent) => void
   onGrainArrowLeave?: () => void
@@ -605,9 +609,12 @@ function PieceGroup({
           pointerEvents="none"
         />
       )}
-      {hoveredSegmentCurveIndex != null && cutLine[hoveredSegmentCurveIndex] && (
+      {hoveredSegmentCurveIndex != null &&
+        (hoveredSegmentOnSeam ? seamLine[hoveredSegmentCurveIndex] : cutLine[hoveredSegmentCurveIndex]) && (
         <path
-          d={curveToPathD([cutLine[hoveredSegmentCurveIndex]])}
+          d={curveToPathD([
+            (hoveredSegmentOnSeam ? seamLine : cutLine)[hoveredSegmentCurveIndex],
+          ])}
           fill="none"
           stroke="#1565c0"
           strokeWidth={1.8}
@@ -1303,15 +1310,15 @@ export function WorkspaceCanvas() {
           const curvesForVertices = useSeamMaster ? p!.seamLine : p?.cutLine ?? []
           if (!p || curvesForVertices.length === 0) continue
           const local = worldToPieceLocal(world, p)
-          const cutLine = p.cutLine
           const hasSeam = p.seamLine.length >= 3
           const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
           const useSeam = hasSeam && !solidIsCut
           const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
           const vertexHitR = useSeam || useSeamMaster ? VERTEX_HIT_SEAM : VERTEX_HIT
-          // Kurvenpunkte – cutLine (Seam-Master: seltener Bézier auf Seam; vereinfacht)
-          for (let ci = 0; ci < cutLine.length; ci++) {
-            const c = cutLine[ci]
+          const curvesForPointCurve = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          // Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur
+          for (let ci = 0; ci < curvesForPointCurve.length; ci++) {
+            const c = curvesForPointCurve[ci]
             if (c.type !== 'bezier') continue
             const ptOnCurve = bezierAt(c, 0.5)
             const d = Math.hypot(local.x - ptOnCurve.x, local.y - ptOnCurve.y)
@@ -1322,7 +1329,11 @@ export function WorkspaceCanvas() {
           // Eckpunkte – Seam-Master: direkt auf seamLine; sonst cut/seam je nach Ansicht
           const n = curvesForVertices.length
           for (let vi = 0; vi < n; vi++) {
-            if (notchVIs.has(vi)) continue
+            if (useSeamMaster) {
+              if (seamVertexNearProjectedNotch(p, vi)) continue
+            } else if (notchVIs.has(vi)) {
+              continue
+            }
             const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
             const hitPos = useSeamMaster
               ? vertexPos
@@ -1431,15 +1442,17 @@ export function WorkspaceCanvas() {
       if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
-        if (piece && piece.cutLine.length > 0) {
+        if (piece) {
+        const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+        if (masterPc.length > 0) {
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestCurveIndexAndPoint(local, piece.cutLine)
+          const nearest = nearestCurveIndexAndPoint(local, masterPc)
           if (nearest && nearest.distance < 15) {
-            const curve = piece.cutLine[nearest.curveIndex]
+            const curve = masterPc[nearest.curveIndex]
             if (curve.type === 'line') {
-              const cutCurve = piece.cutLine[nearest.curveIndex]
-              if (cutCurve?.type === 'line') {
-                const { start, end } = cutCurve
+              const seg = masterPc[nearest.curveIndex]
+              if (seg?.type === 'line') {
+                const { start, end } = seg
                 const dx = end.x - start.x
                 const dy = end.y - start.y
                 const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
@@ -1447,8 +1460,8 @@ export function WorkspaceCanvas() {
                 replaceSegmentWithBezier(pieceId, nearest.curveIndex, cp1, cp2)
               }
             } else if (curve.type === 'bezier' && nearest.t != null && nearest.t > 1e-6 && nearest.t < 1 - 1e-6) {
-              const cutCurve = piece.cutLine[nearest.curveIndex]
-              if (cutCurve?.type === 'bezier') {
+              const bez = masterPc[nearest.curveIndex]
+              if (bez?.type === 'bezier') {
                 const pt = nearest.point
                 insertPointOnCutLine(pieceId, nearest.curveIndex, pt, nearest.t)
               }
@@ -1457,15 +1470,18 @@ export function WorkspaceCanvas() {
             return
           }
         }
+        }
       }
       if (tool === 'point' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
-        if (piece && piece.cutLine.length > 0) {
+        if (piece) {
+        const masterPt = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+        if (masterPt.length > 0) {
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestCurveIndexAndPoint(local, piece.cutLine)
+          const nearest = nearestCurveIndexAndPoint(local, masterPt)
           if (nearest && nearest.distance < 15) {
-            const curve = piece.cutLine[nearest.curveIndex]
+            const curve = masterPt[nearest.curveIndex]
             if (curve.type === 'line') {
               insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point)
             } else if (curve.type === 'bezier' && nearest.t != null) {
@@ -1475,6 +1491,7 @@ export function WorkspaceCanvas() {
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
           }
+        }
         }
       }
       if (tool === 'select') {
@@ -1905,7 +1922,11 @@ export function WorkspaceCanvas() {
             const useSeamMaster = useSeamLineForVertexEditing(p)
             const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
             for (let vi = 0; vi < curvesForHover.length; vi++) {
-              if (notchVIs.has(vi)) continue
+              if (useSeamMaster) {
+                if (seamVertexNearProjectedNotch(p, vi)) continue
+              } else if (notchVIs.has(vi)) {
+                continue
+              }
               if (curvesForHover.length <= 3) continue
               const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
               const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
@@ -1917,8 +1938,9 @@ export function WorkspaceCanvas() {
               if (d < bestVertex.dist)
                 bestVertex = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
             }
-            for (let ci = 0; ci < p.cutLine.length; ci++) {
-              const c = p.cutLine[ci]
+            const curvesPcHover = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+            for (let ci = 0; ci < curvesPcHover.length; ci++) {
+              const c = curvesPcHover[ci]
               if (c.type !== 'bezier') continue
               const pt = bezierAt(c, 0.5)
               const d = Math.hypot(local.x - pt.x, local.y - pt.y)
@@ -2202,9 +2224,13 @@ export function WorkspaceCanvas() {
           const HIT = 15
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
-          if (p && p.cutLine.length > 0) {
+          if (!p) {
+            setPointPreview(null)
+          } else {
+          const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          if (masterPv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const nearest = nearestCurveIndexAndPoint(local, p.cutLine)
+            const nearest = nearestCurveIndexAndPoint(local, masterPv)
             if (nearest && nearest.distance < HIT) {
               setPointPreview({ pieceId: p.id, point: nearest.point })
             } else {
@@ -2212,6 +2238,7 @@ export function WorkspaceCanvas() {
             }
           } else {
             setPointPreview(null)
+          }
           }
         } else {
           setPointPreview(null)
@@ -2221,16 +2248,21 @@ export function WorkspaceCanvas() {
           const HOVER_CURVEPOINT_HIT = 15
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
-          if (p && p.cutLine.length > 0) {
+          if (!p) {
+            setHoveredCurvepointSegment(null)
+          } else {
+          const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          if (masterCv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const r = nearestCurveIndexAndPoint(local, p.cutLine)
-            if (r && r.distance < HOVER_CURVEPOINT_HIT && p.cutLine[r.curveIndex]?.type === 'line') {
+            const r = nearestCurveIndexAndPoint(local, masterCv)
+            if (r && r.distance < HOVER_CURVEPOINT_HIT && masterCv[r.curveIndex]?.type === 'line') {
               setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: r.curveIndex })
             } else {
               setHoveredCurvepointSegment(null)
             }
           } else {
             setHoveredCurvepointSegment(null)
+          }
           }
         } else {
           setHoveredCurvepointSegment(null)
@@ -2340,10 +2372,11 @@ export function WorkspaceCanvas() {
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
+        const editSeamPc = useSeamLineForPointCurveEditing(piece)
         const hasSeam = piece.seamLine.length >= 3
         const showSeam = hasSeam && !cutSeamSwappedSet.has(piece.id)
         let target = local
-        if (showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0) {
+        if (!editSeamPc && showSeam && piece.seamAllowanceMm != null && piece.seamAllowanceMm > 0) {
           const angleDeg = outwardNormalAngleAt(piece.cutLine, dragging.curveIndex, dragging.t)
           const rad = (angleDeg * Math.PI) / 180
           const dx = piece.seamAllowanceMm * Math.cos(rad)
@@ -2753,7 +2786,8 @@ export function WorkspaceCanvas() {
         } else if (hoveredDeletablePoint?.kind === 'pointOnCurve') {
           const piece = pieces.find((x) => x.id === hoveredDeletablePoint.pieceId)
           if (piece) {
-            const c = piece.cutLine[hoveredDeletablePoint.curveIndex]
+            const curvesPv = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+            const c = curvesPv[hoveredDeletablePoint.curveIndex]
             if (c?.type === 'bezier') {
               pivotLocal = bezierAt(c, 0.5)
               pieceId = piece.id
@@ -3623,6 +3657,15 @@ export function WorkspaceCanvas() {
               isSelected={selectedPieceIds.includes(piece.id)}
               isHovered={hoveredPieceId === piece.id}
               hoveredSegmentCurveIndex={effectiveSegmentForHighlight?.pieceId === piece.id ? effectiveSegmentForHighlight.curveIndex : null}
+              hoveredSegmentOnSeam={
+                effectiveSegmentForHighlight != null &&
+                effectiveSegmentForHighlight.pieceId === piece.id &&
+                tool === 'curvepoint' &&
+                hoveredCurvepointSegment != null &&
+                hoveredCurvepointSegment.pieceId === effectiveSegmentForHighlight.pieceId &&
+                hoveredCurvepointSegment.curveIndex === effectiveSegmentForHighlight.curveIndex &&
+                useSeamLineForPointCurveEditing(piece)
+              }
               hoveredInternalLineCurveIndex={hoveredInternalLine?.pieceId === piece.id ? hoveredInternalLine.curveIndex : null}
               onPointerDown={handlePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
@@ -3713,11 +3756,12 @@ export function WorkspaceCanvas() {
           {pointPreview && (() => {
             const piece = pieces.find((p) => p.id === pointPreview.pieceId)
             if (!piece) return null
+            const onSeamPc = useSeamLineForPointCurveEditing(piece)
             const hasSeam = piece.seamLine.length >= 3
             const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
             const useSeam = hasSeam && !solidIsCut
             const displayPoint =
-              !useSeam
+              onSeamPc || !useSeam
                 ? pointPreview.point
                 : (nearestCurveIndexAndPoint(pointPreview.point, piece.seamLine)?.point ?? pointPreview.point)
             const w = pieceLocalToWorld(displayPoint, piece)
@@ -3786,16 +3830,16 @@ export function WorkspaceCanvas() {
               })
             })()
           }
-          {/* Kurvenpunkte (Punkt auf Kurve): immer cutLine – Indizes für Ziehen eindeutig */}
+          {/* Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur */}
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / Math.max(view.zoom, 1e-6)
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
-                const cutLine = piece.cutLine
+                const curvesDraw = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
-                return cutLine.flatMap((c, ci) => {
+                return curvesDraw.flatMap((c, ci) => {
                   if (c.type !== 'bezier') return []
                   const ptOnCurve = bezierAt(c, 0.5)
                   const w = pieceLocalToWorld(ptOnCurve, piece)

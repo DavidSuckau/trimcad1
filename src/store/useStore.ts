@@ -13,8 +13,9 @@ import {
 } from '../geometry/seamUtils'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
-import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
+import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
+import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -704,15 +705,30 @@ export const useStore = create<Store>((set, get) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((piece) => {
-          if (piece.id !== pieceId || curveIndex >= piece.cutLine.length) return piece
-          const curve = piece.cutLine[curveIndex]
+          if (piece.id !== pieceId) return piece
+          const seamPc = useSeamLineForPointCurveEditing(piece)
+          const target = seamPc ? piece.seamLine : piece.cutLine
+          if (curveIndex < 0 || curveIndex >= target.length) return piece
+          const curve = target[curveIndex]
           const updated: Curve =
             curve.type === 'line'
               ? { ...curve, [pointKey]: p } as Curve
               : { ...curve, [pointKey]: p } as Curve
+          const next = [...target]
+          next[curveIndex] = updated
+          if (seamPc && piece.seamAllowanceMm != null) {
+            const seamLine = next
+            const cutLine = offsetCurvesOutwardForCut(seamLine, piece.seamAllowanceMm)
+            const notches = resyncNotchesAfterCutLineRebuilt(piece.notches, piece.cutLine, cutLine)
+            const softVertices = (piece.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+            return applySharpCornerPromotion({ ...piece, cutLine, seamLine, notches, softVertices })
+          }
           const cutLine = [...piece.cutLine]
           cutLine[curveIndex] = updated
-          const seamLine = piece.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm) : piece.seamLine
+          const seamLine =
+            piece.seamAllowanceMm != null && cutLine.length >= 3
+              ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
+              : piece.seamLine
           return applySharpCornerPromotion({ ...piece, cutLine, seamLine })
         }),
       },
@@ -1039,52 +1055,75 @@ export const useStore = create<Store>((set, get) => ({
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== pieceId) return p
           // Nahtlinie wird wieder zur einzigen Kontur (cutLine)
+          const oldCut = p.cutLine
+          const newCut = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
+          const notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, newCut)
           return applySharpCornerPromotion({
             ...p,
-            cutLine: p.seamLine.length >= 3 ? p.seamLine : p.cutLine,
+            cutLine: newCut,
             seamLine: [],
             seamAllowanceMm: null,
+            notches,
           })
         }),
       },
     })),
 
   insertPointOnCutLine: (pieceId, curveIndex, point, t) =>
-    set((s) => ({
-      workspace: {
-        ...s.workspace,
-        seamAssignments: adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
-        pieces: s.workspace.pieces.map((p) => {
-          if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.cutLine.length) return p
-          const curve = p.cutLine[curveIndex]
-          let cutLine: Curve[] | null = null
-          if (curve.type === 'line') {
-            const seg1: Curve = { type: 'line', start: { ...curve.start }, end: { ...point } }
-            const seg2: Curve = { type: 'line', start: { ...point }, end: { ...curve.end } }
-            cutLine = [...p.cutLine]
-            cutLine.splice(curveIndex, 1, seg1, seg2)
-          } else if (curve.type === 'bezier' && t != null && t > 0 && t < 1) {
-            const [seg1, seg2] = splitBezierAt(curve, t)
-            cutLine = [...p.cutLine]
-            cutLine.splice(curveIndex, 1, seg1, seg2)
-          }
-          if (!cutLine) return p
-          const notches = p.notches.map((n) => {
-            if (n.vertexIndex != null && n.vertexIndex > curveIndex) {
-              return { ...n, vertexIndex: n.vertexIndex + 1 }
+    set((s) => {
+      const pieceBefore = s.workspace.pieces.find((p) => p.id === pieceId)
+      const seamPc = pieceBefore != null && useSeamLineForPointCurveEditing(pieceBefore)
+      return {
+        workspace: {
+          ...s.workspace,
+          seamAssignments: seamPc
+            ? s.workspace.seamAssignments
+            : adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
+          pieces: s.workspace.pieces.map((p) => {
+            if (p.id !== pieceId) return p
+            const master = seamPc ? p.seamLine : p.cutLine
+            if (curveIndex < 0 || curveIndex >= master.length) return p
+            const curve = master[curveIndex]
+            let newMaster: Curve[] | null = null
+            if (curve.type === 'line') {
+              const seg1: Curve = { type: 'line', start: { ...curve.start }, end: { ...point } }
+              const seg2: Curve = { type: 'line', start: { ...point }, end: { ...curve.end } }
+              newMaster = [...master]
+              newMaster.splice(curveIndex, 1, seg1, seg2)
+            } else if (curve.type === 'bezier' && t != null && t > 0 && t < 1) {
+              const [seg1, seg2] = splitBezierAt(curve, t)
+              newMaster = [...master]
+              newMaster.splice(curveIndex, 1, seg1, seg2)
             }
-            return n
-          })
-          const newVertexIdx = curveIndex + 1
-          const softVertices = [
-            ...(p.softVertices ?? []).map((vi) => vi >= newVertexIdx ? vi + 1 : vi),
-            newVertexIdx,
-          ]
-          const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-          return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
-        }),
-      },
-    })),
+            if (!newMaster) return p
+
+            if (seamPc && p.seamAllowanceMm != null) {
+              const seamLine = newMaster
+              const cutLine = offsetCurvesOutwardForCut(seamLine, p.seamAllowanceMm)
+              const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+              const softVertices = (p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+              return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+            }
+
+            const cutLine = newMaster
+            const notches = p.notches.map((n) => {
+              if (n.vertexIndex != null && n.vertexIndex > curveIndex) {
+                return { ...n, vertexIndex: n.vertexIndex + 1 }
+              }
+              return n
+            })
+            const newVertexIdx = curveIndex + 1
+            const softVertices = [
+              ...(p.softVertices ?? []).map((vi) => (vi >= newVertexIdx ? vi + 1 : vi)),
+              newVertexIdx,
+            ]
+            const seamLine =
+              p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+          }),
+        },
+      }
+    }),
 
   // Vertex verschieben. Seam-as-Master: Bei Nahtzugabe wird die seamLine (Innenkontur) bearbeitet, cutLine folgt.
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc) =>
@@ -1111,7 +1150,9 @@ export const useStore = create<Store>((set, get) => ({
           }
           let cutLine = p.cutLine
           let seamLine = p.seamLine
-          if (useSeamMaster && !skipSeamRecalc && seamAllowance != null) {
+          const cutRebuiltFromSeam =
+            useSeamMaster && !skipSeamRecalc && seamAllowance != null
+          if (cutRebuiltFromSeam) {
             seamLine = nextCurves
             cutLine = offsetCurvesOutwardForCut(seamLine, seamAllowance)
           } else if (!useSeamMaster) {
@@ -1120,9 +1161,13 @@ export const useStore = create<Store>((set, get) => ({
               ? p.seamLine
               : (seamAllowance != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, seamAllowance) : p.seamLine)
           }
-          const notches = p.notches.map((notch) =>
-            notch.vertexIndex === vertexIndex ? { ...notch, vertexIndex: undefined } : notch
-          )
+          const notches = cutRebuiltFromSeam
+            ? resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+            : p.notches.map((notch) =>
+                !useSeamMaster && notch.vertexIndex === vertexIndex
+                  ? { ...notch, vertexIndex: undefined }
+                  : notch
+              )
           return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
         }),
       },
@@ -1133,8 +1178,11 @@ export const useStore = create<Store>((set, get) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
-          if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.cutLine.length) return p
-          const c = p.cutLine[curveIndex]
+          if (p.id !== pieceId) return p
+          const seamPc = useSeamLineForPointCurveEditing(p)
+          const target = seamPc ? p.seamLine : p.cutLine
+          if (curveIndex < 0 || curveIndex >= target.length) return p
+          const c = target[curveIndex]
           if (c.type !== 'line') return p
           const bezier: Curve = {
             type: 'bezier',
@@ -1143,9 +1191,19 @@ export const useStore = create<Store>((set, get) => ({
             cp1: { ...cp1 },
             cp2: { ...(cp2 ?? cp1) },
           }
+          const next = [...target]
+          next[curveIndex] = bezier
+          if (seamPc && p.seamAllowanceMm != null) {
+            const seamLine = next
+            const cutLine = offsetCurvesOutwardForCut(seamLine, p.seamAllowanceMm)
+            const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+            const softVertices = (p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+          }
           const cutLine = [...p.cutLine]
           cutLine[curveIndex] = bezier
-          const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+          const seamLine =
+            p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
           return applySharpCornerPromotion({ ...p, cutLine, seamLine })
         }),
       },
@@ -1156,8 +1214,11 @@ export const useStore = create<Store>((set, get) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
-          if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.cutLine.length) return p
-          const c = p.cutLine[curveIndex]
+          if (p.id !== pieceId) return p
+          const seamPc = useSeamLineForPointCurveEditing(p)
+          const target = seamPc ? p.seamLine : p.cutLine
+          if (curveIndex < 0 || curveIndex >= target.length) return p
+          const c = target[curveIndex]
           if (c.type !== 'bezier') return p
           const adjusted = adjustControlPointsForPointOnCurve(c, t, newPoint)
           if (!adjusted) return p
@@ -1167,6 +1228,15 @@ export const useStore = create<Store>((set, get) => ({
             end: { ...c.end },
             cp1: { ...adjusted.cp1 },
             cp2: { ...adjusted.cp2 },
+          }
+          const next = [...target]
+          next[curveIndex] = bezier
+          if (seamPc && p.seamAllowanceMm != null) {
+            const seamLine = next
+            const cutLine = offsetCurvesOutwardForCut(seamLine, p.seamAllowanceMm)
+            const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+            const softVertices = (p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
           }
           const cutLine = [...p.cutLine]
           cutLine[curveIndex] = bezier
@@ -1215,13 +1285,16 @@ export const useStore = create<Store>((set, get) => ({
                   ? offsetCurvesInwardForSeam(cutLine, seamAllowance)
                   : p.seamLine
             }
-            const notches = p.notches.map((n) =>
-              n.vertexIndex === vertexIndex
-                ? (() => { const { vertexIndex: _v, ...rest } = n; return rest })()
-                : n.vertexIndex != null && n.vertexIndex > vertexIndex
-                  ? { ...n, vertexIndex: n.vertexIndex - 1 }
-                  : n
-            )
+            const notches =
+              seamMaster && seamAllowance != null
+                ? resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+                : p.notches.map((n) =>
+                    n.vertexIndex === vertexIndex
+                      ? (() => { const { vertexIndex: _v, ...rest } = n; return rest })()
+                      : n.vertexIndex != null && n.vertexIndex > vertexIndex
+                        ? { ...n, vertexIndex: n.vertexIndex - 1 }
+                        : n
+                  )
             const softVertices = (p.softVertices ?? [])
               .filter((vi) => vi !== vertexIndex)
               .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
@@ -1236,13 +1309,26 @@ export const useStore = create<Store>((set, get) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) => {
-          if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.cutLine.length) return p
-          const c = p.cutLine[curveIndex]
+          if (p.id !== pieceId) return p
+          const seamPc = useSeamLineForPointCurveEditing(p)
+          const target = seamPc ? p.seamLine : p.cutLine
+          if (curveIndex < 0 || curveIndex >= target.length) return p
+          const c = target[curveIndex]
           if (c.type !== 'bezier') return p
           const lineSeg: Curve = { type: 'line', start: { ...c.start }, end: { ...c.end } }
+          const next = [...target]
+          next[curveIndex] = lineSeg
+          if (seamPc && p.seamAllowanceMm != null) {
+            const seamLine = next
+            const cutLine = offsetCurvesOutwardForCut(seamLine, p.seamAllowanceMm)
+            const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+            const softVertices = (p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+          }
           const cutLine = [...p.cutLine]
           cutLine[curveIndex] = lineSeg
-          const seamLine = p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+          const seamLine =
+            p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
           return applySharpCornerPromotion({ ...p, cutLine, seamLine })
         }),
       },

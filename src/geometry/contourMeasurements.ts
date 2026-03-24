@@ -1,6 +1,7 @@
-import type { PatternPiece, Point } from '../types/model'
+import type { Notch, PatternPiece, Point } from '../types/model'
 import { pathLengthAt, totalPathLength, pointAtPathLength, bezierDerivativeAt } from './curveToPath'
-import { getNotchCurveIndexAndT } from './notchOnCurve'
+import { getNotchCurveIndexAndT, getNotchPositionAndAngleOnSeamLine } from './notchOnCurve'
+import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
 /** Stationen näher als diese Bogenlänge (mm) gelten als identisch (Ecke + Kerbe am selben Punkt). */
 const STATION_MERGE_MM = 0.4
@@ -29,32 +30,69 @@ function tangentDegAtCurve(curves: PatternPiece['cutLine'], curveIndex: number, 
 }
 
 /**
- * Alle Teilstrecken entlang der **Schnittkontur** (cutLine) zwischen aufeinanderfolgenden
+ * Bei Nahtzugabe ist die Schnittkontur (cutLine) oft eine Clipper-Polylinie mit sehr vielen
+ * kurzen Segmenten — Konturmaße sollen dann der **bearbeitbaren Nahtlinie** folgen (wie Eckpunkte).
+ */
+function useSeamLineForContourMeasurements(piece: PatternPiece): boolean {
+  return (
+    piece.seamAllowanceMm != null &&
+    piece.seamLine.length >= 3 &&
+    piece.cutLine.length >= 3 &&
+    piece.seamLine.length < piece.cutLine.length
+  )
+}
+
+function notchToCurveParameterOnContour(
+  notch: Notch,
+  contour: PatternPiece['cutLine'],
+  piece: PatternPiece,
+  measureOnSeam: boolean
+): { curveIndex: number; t: number } | null {
+  if (contour.length === 0) return null
+  if (notch.vertexIndex != null && notch.vertexIndex >= 0 && notch.vertexIndex < contour.length) {
+    return { curveIndex: notch.vertexIndex, t: 0 }
+  }
+  if (measureOnSeam && piece.seamLine.length > 0 && piece.cutLine.length > 0) {
+    const onSeam = getNotchPositionAndAngleOnSeamLine(notch, piece.cutLine, piece.seamLine)
+    if (onSeam) {
+      const r = nearestCurveIndexAndPoint(onSeam.position, contour)
+      if (r) return { curveIndex: r.curveIndex, t: r.t ?? 0 }
+    }
+  }
+  return getNotchCurveIndexAndT(notch, piece.cutLine)
+}
+
+/**
+ * Alle Teilstrecken entlang der gewählten Außen-/Arbeitskontur zwischen aufeinanderfolgenden
  * „Stationen“: Eckpunkte (Polygon-Ecken) und Kerben (Mittelpunkt auf der Kontur).
  * Maße = Bogenlängen in mm (Geraden exakt, Bézier numerisch).
+ *
+ * Mit Nahtzugabe und tessellierter cutLine werden die Maße entlang der **seamLine** gebildet,
+ * damit nicht jedes Clipper-Segment ein eigenes Label bekommt.
  */
 export function getCutLineContourMeasurements(piece: PatternPiece): ContourMeasurement[] {
-  const cutLine = piece.cutLine
-  const n = cutLine.length
+  const measureOnSeam = useSeamLineForContourMeasurements(piece)
+  const contour = measureOnSeam ? piece.seamLine : piece.cutLine
+  const n = contour.length
   if (n < 2) return []
 
-  const total = totalPathLength(cutLine)
+  const total = totalPathLength(contour)
   if (total <= MIN_DISPLAY_MM) return []
 
   const stations: Station[] = []
 
   for (let i = 0; i < n; i++) {
-    const s = pathLengthAt(cutLine, i, 0)
-    stations.push({ s, p: { ...cutLine[i].start } })
+    const s = pathLengthAt(contour, i, 0)
+    stations.push({ s, p: { ...contour[i].start } })
   }
 
   for (const notch of piece.notches) {
-    const ct = getNotchCurveIndexAndT(notch, cutLine)
+    const ct = notchToCurveParameterOnContour(notch, contour, piece, measureOnSeam)
     if (!ct) continue
     let t = ct.t
     t = Math.max(0, Math.min(1, t))
-    const s = pathLengthAt(cutLine, ct.curveIndex, t)
-    const pr = pointAtPathLength(cutLine, s)
+    const s = pathLengthAt(contour, ct.curveIndex, t)
+    const pr = pointAtPathLength(contour, s)
     if (!pr) continue
     stations.push({ s, p: pr.point })
   }
@@ -98,9 +136,9 @@ export function getCutLineContourMeasurements(piece: PatternPiece): ContourMeasu
 
     if (len < MIN_DISPLAY_MM) continue
 
-    const pr = pointAtPathLength(cutLine, midArc)
+    const pr = pointAtPathLength(contour, midArc)
     if (!pr) continue
-    const tangentDeg = tangentDegAtCurve(cutLine, pr.curveIndex, pr.t)
+    const tangentDeg = tangentDegAtCurve(contour, pr.curveIndex, pr.t)
     out.push({ lengthMm: len, midpoint: pr.point, tangentDeg })
   }
 
