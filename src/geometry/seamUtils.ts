@@ -6,8 +6,8 @@ import { offsetSegmentPoints } from './offset'
 
 /**
  * Kontur für Nahtzuordnung: seamLine wenn Nahtzugabe gesetzt (Master), sonst cutLine.
- * Wichtig: Bei applyOffset wird cutLine neu berechnet, aber seamLine = alte cutLine.
- * Die gespeicherten curveIndices beziehen sich daher auf seamLine nach Nahtzugabe-Hinzufügen.
+ * Nach applyOffset ist seamLine eine Kopie der bisherigen Innenkontur (gleiche Segmentzahl/Indices);
+ * cutLine ist der äußere Offset. curveIndices in SeamAssignment sind immer diese Master-Indizes.
  */
 export function getCurvesForSeamEdge(piece: PatternPiece): Curve[] {
   return piece.seamAllowanceMm != null && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine

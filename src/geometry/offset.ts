@@ -109,15 +109,27 @@ function simplifyClosedPolygon(pts: Point[], tolerance: number): Point[] {
   return result.length >= 3 ? result : pts
 }
 
+export type ClipperOffsetClosedResult = {
+  lineCurves: Curve[]
+  /** Anzahl geschlossener Pfade in der Clipper-Lösung (>1 oft bei Selbstüberschneidung / Kollaps). */
+  solutionPathCount: number
+}
+
 /**
- * Offset a closed path by delta mm (positive = outward).
- * Uses clipper-lib; curves are flattened to line segments.
- * Default join type is round (besser für Textil-Schnittmuster).
+ * Clipper-Offset einer geschlossenen Kontur; liefert Segmentanzahl der Lösung für Validierung (Seam-as-Master).
  */
-export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetOptions): Curve[] {
-  if (curves.length === 0) return []
+export function clipperOffsetClosedPolygon(
+  curves: Curve[],
+  deltaMm: number,
+  options?: OffsetOptions
+): ClipperOffsetClosedResult {
+  if (curves.length === 0) {
+    return { lineCurves: [], solutionPathCount: 0 }
+  }
   const pts = curvesToPoints(curves)
-  if (pts.length < 3) return []
+  if (pts.length < 3) {
+    return { lineCurves: [], solutionPathCount: 0 }
+  }
   const path = pts.map(toIntPoint)
   const co = new ClipperLib.ClipperOffset()
   const jt = options?.joinType === 'miter' ? ClipperLib.JoinType.jtMiter
@@ -127,7 +139,10 @@ export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetO
   co.AddPath(path, jt, ClipperLib.EndType.etClosedPolygon)
   const solution: IntPoint[][] = []
   co.Execute(solution, deltaMm * SCALE)
-  if (solution.length === 0 || solution[0].length < 2) return []
+  const solutionPathCount = solution.length
+  if (solution.length === 0 || solution[0].length < 2) {
+    return { lineCurves: [], solutionPathCount }
+  }
   let outPts = solution[0].map(fromIntPoint)
   if (outPts.length > 1 && outPts[0].x === outPts[outPts.length - 1].x && outPts[0].y === outPts[outPts.length - 1].y) {
     outPts.pop()
@@ -140,7 +155,16 @@ export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetO
   if (outPts.length >= 3) {
     segs.push({ type: 'line', start: outPts[outPts.length - 1], end: outPts[0] })
   }
-  return segs
+  return { lineCurves: segs, solutionPathCount }
+}
+
+/**
+ * Offset a closed path by delta mm (positive = outward).
+ * Uses clipper-lib; curves are flattened to line segments.
+ * Default join type is round (besser für Textil-Schnittmuster).
+ */
+export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetOptions): Curve[] {
+  return clipperOffsetClosedPolygon(curves, deltaMm, options).lineCurves
 }
 
 
@@ -194,7 +218,7 @@ export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: num
  */
 export function offsetCurvesOutwardForCut(seamLine: Curve[], seamAllowanceMm: number): Curve[] {
   if (seamLine.length === 0 || seamAllowanceMm <= 0) return []
-  const raw = offsetCurves(seamLine, seamAllowanceMm, {
+  const { lineCurves: raw } = clipperOffsetClosedPolygon(seamLine, seamAllowanceMm, {
     joinType: 'miter',
     miterLimit: 50,
     simplifyTolerance: 0.06,
@@ -204,6 +228,159 @@ export function offsetCurvesOutwardForCut(seamLine: Curve[], seamAllowanceMm: nu
   const cutArea = signedAreaCurves(raw)
   if (seamArea * cutArea < 0) return reverseCurves(raw)
   return raw
+}
+
+/** Mindestlänge eines Naht-Segments (Start–Ende); darunter ist der Clipper-Offset unzuverlässig. */
+const MIN_SEAM_SEGMENT_LEN_MM = 0.03
+
+const EPS_CROSS = 1e-9
+
+function cross(ax: number, ay: number, bx: number, by: number): number {
+  return ax * by - ay * bx
+}
+
+function segmentIntersectionProper(
+  a1: Point,
+  a2: Point,
+  b1: Point,
+  b2: Point
+): boolean {
+  const d1x = a2.x - a1.x
+  const d1y = a2.y - a1.y
+  const d2x = b2.x - b1.x
+  const d2y = b2.y - b1.y
+  const den = cross(d1x, d1y, d2x, d2y)
+  if (Math.abs(den) < EPS_CROSS) return false
+  const t = cross(b1.x - a1.x, b1.y - a1.y, d2x, d2y) / den
+  const u = cross(b1.x - a1.x, b1.y - a1.y, d1x, d1y) / den
+  return t > EPS_CROSS && t < 1 - EPS_CROSS && u > EPS_CROSS && u < 1 - EPS_CROSS
+}
+
+/** Prüft, ob ein geschlossener Polygonzug (ohne doppelten Schlusspunkt) sich selbst schneidet. */
+export function closedPolylineSelfIntersects(pts: Point[]): boolean {
+  const n = pts.length
+  if (n < 4) return false
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n
+    const a1 = pts[i]
+    const a2 = pts[i2]
+    for (let j = i + 1; j < n; j++) {
+      const j2 = (j + 1) % n
+      if (i2 === j || j2 === i) continue
+      const b1 = pts[j]
+      const b2 = pts[j2]
+      if (segmentIntersectionProper(a1, a2, b1, b2)) return true
+    }
+  }
+  return false
+}
+
+function minChordLengthMm(curves: Curve[]): number {
+  let m = Infinity
+  for (const c of curves) {
+    const len =
+      c.type === 'line'
+        ? Math.hypot(c.end.x - c.start.x, c.end.y - c.start.y)
+        : Math.hypot(c.end.x - c.start.x, c.end.y - c.start.y)
+    if (len < m) m = len
+  }
+  return m === Infinity ? 0 : m
+}
+
+export type DeriveCutLineFromSeamResult =
+  | { ok: true; cutLine: Curve[] }
+  | { ok: false; message: string }
+
+/**
+ * Schnittlinie aus Nahtlinie (Seam-as-Master): Offset nur übernehmen, wenn die Lösung plausibel ist.
+ * Bei Fehler: keine stillschweigende „kaputte“ Kontur — Aufrufer soll Zustand nicht ändern und Hinweis zeigen.
+ */
+export function deriveCutLineFromSeamWithValidation(
+  seamLine: Curve[],
+  seamAllowanceMm: number
+): DeriveCutLineFromSeamResult {
+  if (seamLine.length < 3 || seamAllowanceMm <= 0) {
+    return { ok: false, message: 'Nahtlinie ungültig oder Nahtzugabe fehlt.' }
+  }
+
+  const allowanceCheck = validateSeamAllowance(seamLine, seamAllowanceMm)
+  if (!allowanceCheck.valid) {
+    return {
+      ok: false,
+      message: allowanceCheck.warning ?? 'Nahtzugabe passt nicht zur Nahtlinie (z. B. größer als möglicher Radius / Kontur).',
+    }
+  }
+
+  const minChord = minChordLengthMm(seamLine)
+  if (minChord < MIN_SEAM_SEGMENT_LEN_MM) {
+    return {
+      ok: false,
+      message: `Nahtlinie hat sehr kurze Segmente (< ${MIN_SEAM_SEGMENT_LEN_MM} mm); Offset wird nicht angewendet.`,
+    }
+  }
+
+  const seamFlat = curvesToPoints(seamLine)
+  if (seamFlat.length >= 4) {
+    const ring = [...seamFlat]
+    if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
+    if (ring.length >= 4 && closedPolylineSelfIntersects(ring)) {
+      return {
+        ok: false,
+        message: 'Nahtlinie überschneidet sich; Offset wird nicht angewendet.',
+      }
+    }
+  }
+
+  const { lineCurves: raw, solutionPathCount } = clipperOffsetClosedPolygon(seamLine, seamAllowanceMm, {
+    joinType: 'miter',
+    miterLimit: 50,
+    simplifyTolerance: 0.06,
+  })
+
+  if (solutionPathCount !== 1) {
+    return {
+      ok: false,
+      message:
+        'Nahtzugabe-Offset liefert mehrere getrennte Konturen (enge Radien oder Selbstüberschneidung). Änderung verworfen.',
+    }
+  }
+
+  if (raw.length < 3) {
+    return {
+      ok: false,
+      message: 'Nahtzugabe-Offset ergab keine gültige Schnittkontur. Änderung verworfen.',
+    }
+  }
+
+  let cutLine = raw
+  const seamArea = signedAreaCurves(seamLine)
+  const cutAreaSigned = signedAreaCurves(cutLine)
+  if (seamArea * cutAreaSigned < 0) {
+    cutLine = reverseCurves(cutLine)
+  }
+
+  const cutArea = Math.abs(signedAreaCurves(cutLine))
+  const seamAreaAbs = Math.abs(seamArea)
+  if (seamAreaAbs >= 1 && cutArea < seamAreaAbs * 0.88) {
+    return {
+      ok: false,
+      message: 'Schnittkontur nach Offset zu klein (Kollaps oder Nahtzugabe zu groß für die Radien). Änderung verworfen.',
+    }
+  }
+
+  const cutPts = curvesToPoints(cutLine)
+  if (cutPts.length >= 4) {
+    const ring = [...cutPts]
+    if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
+    if (ring.length >= 4 && closedPolylineSelfIntersects(ring)) {
+      return {
+        ok: false,
+        message: 'Schnittkontur nach Offset ist selbstüberschneidend. Änderung verworfen.',
+      }
+    }
+  }
+
+  return { ok: true, cutLine }
 }
 
 /**

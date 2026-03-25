@@ -41,9 +41,29 @@ function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): nu
 }
 
 /**
- * Kanonische Notch-Position: notch.position ist die einzige Wahrheitsquelle.
- * Ausnahme: vertexIndex-Notches folgen dem Vertex (Knickpunkt auf der CutLine).
+ * **Primary anchoring auf der Schnittkontur (cutLine)** — Lesepfad für alle Geometrie:
+ *
+ * 1. **Ecken-Verankerung:** `vertexIndex` gesetzt → Parameter **(curveIndex = vertexIndex, t = 0)** am
+ *    Startpunkt dieses Segments (= Ecke). Lage und Normale folgen der Kontur; `position` im Objekt kann
+ *    veraltet sein und wird bei Resync auf den Eckpunkt gesetzt.
+ * 2. **Freie Verankerung (parametrisch implizit):** kein `vertexIndex` → Lage = **Fußpunkt** der
+ *    Projektion von `notch.position` auf die aktuelle `cutLine` → effektiv **(curveIndex, t)** via
+ *    `nearestCurveIndexAndPoint`. `position` ist die persistierte Näherung; nach
+ *    `resyncNotchesAfterCutLineRebuilt` wird sie auf den projizierten Punkt gesetzt („re-snapped“).
+ *
+ * Es gibt **kein** zweites paralleles Koordinatensystem: `vertexIndex` hat **Vorrang** vor `position`
+ * für die kanonische Lage (`getNotchPositionAndAngle`).
  */
+export function getNotchCutLineParameter(notch: Notch, cutLine: Curve[]): { curveIndex: number; t: number } | null {
+  if (cutLine.length === 0) return null
+  const vi = notch.vertexIndex
+  if (vi != null && vi >= 0 && vi < cutLine.length) {
+    return { curveIndex: vi, t: 0 }
+  }
+  const r = nearestCurveIndexAndPoint(notch.position, cutLine)
+  return r ? { curveIndex: r.curveIndex, t: r.t ?? 0 } : null
+}
+
 export function getNotchPositionAndAngle(
   notch: Notch,
   cutLine: Curve[],
@@ -58,12 +78,9 @@ export function getNotchPositionAndAngle(
   return { position: notch.position, angle: notch.angle }
 }
 
-/** Projiziert notch.position auf die CutLine → (curveIndex, t). */
+/** Parametrische Lage auf der cutLine; siehe `getNotchCutLineParameter`. */
 export function getNotchCurveIndexAndT(notch: Notch, cutLine: Curve[], _seamLine?: Curve[]): { curveIndex: number; t: number } | null {
-  if (cutLine.length === 0) return null
-  const { position } = getNotchPositionAndAngle(notch, cutLine)
-  const r = nearestCurveIndexAndPoint(position, cutLine)
-  return r ? { curveIndex: r.curveIndex, t: r.t ?? 0 } : null
+  return getNotchCutLineParameter(notch, cutLine)
 }
 
 /**

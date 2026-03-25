@@ -2,9 +2,15 @@ import type { PatternPiece } from '../types/model'
 
 /**
  * Ob Eckpunkte (Vertex-Indizes, Ziehen, Löschen) sich auf die **Nahtlinie** beziehen.
- * Bei Nahtzugabe entsteht die Naht oft per Clipper mit viel mehr Segmenten als die
- * Schnittkontur (Bézier-Abtastung) — dann müssen Indizes zur **cutLine** passen
- * (softVertices). Punkt-/Kurvenpunkt-Werkzeug nutzt dagegen `useSeamLineForPointCurveEditing`.
+ *
+ * **Formal:** Bei Nahtzugabe wird `cutLine` bei jeder Ableitung **vollständig** aus dem Offset neu
+ * erzeugt; es gibt **kein** Segment-Mapping seam↔cut. `SeamAssignment`-Indizes beziehen sich auf
+ * `getCurvesForSeamEdge` (Naht als Master → **seamLine**); Notch-`vertexIndex` auf **cutLine**
+ * (nach Rebuild: `resyncNotchesAfterCutLineRebuilt`). Siehe `docs/TRIMTEX-SOFTWARE-DOKUMENTATION.md` 6.1.
+ *
+ * **Hier:** Wenn `seamLine.length > cutLine.length`, liefern wir false — Eckpunkte folgen dann der
+ * **cutLine**, damit die Indexbasis zur dichten Kontur passt. Punkt-/Kurvenpunkt-Werkzeug:
+ * `useSeamLineForPointCurveEditing`.
  */
 export function useSeamLineForVertexEditing(piece: PatternPiece): boolean {
   if (piece.seamAllowanceMm == null || piece.seamLine.length < 3 || piece.cutLine.length < 3) {

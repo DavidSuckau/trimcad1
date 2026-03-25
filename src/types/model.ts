@@ -25,14 +25,21 @@ export type NotchType = 'single' | 'double' | 'v'
 
 export type Notch = {
   id: string
-  /** Absolute Position – einzige Quelle der Wahrheit. Wird nur bei bewusstem Verschieben geändert. */
+  /**
+   * Freie Kerbe: Näherungspunkt in mm; kanonische Lage = Projektion auf aktuelle `cutLine` (siehe
+   * `getNotchCutLineParameter` / `getNotchPositionAndAngle`). Bei Ecken-Verankerung hat `vertexIndex` Vorrang.
+   */
   position: Point
   angle: number
   type: NotchType
   depth: number
   /** Breite der Kerbe in mm (entlang der Kontur). Default 6. */
   width?: number
-  /** Index des Konturpunkts (Knick) – Notch folgt dem Vertex wenn er sich bewegt. */
+  /**
+   * Optional: Ecke der **cutLine** (`cutLine[vertexIndex].start`). Entspricht Parameter **t = 0** auf
+   * diesem Segment; die Kerbe „wandert“ mit dem Vertex. Ohne `vertexIndex`: implizit **(curveIndex, t)**
+   * über Projektion von `position`.
+   */
   vertexIndex?: number
 }
 
@@ -84,7 +91,10 @@ export type ViewState = {
 export type SeamAssignment = {
   id: string
   pieceIdA: string
-  /** Curve-Indices der Master-Kontur (seamLine bei Nahtzugabe, sonst cutLine); siehe getCurvesForSeamEdge */
+  /**
+   * Curve-Indices der Master-Kontur (seamLine bei Nahtzugabe, sonst cutLine); siehe getCurvesForSeamEdge.
+   * Keine Indizes der abgeleiteten cutLine, wenn Master = seamLine; kein 1:1-Segment-Mapping seam↔cut.
+   */
   curveIndicesA: number[]
   /** Vom Nutzer angeklickter curveIndex – definiert die Nährichtung auf Kante A */
   clickedCurveA: number

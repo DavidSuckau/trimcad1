@@ -10,9 +10,15 @@ const VERTEX_ANCHOR_DIST_MM = 0.55
 const SEAM_VERTEX_NOTCH_OCCLUSION_MM = 5.5
 
 /**
- * Nach Neuberechnung der Außenkontur (z. B. Offset aus seam): notch.vertexIndex ist immer cutLine-basiert —
- * alte Indizes dürfen nicht mit Seam-Vertex-Indizes vermischt werden. Kerben per alter Cut-Position auf die
- * neue cutLine projizieren; nur bei echten Ecken wieder verankern.
+ * Nach **topologischer oder geometrischer** Änderung der `cutLine` (Offset, Vertex löschen, …):
+ *
+ * - Ausgang: kanonische Punktlage auf der **alten** cutLine (`getNotchPositionAndAngle` → berücksichtigt
+ *   `vertexIndex` vor `position`).
+ * - Ziel: **eine** neue Darstellung auf der **neuen** cutLine: nächstgelegener Punkt; optional wieder
+ *   `vertexIndex`, wenn t nahe 0/1 und Abstand zur Ecke klein („re-snap“ an Ecke). Sonst freie Kerbe:
+ *   `vertexIndex: undefined`, `position`/`angle` auf Fußpunkt/Normale.
+ *
+ * Damit ist die Strategie **parametrisch** (implizit über Projektion), nicht „mm absolut losgelöst“.
  */
 export function resyncNotchesAfterCutLineRebuilt(
   notches: Notch[],

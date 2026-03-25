@@ -41,6 +41,19 @@ const DIGITIZE_HANDLE_REFLECT_R = 1.9
 const WORKSPACE_IMAGE_OPACITY = 0.42
 const IMAGE_CORNER_HIT_MM = 12
 
+/** Snapshot für Kerben-Resync erst beim Loslassen (Seam-Master + Nahtzugabe). */
+function cloneVertexDragCutLine(curves: Curve[]): Curve[] {
+  return curves.map((c) =>
+    c.type === 'line'
+      ? { type: 'line', start: { ...c.start }, end: { ...c.end } }
+      : { type: 'bezier', start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
+  )
+}
+
+function cloneVertexDragNotches(notches: PatternPiece['notches']): PatternPiece['notches'] {
+  return notches.map((n) => ({ ...n, position: { ...n.position } }))
+}
+
 function workspaceImageLayout(session: {
   imagePosition: Point
   imageSizePx: { width: number; height: number } | null
@@ -1069,7 +1082,15 @@ export function WorkspaceCanvas() {
     | { kind: 'grainPoint'; pieceId: string; which: 'start' | 'end' }
     /** Ganzen Laufrichtungspfeil parallel verschieben (Schaft/Pfeil, nicht Endpunkte einzeln). */
     | { kind: 'grainLine'; pieceId: string; startLocal: Point; lineAtPointerDown: Line }
-    | { kind: 'vertex'; pieceId: string; vertexIndex: number; startLocal: Point; seamDrag?: { startLocal: Point; cutVertexIndex: number } }
+    | {
+        kind: 'vertex'
+        pieceId: string
+        vertexIndex: number
+        startLocal: Point
+        seamDrag?: { startLocal: Point; cutVertexIndex: number }
+        /** Nahtzugabe + Seam-Master: Kerben während Ziehen nicht pro Frame auf Cut projizieren. */
+        notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[] }
+      }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
     | { kind: 'rectangle'; start: Point; current: Point }
@@ -1254,7 +1275,8 @@ export function WorkspaceCanvas() {
             if (!nr) continue
             const seamMm = p.seamAllowanceMm ?? 10
             if (nr.distance > seamMm * 2.5) continue
-            cutCurveIndex = nr.curveIndex
+            // Master-Kontur = seamLine; getCornerRange / SeamAssignment erwarten seam-Indices, nicht Cut-Polylinien-Index.
+            cutCurveIndex = nearest.curveIndex
           } else {
             cutCurveIndex = nearestCut.curveIndex
           }
@@ -1428,11 +1450,16 @@ export function WorkspaceCanvas() {
             const startLocal = bestVertex.vertexIndex === 0
               ? curves[0].start
               : curves[bestVertex.vertexIndex - 1].end
+            const notchStabilize =
+              p!.seamAllowanceMm != null && useSeamLineForVertexEditing(p!)
+                ? { notches: cloneVertexDragNotches(p!.notches), cutLine: cloneVertexDragCutLine(p!.cutLine) }
+                : undefined
             setDragging({
               kind: 'vertex',
               pieceId: bestVertex.pieceId,
               vertexIndex: bestVertex.vertexIndex,
               startLocal: { ...startLocal },
+              ...(notchStabilize ? { notchStabilize } : {}),
             })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
@@ -2362,10 +2389,20 @@ export function WorkspaceCanvas() {
             y: start.y + Math.round((local.y - start.y) / SNAP_MM) * SNAP_MM,
           }
         }
-        updateVertex(dragging.pieceId, dragging.vertexIndex, local, false)
+        updateVertex(
+          dragging.pieceId,
+          dragging.vertexIndex,
+          local,
+          false,
+          dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
+        )
         // Nahtzuordnung: bei Längendifferenz < 5 mm und Alt/⌘/Strg → exakt auf gleiche Kantenlänge wie Gegenstück (Store: snapSeamEdgeToMatch).
         if (e.altKey || e.metaKey || e.ctrlKey) {
-          snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
+          snapSeamEdgeToMatch(
+            dragging.pieceId,
+            dragging.vertexIndex,
+            dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
+          )
         }
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -2536,7 +2573,11 @@ export function WorkspaceCanvas() {
     const onKeyDown = (ev: KeyboardEvent) => {
       if (ev.repeat) return
       if (ev.altKey || ev.metaKey || ev.ctrlKey) {
-        snapSeamEdgeToMatch(pieceId, vertexIndex)
+        snapSeamEdgeToMatch(
+          pieceId,
+          vertexIndex,
+          dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
+        )
       }
     }
     window.addEventListener('keydown', onKeyDown, true)
@@ -3111,7 +3152,11 @@ export function WorkspaceCanvas() {
       }
     } else if (dragging?.kind === 'vertex') {
       if (_e && (_e.altKey || _e.metaKey || _e.ctrlKey)) {
-        snapSeamEdgeToMatch(dragging.pieceId, dragging.vertexIndex)
+        snapSeamEdgeToMatch(
+          dragging.pieceId,
+          dragging.vertexIndex,
+          dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
+        )
       }
       // Cut-as-Master: Nahtlinie aus Schnittkante nachziehen. Bei Seam-as-Master ist seamLine die
       // bearbeitete Kontur (updateVertex leitet cutLine schon ab) – recomputeSeamLine würde seam überschreiben.
@@ -4488,7 +4533,11 @@ export function WorkspaceCanvas() {
           bottom: 24,
           left: '50%',
           transform: 'translateX(-50%)',
-          background: toastMessage.startsWith('success:') ? '#2e7d32' : '#d32f2f',
+          background: toastMessage.startsWith('success:')
+            ? '#2e7d32'
+            : toastMessage.startsWith('warn:')
+              ? '#e65100'
+              : '#d32f2f',
           color: '#fff',
           padding: '8px 20px',
           borderRadius: 6,
@@ -4497,13 +4546,17 @@ export function WorkspaceCanvas() {
           boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
           zIndex: 9999,
           pointerEvents: 'none',
-          whiteSpace: 'nowrap',
+          maxWidth: 'min(92vw, 520px)',
+          whiteSpace: 'normal',
+          textAlign: 'center',
         }}>
           {toastMessage.startsWith('success:')
             ? toastMessage.slice(8)
             : toastMessage.startsWith('error:')
               ? toastMessage.slice(6)
-              : toastMessage}
+              : toastMessage.startsWith('warn:')
+                ? toastMessage.slice(5)
+                : toastMessage}
         </div>
       )}
     </div>
