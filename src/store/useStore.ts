@@ -676,6 +676,17 @@ export const useStore = create<Store>((set, get) => ({
     const s = get()
     const piece = s.workspace.pieces.find((p) => p.id === pieceId)
     if (!piece) return
+    const masterCurves = getCurvesForSeamEdge(piece)
+    const nM = masterCurves.length
+    const vertexPosOnMaster =
+      nM > 0 && vertexIndex >= 0 && vertexIndex < nM
+        ? vertexIndex === 0
+          ? { ...masterCurves[0].start }
+          : { ...masterCurves[vertexIndex - 1].end }
+        : null
+
+    type SnapCand = { snapPt: Point; diff: number; id: string }
+    const candidates: SnapCand[] = []
     for (const a of s.workspace.seamAssignments) {
       const isA = a.pieceIdA === pieceId
       const isB = a.pieceIdB === pieceId
@@ -689,10 +700,22 @@ export const useStore = create<Store>((set, get) => ({
       if (diff >= SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM) continue
       const snapPt = snapVertexToEdgeLength(piece, curveIndices, vertexIndex, refLen)
       if (snapPt) {
-        get().updateVertex(pieceId, vertexIndex, snapPt, false, options)
-        return
+        candidates.push({ snapPt, diff, id: a.id })
       }
     }
+    if (candidates.length === 0) return
+    candidates.sort((x, y) => {
+      if (x.diff !== y.diff) return x.diff - y.diff
+      if (vertexPosOnMaster) {
+        const dx =
+          Math.hypot(x.snapPt.x - vertexPosOnMaster.x, x.snapPt.y - vertexPosOnMaster.y) -
+          Math.hypot(y.snapPt.x - vertexPosOnMaster.x, y.snapPt.y - vertexPosOnMaster.y)
+        if (Math.abs(dx) > 1e-9) return dx
+      }
+      return x.id.localeCompare(y.id)
+    })
+    const best = candidates[0]
+    get().updateVertex(pieceId, vertexIndex, best.snapPt, false, options)
   },
 
   setSelectedPoint: (v) => set({ selectedPoint: v }),
