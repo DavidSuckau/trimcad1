@@ -23,6 +23,7 @@ import {
   getSeamEdgeCurves,
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
+  edgeTotalLength,
 } from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
@@ -1063,6 +1064,7 @@ export function WorkspaceCanvas() {
     setPiecePropertiesDialogPieceId,
     setWorkspaceImageLocked,
     exitAllModes,
+    setMassstabDialog,
   } = useStore()
   const { pieces, view } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
@@ -1249,6 +1251,38 @@ export function WorkspaceCanvas() {
           startPan: { x: view.panX, y: view.panY },
         })
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+        return
+      }
+      if (tool === 'massstab') {
+        if (selectedPieceIds.length !== 1) {
+          setToastMessage('error:Bitte genau ein Teil auswählen.')
+          return
+        }
+        const pieceId0 = selectedPieceIds[0]
+        const p = pieces.find((x) => x.id === pieceId0)
+        if (!p || !p.cutLine?.length) return
+        const hasSeam = p.seamLine.length >= 3
+        const curvesForHit = hasSeam ? p.seamLine : p.cutLine
+        const local = worldToPieceLocal(world, p)
+        const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
+        if (!nearest || nearest.distance >= SEAM_HIT_MM) return
+        if (hasSeam) {
+          const distToCut = nearestCurveIndexAndPoint(local, p.cutLine)?.distance ?? Infinity
+          if (nearest.distance >= distToCut) return
+          const segHit = curvesForHit[nearest.curveIndex]
+          const midHit = segHit ? curveMidpoint(segHit) : nearest.point
+          const nr = nearestCurveIndexAndPoint(midHit, p.cutLine)
+          if (!nr) return
+          const seamMm = p.seamAllowanceMm ?? 10
+          if (nr.distance > seamMm * 2.5) return
+        }
+        const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
+        if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) return
+        const curveIndexForRange = hasSeam ? nearest.curveIndex : nearestCut.curveIndex
+        const range = getCornerRange(p, curveIndexForRange)
+        const resolved = resolvedSeamAssignmentCurveIndices(p, range)
+        const currentLengthMm = edgeTotalLength(p, resolved)
+        setMassstabDialog({ pieceId: p.id, curveIndices: resolved, currentLengthMm })
         return
       }
       if (rulerMode) {
@@ -1837,6 +1871,7 @@ export function WorkspaceCanvas() {
       addDigitizeNode,
       finishDigitize,
       setImagePosition,
+      setMassstabDialog,
     ]
   )
 
@@ -2869,6 +2904,13 @@ export function WorkspaceCanvas() {
         }
         return
       }
+      if (e.key === 'm' || e.key === 'M') {
+        if (!inInput) {
+          setTool('massstab')
+          e.preventDefault()
+        }
+        return
+      }
       if (e.key === 'd' || e.key === 'D') {
         if (!inInput) {
           setTool('digitize')
@@ -3261,7 +3303,7 @@ export function WorkspaceCanvas() {
       style={{
         touchAction: 'none',
         cursor:
-          rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' ? 'crosshair' : 'default',
+          rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' || tool === 'massstab' ? 'crosshair' : 'default',
       }}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>

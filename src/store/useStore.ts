@@ -19,6 +19,7 @@ import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
+import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -142,6 +143,7 @@ type Tool =
   | 'internalLine'
   | 'internalCircle'
   | 'kante'
+  | 'massstab'
   | 'digitize'
 
 /** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
@@ -197,6 +199,8 @@ type Store = {
   toastMessage: string | null
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
   seamAdjustmentDialog: string | null
+  /** Maßstab: Referenzkante gewählt, Ziel-Länge eingeben. */
+  massstabDialog: { pieceId: string; curveIndices: number[]; currentLengthMm: number } | null
   digitizeState: DigitizeState | null
   imageDigitizeSession: ImageDigitizeSession | null
   /** Hintergrundbild ist ausgewählt (wie ein Teil). */
@@ -232,6 +236,9 @@ type Store = {
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
   removeSeamAssignment: (id: string) => void
   setSeamAdjustmentDialog: (v: string | null) => void
+  setMassstabDialog: (v: Store['massstabDialog']) => void
+  /** Skaliert das Teil so, dass die gewählte Referenzkante `targetLengthMm` hat (Dialog schließen bei Erfolg). */
+  applyMassstab: (targetLengthMm: number) => void
   /** Passt Notch-Positionen auf der Zielseite an die Referenzseite an. */
   adjustSeamNotches: (assignmentId: string, keepSide: 'A' | 'B') => void
   /** Prüft alle SeamAssignments: Gesamtlänge gleich + Notch-Abstände ungleich → Modal öffnen. */
@@ -404,6 +411,7 @@ export const useStore = create<Store>((set, get) => ({
   dxfExportScale: 1,
   toastMessage: null,
   seamAdjustmentDialog: null,
+  massstabDialog: null,
   digitizeState: null,
   imageDigitizeSession: null,
   workspaceImageSelected: false,
@@ -568,6 +576,46 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
   setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v }),
+  setMassstabDialog: (v) => set({ massstabDialog: v }),
+
+  applyMassstab: (targetLengthMm) => {
+    const s = get()
+    const d = s.massstabDialog
+    if (!d) return
+    if (!Number.isFinite(targetLengthMm) || targetLengthMm <= 0) {
+      set({ toastMessage: 'error:Ziel-Länge muss größer als 0 sein.' })
+      return
+    }
+    const piece = s.workspace.pieces.find((p) => p.id === d.pieceId)
+    if (!piece) {
+      set({ massstabDialog: null, toastMessage: 'error:Teil nicht gefunden.' })
+      return
+    }
+    const len = edgeTotalLength(piece, d.curveIndices)
+    if (len < 1e-9) {
+      set({ toastMessage: 'error:Kantenlänge ist zu klein.' })
+      return
+    }
+    const pivot = getReferenceEdgePivotLocal(piece, d.curveIndices)
+    if (!pivot) {
+      set({ toastMessage: 'error:Ungültige Referenzkante.' })
+      return
+    }
+    const scale = targetLengthMm / len
+    const result = applyUniformScaleToPiece(piece, pivot, scale)
+    if (!result.ok) {
+      set({ toastMessage: 'error:' + result.message })
+      return
+    }
+    set((st) => ({
+      workspace: {
+        ...st.workspace,
+        pieces: st.workspace.pieces.map((p) => (p.id === d.pieceId ? result.piece : p)),
+      },
+      massstabDialog: null,
+      tool: 'select',
+    }))
+  },
 
   adjustSeamNotches: (assignmentId, keepSide) => {
     const s = get()
@@ -1714,6 +1762,7 @@ export const useStore = create<Store>((set, get) => ({
       rulerMode: false,
       rulerLine: null,
       seamAdjustmentDialog: null,
+      massstabDialog: null,
       showHelpModal: false,
       showShortcutListModal: false,
       showSettingsModal: false,

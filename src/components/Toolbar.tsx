@@ -7,8 +7,9 @@ import { importDxfFromString } from '../dxf/dxfImporter'
 import { validateSeamAllowance } from '../geometry/offset'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
+import { MassstabModal } from './MassstabModal'
 
-type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle'
+type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle' | 'massstab'
 type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
 
 const NAHTZUGABE_MM = 5
@@ -21,6 +22,7 @@ const TOOL_DISPLAY: Record<string, { label: string; shortcut?: string }> = {
   curvepoint: { label: 'Kurvenpunkt', shortcut: 'C' },
   notch: { label: 'Notch', shortcut: 'N' },
   kante: { label: 'Kante', shortcut: 'K' },
+  massstab: { label: 'Maßstab', shortcut: 'M' },
   digitize: { label: 'Digitalisieren', shortcut: 'D' },
   rectangle: { label: 'Rechteck' },
   line: { label: 'Linie' },
@@ -171,7 +173,7 @@ export function Toolbar() {
     setErzeugenSubmenu(null)
   }
 
-  const handleBearbeiten = (action: ToolId | 'nahtzugabe' | 'kante') => {
+  const handleBearbeiten = (action: ToolId | 'nahtzugabe' | 'kante' | 'massstab') => {
     if (action === 'nahtzugabe') {
       selectedPieceIds.forEach((id) => applyOffset(id, NAHTZUGABE_MM))
     } else {
@@ -526,6 +528,15 @@ export function Toolbar() {
                   Kante <span className="menubar-shortcut">K</span>
                 </button>
               </li>
+              <li>
+                <button
+                  type="button"
+                  className={`menubar-dropdown-btn ${tool === 'massstab' ? 'active' : ''}`}
+                  onClick={() => handleBearbeiten('massstab')}
+                >
+                  Maßstab <span className="menubar-shortcut">M</span>
+                </button>
+              </li>
               <li className="menubar-separator" />
               <li>
                 <button
@@ -804,6 +815,7 @@ export function Toolbar() {
       </div>
       <SettingsModal />
       <SeamAdjustmentModal />
+      <MassstabModal />
       {nahtzugabeDialogPieceId && (() => {
         const dialogPiece = workspace.pieces.find((p) => p.id === nahtzugabeDialogPieceId)
         const hasExisting = dialogPiece?.seamAllowanceMm != null
