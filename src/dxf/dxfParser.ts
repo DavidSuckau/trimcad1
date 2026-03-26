@@ -1,10 +1,13 @@
 /**
  * Minimal DXF R12 ASCII Parser – TrimTex DXF-Import.
- * Parst HEADER, ENTITIES (POLYLINE, VERTEX, LWPOLYLINE, LINE, CIRCLE),
+ * Parst HEADER, ENTITIES (POLYLINE, VERTEX, LWPOLYLINE, LINE, CIRCLE, ARC),
  * optional BLOCKS und INSERT.
  *
  * Spezifikation: docs/DXF-MASTER-SPEZIFIKATION.txt
  */
+
+import { expandLwPolylineWithBulge, type VertexWithBulge } from './dxfBulge'
+import { tessellateArcEntity } from './dxfArcTessellate'
 
 export type DxfPoint = { x: number; y: number }
 
@@ -49,7 +52,21 @@ export type DxfInsert = {
   rotation: number
 }
 
-export type DxfEntity = DxfPolyline | DxfLwPolyline | DxfLine | DxfCircle | DxfInsert
+/** Kreisbogen als Polylinie (nach Tessellation), für Import wie LWPOLYLINE. */
+export type DxfArcPolyline = {
+  type: 'ARC_POLYLINE'
+  layer: string
+  vertices: DxfPoint[]
+  closed: boolean
+}
+
+export type DxfEntity =
+  | DxfPolyline
+  | DxfLwPolyline
+  | DxfLine
+  | DxfCircle
+  | DxfInsert
+  | DxfArcPolyline
 
 export type DxfBlock = {
   name: string
@@ -190,6 +207,21 @@ function parseEntitiesSection(
         i++
         continue
       }
+      if (g.value === 'ARC') {
+        const slice = groups.slice(i)
+        const layer = getValue(slice, 8) ?? '0'
+        const cx = getNum(slice, 10) ?? 0
+        const cy = getNum(slice, 20) ?? 0
+        const radius = getNum(slice, 40) ?? 0
+        const a0 = getNum(slice, 50) ?? 0
+        const a1 = getNum(slice, 51) ?? 0
+        const verts = tessellateArcEntity(cx, cy, radius, a0, a1)
+        if (verts.length >= 2) {
+          list.push({ type: 'ARC_POLYLINE', layer, vertices: verts, closed: false })
+        }
+        i++
+        continue
+      }
     }
     i++
   }
@@ -207,7 +239,7 @@ function parsePolyline(
   const flag70 = getNum(slice, 70) ?? 0
   const closed = flag70 === 1
 
-  const vertices: DxfPoint[] = []
+  const rawVerts: VertexWithBulge[] = []
   let idx = 0
   while (idx < slice.length) {
     const g = slice[idx]
@@ -215,8 +247,9 @@ function parsePolyline(
       const vSlice = slice.slice(idx)
       const x = getNum(vSlice, 10)
       const y = getNum(vSlice, 20)
+      const bulge = getNum(vSlice, 42) ?? 0
       if (x != null && y != null) {
-        vertices.push({ x, y })
+        rawVerts.push({ x, y, bulge })
       }
       idx++
       continue
@@ -229,6 +262,11 @@ function parsePolyline(
 
   const seqendIdx = slice.findIndex((x) => x.code === 0 && x.value === 'SEQEND')
   const nextIndex = seqendIdx >= 0 ? start + seqendIdx + 1 : start + slice.length
+
+  const vertices =
+    rawVerts.length > 0 && rawVerts.some((v) => Math.abs(v.bulge) > 1e-10)
+      ? expandLwPolylineWithBulge(rawVerts, closed)
+      : rawVerts.map((v) => ({ x: v.x, y: v.y }))
 
   if (vertices.length < 2) return { entity: null, nextIndex }
 
@@ -248,7 +286,7 @@ function parseLwPolyline(
   const flag70 = getNum(slice, 70) ?? 0
   const closed = (flag70 & 1) !== 0
 
-  const vertices: DxfPoint[] = []
+  const rawVerts: VertexWithBulge[] = []
   let pendingX: number | null = null
   for (let idx = 0; idx < slice.length; idx++) {
     const g = slice[idx]
@@ -259,17 +297,31 @@ function parseLwPolyline(
     }
     if (g.code === 20 && pendingX != null) {
       const y = parseFloat(g.value)
-      vertices.push({ x: pendingX, y: Number.isNaN(y) ? 0 : y })
+      let bulge = 0
+      if (idx + 1 < slice.length && slice[idx + 1].code === 42) {
+        bulge = parseFloat(slice[idx + 1].value)
+        if (Number.isNaN(bulge)) bulge = 0
+        idx++
+      }
+      rawVerts.push({ x: pendingX, y: Number.isNaN(y) ? 0 : y, bulge })
       pendingX = null
       continue
     }
-    if (g.code === 0) break
+    if (g.code === 0 && idx > 0) break
   }
 
   const nextEntityIdx = slice.findIndex(
-    (x, j) => j > 0 && x.code === 0 && ['LINE', 'CIRCLE', 'POLYLINE', 'LWPOLYLINE', 'INSERT', 'ENDSEC'].includes(x.value)
+    (x, j) =>
+      j > 0 &&
+      x.code === 0 &&
+      ['LINE', 'CIRCLE', 'POLYLINE', 'LWPOLYLINE', 'INSERT', 'ARC', 'ENDSEC'].includes(x.value)
   )
   const nextIndex = nextEntityIdx >= 0 ? start + nextEntityIdx : start + slice.length
+
+  const vertices =
+    rawVerts.length > 0 && rawVerts.some((v) => Math.abs(v.bulge) > 1e-10)
+      ? expandLwPolylineWithBulge(rawVerts, closed)
+      : rawVerts.map((v) => ({ x: v.x, y: v.y }))
 
   if (vertices.length < 2) return { entity: null, nextIndex }
 
@@ -348,6 +400,21 @@ function parseEntitiesFromSlice(groups: Array<{ code: number; value: string }>):
         const cy = getNum(slice, 20) ?? 0
         const radius = getNum(slice, 40) ?? 0
         list.push({ type: 'CIRCLE', layer, cx, cy, radius })
+        i++
+        continue
+      }
+      if (g.value === 'ARC') {
+        const slice = groups.slice(i)
+        const layer = getValue(slice, 8) ?? '0'
+        const cx = getNum(slice, 10) ?? 0
+        const cy = getNum(slice, 20) ?? 0
+        const radius = getNum(slice, 40) ?? 0
+        const a0 = getNum(slice, 50) ?? 0
+        const a1 = getNum(slice, 51) ?? 0
+        const verts = tessellateArcEntity(cx, cy, radius, a0, a1)
+        if (verts.length >= 2) {
+          list.push({ type: 'ARC_POLYLINE', layer, vertices: verts, closed: false })
+        }
         i++
         continue
       }

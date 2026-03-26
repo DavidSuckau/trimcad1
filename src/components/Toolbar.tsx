@@ -3,7 +3,7 @@ import { useStore } from '../store/useStore'
 import { downloadDxf } from '../dxf/dxfWriter'
 import { downloadAamaDxf } from '../dxf/aamaWriter'
 import { downloadAstmDxf } from '../dxf/astmWriter'
-import { importDxfFromString } from '../dxf/dxfImporter'
+import { importDxfFromString, parseExtraCutLayers } from '../dxf/dxfImporter'
 import { validateSeamAllowance } from '../geometry/offset'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
@@ -59,6 +59,7 @@ export function Toolbar() {
     setShowHelpModal,
     setShowShortcutListModal,
     dxfExportScale,
+    dxfImportExtraCutLayers,
     startDigitize,
     startImageSession,
     setToastMessage,
@@ -138,14 +139,17 @@ export function Toolbar() {
     reader.onload = () => {
       try {
         const content = reader.result as string
-        const result = importDxfFromString(content)
+        const result = importDxfFromString(content, {
+          extraCutLayers: parseExtraCutLayers(dxfImportExtraCutLayers),
+        })
         if (result.error) {
           setToastMessage('error:' + result.error)
         } else if (result.pieces.length > 0) {
           for (const piece of result.pieces) {
             addPiece(piece)
           }
-          setToastMessage('success:' + result.pieces.length + ' Schnittteil(e) importiert')
+          const hint = result.warnings?.length ? ' ' + result.warnings.join(' ') : ''
+          setToastMessage('success:' + result.pieces.length + ' Schnittteil(e) importiert.' + hint)
         } else {
           setToastMessage('error:Keine Schnittteile in der DXF-Datei gefunden')
         }

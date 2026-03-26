@@ -195,6 +195,8 @@ type Store = {
   /** Kompakte Tastenkürzel-Übersicht (Hilfe-Menü). */
   showShortcutListModal: boolean
   dxfExportScale: number
+  /** Kommagetrennte zusätzliche Layer-Namen für DXF-Import (Schnittkontur). */
+  dxfImportExtraCutLayers: string
   notchSettings: NotchSetting[]
   toastMessage: string | null
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
@@ -231,6 +233,7 @@ type Store = {
   setShowHelpModal: (v: boolean) => void
   setShowShortcutListModal: (v: boolean) => void
   setDxfExportScale: (v: number) => void
+  setDxfImportExtraCutLayers: (v: string) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
@@ -409,6 +412,7 @@ export const useStore = create<Store>((set, get) => ({
   showHelpModal: false,
   showShortcutListModal: false,
   dxfExportScale: 1,
+  dxfImportExtraCutLayers: '',
   toastMessage: null,
   seamAdjustmentDialog: null,
   massstabDialog: null,
@@ -509,6 +513,7 @@ export const useStore = create<Store>((set, get) => ({
   setShowHelpModal: (v) => set({ showHelpModal: v }),
   setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
   setDxfExportScale: (v) => set({ dxfExportScale: v }),
+  setDxfImportExtraCutLayers: (v) => set({ dxfImportExtraCutLayers: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
     set((s) => {

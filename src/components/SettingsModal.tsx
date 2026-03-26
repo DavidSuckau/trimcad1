@@ -12,7 +12,16 @@ const TABS: { id: SettingsTab; label: string }[] = [
 ]
 
 export function SettingsModal() {
-  const { showSettingsModal, setShowSettingsModal, notchSettings, updateNotchSetting, dxfExportScale, setDxfExportScale } = useStore()
+  const {
+    showSettingsModal,
+    setShowSettingsModal,
+    notchSettings,
+    updateNotchSetting,
+    dxfExportScale,
+    setDxfExportScale,
+    dxfImportExtraCutLayers,
+    setDxfImportExtraCutLayers,
+  } = useStore()
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
 
   if (!showSettingsModal) return null
@@ -92,6 +101,23 @@ export function SettingsModal() {
                 <p style={{ fontSize: '11px', color: '#999', margin: '4px 0 0' }}>
                   Falls der Zuschnitt auf dem Cutter zu gross ist: Faktor verkleinern (z.B. 0.1 oder 0.01).
                   Falls zu klein: Faktor vergroessern.
+                </p>
+              </div>
+              <h3 style={{ margin: '20px 0 12px', fontSize: '14px' }}>DXF-Import</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '13px' }}>
+                  Zusätzliche Schnitt-Layer (Komma-getrennt, z. B. <code>MUSTER,MY_CUT</code>)
+                </label>
+                <input
+                  type="text"
+                  style={{ width: '100%', maxWidth: '420px', padding: '6px 8px', fontSize: '13px' }}
+                  value={dxfImportExtraCutLayers}
+                  onChange={(e) => setDxfImportExtraCutLayers(e.target.value)}
+                  placeholder="z.B. MUSTER, FABRIC"
+                />
+                <p style={{ fontSize: '11px', color: '#999', margin: '4px 0 0' }}>
+                  Wenn die Schnittkontur in der DXF-Datei auf einem anderen Layer liegt als die Standard-Layer (CUT),
+                  hier die exakten Namen eintragen. Siehe auch docs/DXF-IMPORT-FREMDSYSTEME.md.
                 </p>
               </div>
             </div>
