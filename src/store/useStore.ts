@@ -8,9 +8,11 @@ import {
   countNotchesOnEdge,
   getNotchesOnEdge,
   edgeTotalLength,
+  getCurvesForSeamEdge,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
 } from '../geometry/seamUtils'
+import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
@@ -596,29 +598,41 @@ export const useStore = create<Store>((set, get) => ({
       cumPositions.push(cum)
     }
 
-    const tgtSubCurves = tgtIndices.map((ci) => tgtPiece.cutLine[ci]).filter(Boolean)
+    // curveIndices in SeamAssignment beziehen sich auf die Master-Kontur (seamLine bei Nahtzugabe), nicht blind auf cutLine.
+    const tgtMasterCurves = getCurvesForSeamEdge(tgtPiece)
+    const tgtSubCurves = tgtIndices.map((ci) => tgtMasterCurves[ci]).filter(Boolean)
     if (tgtSubCurves.length === 0) { set({ seamAdjustmentDialog: null }); return }
 
     const tgtNotches = getNotchesOnEdge(tgtPiece, tgtIndices)
     if (tgtNotches.length !== cumPositions.length) { set({ seamAdjustmentDialog: null }); return }
 
-    const targetPoints: { notchId: string; point: Point }[] = []
+    const targetPoints: { notchId: string; point: Point; angle: number }[] = []
     for (let i = 0; i < tgtNotches.length; i++) {
       const result = pointAtPathLength(tgtSubCurves, cumPositions[i])
-      if (result) targetPoints.push({ notchId: tgtNotches[i].notchId, point: result.point })
+      if (!result) continue
+      const notchId = tgtNotches[i].notchId
+      const n0 = tgtPiece.notches.find((nn) => nn.id === notchId)
+      if (!n0) continue
+      // Punkt liegt auf der Master-Kante; Speicherung erfolgt auf der Schnittkontur (Projektion), sonst falsche Darstellung.
+      const { position, angle } = getNotchPositionAndAngleOnCutLine(
+        { ...n0, position: result.point, vertexIndex: undefined },
+        tgtPiece.cutLine,
+        tgtPiece.seamLine
+      )
+      targetPoints.push({ notchId, point: position, angle })
     }
     if (targetPoints.length === 0) { set({ seamAdjustmentDialog: null }); return }
 
-    const tpMap = new Map(targetPoints.map((tp) => [tp.notchId, tp.point]))
+    const tpMap = new Map(targetPoints.map((tp) => [tp.notchId, tp]))
 
     set((st) => {
       const piece = st.workspace.pieces.find((p) => p.id === tgtPieceId)
       if (!piece) return { seamAdjustmentDialog: null }
       const notches = piece.notches.map((n) => {
-        const newPos = tpMap.get(n.id)
-        if (!newPos) return n
+        const tp = tpMap.get(n.id)
+        if (!tp) return n
         const { vertexIndex: _v, ...rest } = n
-        return { ...rest, position: { ...newPos } }
+        return { ...rest, position: { ...tp.point }, angle: tp.angle }
       })
       return {
         seamAdjustmentDialog: null,
