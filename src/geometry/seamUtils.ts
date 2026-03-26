@@ -167,6 +167,48 @@ export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], 
 export type SubSegInfo = { length: number; midpoint: Point }
 
 /**
+ * Wählt die bessere Paarung der Subsegmente zwischen zwei Nahtkanten (gleiche vs. gegenläufige
+ * Laufrichtung entlang der jeweiligen Kontur). Ohne feste Annahme „immer B umkehren“: nach Spiegeln
+ * oder je nach gewählter Kante kann die bessere Übereinstimmung die gleiche Index-Reihenfolge sein.
+ */
+export type SeamSubSegmentPairing = {
+  /** true: subsA[i] ↔ subsB[n−1−i] (gegenläufig); false: subsA[i] ↔ subsB[i] */
+  reverseB: boolean
+  /** Summe |ΔL| über alle Subsegmente bei dieser Paarung (mm) */
+  totalMismatchMm: number
+  /** Größte einzelne Abweichung eines Subsegments (mm) */
+  maxSegmentMismatchMm: number
+}
+
+export function bestSeamSubSegmentPairing(
+  subsA: SubSegInfo[],
+  subsB: SubSegInfo[]
+): SeamSubSegmentPairing | null {
+  if (subsA.length === 0 || subsA.length !== subsB.length) return null
+  const n = subsA.length
+  let errRev = 0
+  let maxRev = 0
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(subsA[i].length - subsB[n - 1 - i].length)
+    errRev += d
+    maxRev = Math.max(maxRev, d)
+  }
+  let errFwd = 0
+  let maxFwd = 0
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(subsA[i].length - subsB[i].length)
+    errFwd += d
+    maxFwd = Math.max(maxFwd, d)
+  }
+  const reverseB = errRev <= errFwd
+  return {
+    reverseB,
+    totalMismatchMm: reverseB ? errRev : errFwd,
+    maxSegmentMismatchMm: reverseB ? maxRev : maxFwd,
+  }
+}
+
+/**
  * Teilt eine Eckpunkt→Eckpunkt-Kante an den Notch-Positionen in Teilstrecken auf.
  * Rückgabe: je Teilstrecke die Länge (mm) und den Mittelpunkt (piece-local).
  */

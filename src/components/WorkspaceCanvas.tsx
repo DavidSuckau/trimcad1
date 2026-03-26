@@ -24,6 +24,7 @@ import {
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
+  bestSeamSubSegmentPairing,
 } from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
@@ -4244,10 +4245,12 @@ export function WorkspaceCanvas() {
               const notchMismatch = notchCountA !== notchCountB
               const subsA = getSubSegments(pieceA, idxA)
               const subsB = getSubSegments(pieceB, idxB)
+              const subPairing = bestSeamSubSegmentPairing(subsA, subsB)
               let subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null = null
-              if (!notchMismatch && subsA.length === subsB.length && subsA.length >= 2) {
+              if (!notchMismatch && subPairing && subsA.length >= 2) {
+                const rev = subPairing.reverseB
                 subDiffs = subsA.map((sa, i) => {
-                  const sb = subsB[subsB.length - 1 - i]
+                  const sb = rev ? subsB[subsB.length - 1 - i] : subsB[i]
                   return {
                     lenA: sa.length,
                     lenB: sb.length,
@@ -4256,6 +4259,8 @@ export function WorkspaceCanvas() {
                   }
                 })
               }
+              const subSegMismatch =
+                !notchMismatch && subPairing && subsA.length >= 2 && subPairing.maxSegmentMismatchMm >= 0.1
               const midResultA = pointAtPathLength(segsA, lenA / 2)
               const midResultB = pointAtPathLength(segsB, lenB / 2)
               const midALocal = midResultA ? midResultA.point : curveMidpoint(segsA[Math.floor(segsA.length / 2)])
@@ -4311,6 +4316,23 @@ export function WorkspaceCanvas() {
                       fontFamily="sans-serif"
                     >
                       ⚠ Notch {notchCountA}:{notchCountB}
+                    </text>
+                  )}
+                  {subSegMismatch && subPairing && (
+                    <text
+                      x={labelX}
+                      y={
+                        labelY +
+                        (showLengthDiff ? 11 : 0) +
+                        (notchMismatch ? 11 : 0)
+                      }
+                      textAnchor="middle"
+                      fontSize={9}
+                      fill="#e65100"
+                      fontWeight="600"
+                      fontFamily="sans-serif"
+                    >
+                      ⚠ Kerben-Abstände max Δ {subPairing.maxSegmentMismatchMm.toFixed(1)} mm
                     </text>
                   )}
                   {subDiffs && subDiffs.map((sd, i) => {

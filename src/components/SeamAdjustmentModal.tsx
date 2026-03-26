@@ -4,6 +4,7 @@ import {
   getSubSegments,
   edgeTotalLength,
   resolvedSeamAssignmentCurveIndices,
+  bestSeamSubSegmentPairing,
 } from '../geometry/seamUtils'
 
 export function SeamAdjustmentModal() {
@@ -33,10 +34,12 @@ export function SeamAdjustmentModal() {
 
   const subsA = getSubSegments(pieceA, idxA)
   const subsB = getSubSegments(pieceB, idxB)
+  const subPair = bestSeamSubSegmentPairing(subsA, subsB)
   const diffs: { idx: number; diff: number }[] = []
-  if (!notchMismatch && subsA.length === subsB.length && subsA.length >= 2) {
+  if (!notchMismatch && subPair && subsA.length >= 2) {
+    const rev = subPair.reverseB
     for (let i = 0; i < subsA.length; i++) {
-      const sb = subsB[subsB.length - 1 - i]
+      const sb = rev ? subsB[subsB.length - 1 - i] : subsB[i]
       const d = Math.abs(subsA[i].length - sb.length)
       if (d >= 0.1) diffs.push({ idx: i + 1, diff: d })
     }

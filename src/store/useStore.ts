@@ -10,6 +10,7 @@ import {
   edgeTotalLength,
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
+  bestSeamSubSegmentPairing,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
 } from '../geometry/seamUtils'
@@ -563,11 +564,9 @@ export const useStore = create<Store>((set, get) => ({
     let subDiff = false
     const subsA = getSubSegments(pieceA, normA)
     const subsB = getSubSegments(pieceB, normB)
-    if (ncA === ncB && subsA.length === subsB.length && subsA.length >= 2) {
-      for (let i = 0; i < subsA.length; i++) {
-        const sb = subsB[subsB.length - 1 - i]
-        if (Math.abs(subsA[i].length - sb.length) >= 0.1) { subDiff = true; break }
-      }
+    const pairing = bestSeamSubSegmentPairing(subsA, subsB)
+    if (ncA === ncB && pairing && subsA.length >= 2 && pairing.maxSegmentMismatchMm >= 0.1) {
+      subDiff = true
     }
     if (subDiff) {
       set({ seamAdjustmentDialog: newId })
@@ -647,14 +646,21 @@ export const useStore = create<Store>((set, get) => ({
     }
 
     const refSubs = getSubSegments(refPiece, refIndices)
+    const tgtSubs = getSubSegments(tgtPiece, tgtIndices)
+    const pairing = bestSeamSubSegmentPairing(refSubs, tgtSubs)
+    if (!pairing) {
+      set({ seamAdjustmentDialog: null })
+      return
+    }
+
     const refSubLengths = refSubs.map((ss) => ss.length)
-    const reversed = [...refSubLengths].reverse()
+    const order = pairing.reverseB ? [...refSubLengths].reverse() : refSubLengths
 
     const tgtTotalLen = edgeTotalLength(tgtPiece, tgtIndices)
     const cumPositions: number[] = []
     let cum = 0
-    for (let i = 0; i < reversed.length - 1; i++) {
-      cum += reversed[i]
+    for (let i = 0; i < order.length - 1; i++) {
+      cum += order[i]
       if (cum > tgtTotalLen + 0.01) {
         set({ seamAdjustmentDialog: null })
         return
@@ -727,13 +733,11 @@ export const useStore = create<Store>((set, get) => ({
       if (ncA !== ncB || ncA < 1) continue
       const subsA = getSubSegments(pieceA, idxA)
       const subsB = getSubSegments(pieceB, idxB)
-      if (subsA.length !== subsB.length || subsA.length < 2) continue
-      for (let i = 0; i < subsA.length; i++) {
-        const sb = subsB[subsB.length - 1 - i]
-        if (Math.abs(subsA[i].length - sb.length) >= 0.1) {
-          set({ seamAdjustmentDialog: a.id })
-          return
-        }
+      const pairing = bestSeamSubSegmentPairing(subsA, subsB)
+      if (!pairing || subsA.length < 2) continue
+      if (pairing.maxSegmentMismatchMm >= 0.1) {
+        set({ seamAdjustmentDialog: a.id })
+        return
       }
     }
   },
