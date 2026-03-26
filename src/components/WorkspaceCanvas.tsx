@@ -16,7 +16,14 @@ import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPo
 import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
 import { seamVertexNearProjectedNotch } from '../geometry/notchResyncCutLine'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
-import { getCornerRange, countNotchesOnEdge, getSubSegments, getSeamEdgeCurves, getCurvesForSeamEdge } from '../geometry/seamUtils'
+import {
+  getCornerRange,
+  countNotchesOnEdge,
+  getSubSegments,
+  getSeamEdgeCurves,
+  getCurvesForSeamEdge,
+  resolvedSeamAssignmentCurveIndices,
+} from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
@@ -4179,20 +4186,22 @@ export function WorkspaceCanvas() {
               const pieceA = pieces.find((p) => p.id === a.pieceIdA)
               const pieceB = pieces.find((p) => p.id === a.pieceIdB)
               if (!pieceA?.cutLine?.length || !pieceB?.cutLine?.length) return null
+              const idxA = resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA)
+              const idxB = resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)
               const curvesA = getCurvesForSeamEdge(pieceA)
               const curvesB = getCurvesForSeamEdge(pieceB)
-              const segsA = a.curveIndicesA.map((ci) => curvesA[ci]).filter(Boolean)
-              const segsB = a.curveIndicesB.map((ci) => curvesB[ci]).filter(Boolean)
+              const segsA = idxA.map((ci) => curvesA[ci]).filter(Boolean)
+              const segsB = idxB.map((ci) => curvesB[ci]).filter(Boolean)
               if (segsA.length === 0 || segsB.length === 0) return null
               const lenA = segsA.reduce((sum, s) => sum + curveSegmentArcLength(s, 0, 1), 0)
               const lenB = segsB.reduce((sum, s) => sum + curveSegmentArcLength(s, 0, 1), 0)
               const diffMm = Math.abs(lenA - lenB)
               const showLengthDiff = diffMm >= 0.1
-              const notchCountA = countNotchesOnEdge(pieceA, a.curveIndicesA)
-              const notchCountB = countNotchesOnEdge(pieceB, a.curveIndicesB)
+              const notchCountA = countNotchesOnEdge(pieceA, idxA)
+              const notchCountB = countNotchesOnEdge(pieceB, idxB)
               const notchMismatch = notchCountA !== notchCountB
-              const subsA = getSubSegments(pieceA, a.curveIndicesA)
-              const subsB = getSubSegments(pieceB, a.curveIndicesB)
+              const subsA = getSubSegments(pieceA, idxA)
+              const subsB = getSubSegments(pieceB, idxB)
               let subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null = null
               if (!notchMismatch && subsA.length === subsB.length && subsA.length >= 2) {
                 subDiffs = subsA.map((sa, i) => {

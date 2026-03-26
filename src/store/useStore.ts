@@ -9,6 +9,7 @@ import {
   getNotchesOnEdge,
   edgeTotalLength,
   getCurvesForSeamEdge,
+  resolvedSeamAssignmentCurveIndices,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
 } from '../geometry/seamUtils'
@@ -509,6 +510,13 @@ export const useStore = create<Store>((set, get) => ({
     }),
   addSeamAssignment: (pieceIdA, curveIndicesA, clickedCurveA, pieceIdB, curveIndicesB, clickedCurveB) => {
     const newId = generateId()
+    const afterGet = get()
+    const pieceA0 = afterGet.workspace.pieces.find((p) => p.id === pieceIdA)
+    const pieceB0 = afterGet.workspace.pieces.find((p) => p.id === pieceIdB)
+    const normA =
+      pieceA0 != null ? resolvedSeamAssignmentCurveIndices(pieceA0, curveIndicesA) : curveIndicesA
+    const normB =
+      pieceB0 != null ? resolvedSeamAssignmentCurveIndices(pieceB0, curveIndicesB) : curveIndicesB
     set((s) => ({
       workspace: {
         ...s.workspace,
@@ -517,10 +525,10 @@ export const useStore = create<Store>((set, get) => ({
           {
             id: newId,
             pieceIdA,
-            curveIndicesA,
+            curveIndicesA: normA,
             clickedCurveA,
             pieceIdB,
-            curveIndicesB,
+            curveIndicesB: normB,
             clickedCurveB,
           },
         ],
@@ -532,16 +540,16 @@ export const useStore = create<Store>((set, get) => ({
     const pieceA = after.workspace.pieces.find((p) => p.id === pieceIdA)
     const pieceB = after.workspace.pieces.find((p) => p.id === pieceIdB)
     if (!pieceA || !pieceB) return
-    const lenA = edgeTotalLength(pieceA, curveIndicesA)
-    const lenB = edgeTotalLength(pieceB, curveIndicesB)
+    const lenA = edgeTotalLength(pieceA, normA)
+    const lenB = edgeTotalLength(pieceB, normB)
     const totalDiffMm = Math.abs(lenA - lenB)
     if (totalDiffMm >= 0.1) return
-    const ncA = countNotchesOnEdge(pieceA, curveIndicesA)
-    const ncB = countNotchesOnEdge(pieceB, curveIndicesB)
+    const ncA = countNotchesOnEdge(pieceA, normA)
+    const ncB = countNotchesOnEdge(pieceB, normB)
     if (ncA < 1) return
     let subDiff = false
-    const subsA = getSubSegments(pieceA, curveIndicesA)
-    const subsB = getSubSegments(pieceB, curveIndicesB)
+    const subsA = getSubSegments(pieceA, normA)
+    const subsB = getSubSegments(pieceB, normB)
     if (ncA === ncB && subsA.length === subsB.length && subsA.length >= 2) {
       for (let i = 0; i < subsA.length; i++) {
         const sb = subsB[subsB.length - 1 - i]
@@ -567,13 +575,16 @@ export const useStore = create<Store>((set, get) => ({
     if (!a) return
 
     const refPieceId = keepSide === 'A' ? a.pieceIdA : a.pieceIdB
-    const refIndices = keepSide === 'A' ? a.curveIndicesA : a.curveIndicesB
+    const rawRefIndices = keepSide === 'A' ? a.curveIndicesA : a.curveIndicesB
     const tgtPieceId = keepSide === 'A' ? a.pieceIdB : a.pieceIdA
-    const tgtIndices = keepSide === 'A' ? a.curveIndicesB : a.curveIndicesA
+    const rawTgtIndices = keepSide === 'A' ? a.curveIndicesB : a.curveIndicesA
 
     const refPiece = s.workspace.pieces.find((p) => p.id === refPieceId)
     const tgtPiece = s.workspace.pieces.find((p) => p.id === tgtPieceId)
     if (!refPiece || !tgtPiece) return
+
+    const refIndices = resolvedSeamAssignmentCurveIndices(refPiece, rawRefIndices)
+    const tgtIndices = resolvedSeamAssignmentCurveIndices(tgtPiece, rawTgtIndices)
 
     const refNotchCount = countNotchesOnEdge(refPiece, refIndices)
     const tgtNotchCount = countNotchesOnEdge(tgtPiece, tgtIndices)
@@ -653,14 +664,16 @@ export const useStore = create<Store>((set, get) => ({
       const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
       const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
       if (!pieceA || !pieceB) continue
-      const lenA = edgeTotalLength(pieceA, a.curveIndicesA)
-      const lenB = edgeTotalLength(pieceB, a.curveIndicesB)
+      const idxA = resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA)
+      const idxB = resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)
+      const lenA = edgeTotalLength(pieceA, idxA)
+      const lenB = edgeTotalLength(pieceB, idxB)
       if (Math.abs(lenA - lenB) >= 0.1) continue
-      const ncA = countNotchesOnEdge(pieceA, a.curveIndicesA)
-      const ncB = countNotchesOnEdge(pieceB, a.curveIndicesB)
+      const ncA = countNotchesOnEdge(pieceA, idxA)
+      const ncB = countNotchesOnEdge(pieceB, idxB)
       if (ncA !== ncB || ncA < 1) continue
-      const subsA = getSubSegments(pieceA, a.curveIndicesA)
-      const subsB = getSubSegments(pieceB, a.curveIndicesB)
+      const subsA = getSubSegments(pieceA, idxA)
+      const subsB = getSubSegments(pieceB, idxB)
       if (subsA.length !== subsB.length || subsA.length < 2) continue
       for (let i = 0; i < subsA.length; i++) {
         const sb = subsB[subsB.length - 1 - i]
@@ -691,10 +704,13 @@ export const useStore = create<Store>((set, get) => ({
       const isA = a.pieceIdA === pieceId
       const isB = a.pieceIdB === pieceId
       if (!isA && !isB) continue
-      const curveIndices = isA ? a.curveIndicesA : a.curveIndicesB
+      const rawThis = isA ? a.curveIndicesA : a.curveIndicesB
+      const rawOther = isA ? a.curveIndicesB : a.curveIndicesA
+      const curveIndices = resolvedSeamAssignmentCurveIndices(piece, rawThis)
       const refPiece = s.workspace.pieces.find((p) => p.id === (isA ? a.pieceIdB : a.pieceIdA))
       if (!refPiece) continue
-      const refLen = edgeTotalLength(refPiece, isA ? a.curveIndicesB : a.curveIndicesA)
+      const refOtherIdx = resolvedSeamAssignmentCurveIndices(refPiece, rawOther)
+      const refLen = edgeTotalLength(refPiece, refOtherIdx)
       const currLen = edgeTotalLength(piece, curveIndices)
       const diff = Math.abs(currLen - refLen)
       if (diff >= SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM) continue

@@ -1,5 +1,10 @@
 import { useStore } from '../store/useStore'
-import { countNotchesOnEdge, getSubSegments, edgeTotalLength } from '../geometry/seamUtils'
+import {
+  countNotchesOnEdge,
+  getSubSegments,
+  edgeTotalLength,
+  resolvedSeamAssignmentCurveIndices,
+} from '../geometry/seamUtils'
 
 export function SeamAdjustmentModal() {
   const seamAdjustmentDialog = useStore((s) => s.seamAdjustmentDialog)
@@ -19,13 +24,15 @@ export function SeamAdjustmentModal() {
   const nameA = pieceA.name || `Teil ${pieceA.number}`
   const nameB = pieceB.name || `Teil ${pieceB.number}`
 
-  const lenA = edgeTotalLength(pieceA, assignment.curveIndicesA)
-  const ncA = countNotchesOnEdge(pieceA, assignment.curveIndicesA)
-  const ncB = countNotchesOnEdge(pieceB, assignment.curveIndicesB)
+  const idxA = resolvedSeamAssignmentCurveIndices(pieceA, assignment.curveIndicesA)
+  const idxB = resolvedSeamAssignmentCurveIndices(pieceB, assignment.curveIndicesB)
+  const lenA = edgeTotalLength(pieceA, idxA)
+  const ncA = countNotchesOnEdge(pieceA, idxA)
+  const ncB = countNotchesOnEdge(pieceB, idxB)
   const notchMismatch = ncA !== ncB
 
-  const subsA = getSubSegments(pieceA, assignment.curveIndicesA)
-  const subsB = getSubSegments(pieceB, assignment.curveIndicesB)
+  const subsA = getSubSegments(pieceA, idxA)
+  const subsB = getSubSegments(pieceB, idxB)
   const diffs: { idx: number; diff: number }[] = []
   if (!notchMismatch && subsA.length === subsB.length && subsA.length >= 2) {
     for (let i = 0; i < subsA.length; i++) {

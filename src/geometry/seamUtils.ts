@@ -13,6 +13,104 @@ export function getCurvesForSeamEdge(piece: PatternPiece): Curve[] {
   return piece.seamAllowanceMm != null && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
 }
 
+function vertexPositionOnClosedCurves(curves: Curve[], vertexIndex: number): Point {
+  const n = curves.length
+  const vi = ((vertexIndex % n) + n) % n
+  return vi === 0 ? { ...curves[0].start } : { ...curves[vi - 1].end }
+}
+
+/**
+ * softVertices und Notch-vertexIndex beziehen sich auf die cutLine.
+ * Für Eckpunkt-Logik auf der Master-Kontur (seamLine) müssen sie auf Master-Vertex-Indizes gemappt werden.
+ */
+function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number): number | null {
+  const master = getCurvesForSeamEdge(piece)
+  const cut = piece.cutLine
+  if (cutVi < 0 || cutVi >= cut.length) return null
+  if (master === cut) {
+    return cutVi < master.length ? cutVi : null
+  }
+  const cutPt = vertexPositionOnClosedCurves(cut, cutVi)
+  let best = -1
+  let bestD = Infinity
+  for (let i = 0; i < master.length; i++) {
+    const p = vertexPositionOnClosedCurves(master, i)
+    const d = Math.hypot(p.x - cutPt.x, p.y - cutPt.y)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  }
+  /** Toleranz: gleiche „logische Ecke“ trotz Offset (mm). */
+  const MAP_EPS_MM = 8
+  return best >= 0 && bestD <= MAP_EPS_MM ? best : null
+}
+
+function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
+  const master = getCurvesForSeamEdge(piece)
+  const cut = piece.cutLine
+  const out = new Set<number>()
+  for (const cutVi of piece.softVertices ?? []) {
+    if (master === cut) {
+      if (cutVi >= 0 && cutVi < master.length) out.add(cutVi)
+    } else {
+      const m = mapCutVertexIndexToMasterVertexIndex(piece, cutVi)
+      if (m != null) out.add(m)
+    }
+  }
+  return out
+}
+
+function masterNotchVertexIndexSet(piece: PatternPiece): Set<number> {
+  const master = getCurvesForSeamEdge(piece)
+  const cut = piece.cutLine
+  const out = new Set<number>()
+  for (const nn of piece.notches) {
+    if (nn.vertexIndex == null) continue
+    const cutVi = nn.vertexIndex
+    if (master === cut) {
+      if (cutVi >= 0 && cutVi < master.length) out.add(cutVi)
+    } else {
+      const m = mapCutVertexIndexToMasterVertexIndex(piece, cutVi)
+      if (m != null) out.add(m)
+    }
+  }
+  return out
+}
+
+/**
+ * Stellt die vollständige Segmentkette von Eckpunkt→Eckpunkt wieder her (Master-Kontur).
+ * Verhindert „Lücken“ in gespeicherten curveIndices nach Teil-Updates; Eckpunkte bleiben die gleichen.
+ */
+export function expandSeamEdgeCurveIndices(piece: PatternPiece, storedCurveIndices: number[]): number[] {
+  const curves = getCurvesForSeamEdge(piece)
+  const n = curves.length
+  if (storedCurveIndices.length === 0 || n === 0) return storedCurveIndices
+  for (const ci of storedCurveIndices) {
+    if (ci < 0 || ci >= n) return storedCurveIndices
+  }
+  const first = storedCurveIndices[0]
+  const last = storedCurveIndices[storedCurveIndices.length - 1]
+  const endVi = (last + 1) % n
+  const fresh: number[] = []
+  let vi = first
+  let guard = 0
+  while (vi !== endVi && guard < n + 2) {
+    fresh.push(vi)
+    vi = (vi + 1) % n
+    guard++
+  }
+  return fresh.length > 0 ? fresh : storedCurveIndices
+}
+
+/** Für SeamAssignment: aufgelöste Master-Segmentindizes Eck→Eck. */
+export function resolvedSeamAssignmentCurveIndices(
+  piece: PatternPiece,
+  storedCurveIndices: number[]
+): number[] {
+  return expandSeamEdgeCurveIndices(piece, storedCurveIndices)
+}
+
 /**
  * Erweitert einen einzelnen curveIndex zur Eckpunkt→Eckpunkt-Range.
  * Eckpunkt = Vertex der weder softVertex noch Notch-Vertex ist.
@@ -23,10 +121,8 @@ export function getCornerRange(piece: PatternPiece, curveIndex: number): number[
   const curves = getCurvesForSeamEdge(piece)
   const n = curves.length
   if (n === 0) return []
-  const softSet = new Set(piece.softVertices ?? [])
-  const notchVIs = new Set(
-    piece.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null)
-  )
+  const softSet = masterSoftVertexIndexSet(piece)
+  const notchVIs = masterNotchVertexIndexSet(piece)
   const isCorner = (vi: number) => !softSet.has(vi) && !notchVIs.has(vi)
 
   let startVi = curveIndex
