@@ -90,3 +90,17 @@ export function isDrillLayer(layer: string): boolean {
 export function isGrainLayer(layer: string): boolean {
   return GRAIN_LAYER_NAMES.has(normalizeDxfLayerName(layer))
 }
+
+/** Layer, die bei Fallback-Import (kein bekannter Schnitt-Layer) nicht als Kontur gelten. */
+export function isExcludedLayerFallback(layer: string): boolean {
+  const n = normalizeDxfLayerName(layer)
+  if (SEAM_LAYER_NAMES.has(n)) return true
+  if (NOTCH_LAYER_TO_TYPE.has(n)) return true
+  if (DRILL_LAYER_NAMES.has(n)) return true
+  if (GRAIN_LAYER_NAMES.has(n)) return true
+  const sub = ['TEXT', 'DIMENSION', 'AXIS', 'DEFPOINTS', 'HATCH', 'CENTER', 'HIDDEN', 'DOTS', 'PHANTOM', 'VIEWPORT', 'TITLE', 'GRID', 'CONSTRUCTION', 'M-TEXT', 'LEADER', 'ATTDEF', 'ANNOTATION']
+  for (const s of sub) {
+    if (n.includes(s)) return true
+  }
+  return false
+}

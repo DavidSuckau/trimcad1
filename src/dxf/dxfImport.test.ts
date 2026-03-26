@@ -101,11 +101,11 @@ describe('importDxfFromString', () => {
   })
 
   it('erkennt zusätzlichen Schnitt-Layer aus den Einstellungen', () => {
-    const dxf = DXF_HEADER + closedRectPolyline('MUSTER') + DXF_FOOTER
+    const dxf = DXF_HEADER + closedRectPolyline('HATCH') + DXF_FOOTER
     const no = importDxfFromString(dxf)
     expect(no.pieces.length).toBe(0)
 
-    const yes = importDxfFromString(dxf, { extraCutLayers: parseExtraCutLayers('MUSTER') })
+    const yes = importDxfFromString(dxf, { extraCutLayers: parseExtraCutLayers('HATCH') })
     expect(yes.pieces.length).toBe(1)
   })
 
@@ -144,7 +144,7 @@ CIRCLE
     expect(r.pieces[0].drills[0].radius).toBeGreaterThan(0)
   })
 
-  it('meldet ignorierte SPLINE-Entities in warnings', () => {
+  it('importiert SPLINE grob als Stützpunktkette', () => {
     const dxf =
       DXF_HEADER +
       closedRectPolyline('CUT') +
@@ -152,10 +152,17 @@ CIRCLE
 SPLINE
 8
 0
+10
+1
+20
+1
+10
+5
+20
+5
 ` +
       DXF_FOOTER
     const r = importDxfFromString(dxf)
-    expect(r.warnings?.some((w) => w.includes('SPLINE'))).toBe(true)
     expect(r.pieces.length).toBe(1)
   })
 
@@ -191,5 +198,106 @@ CUT
     const r = importDxfFromString(dxf)
     expect(r.pieces.length).toBe(1)
     expect(r.pieces[0].cutLine.length).toBeGreaterThan(4)
+  })
+
+  it('INSERT findet Block auch wenn ENTITIES vor BLOCKS in der Datei steht', () => {
+    const dxf = `0
+SECTION
+2
+HEADER
+9
+$INSUNITS
+70
+5
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+INSERT
+8
+0
+2
+P1
+10
+0
+20
+0
+41
+1
+42
+1
+0
+ENDSEC
+0
+SECTION
+2
+BLOCKS
+0
+BLOCK
+8
+0
+2
+P1
+70
+0
+10
+0
+20
+0
+0
+POLYLINE
+8
+CUT
+66
+1
+70
+1
+0
+VERTEX
+8
+CUT
+10
+0
+20
+0
+0
+VERTEX
+8
+CUT
+10
+100
+20
+0
+0
+VERTEX
+8
+CUT
+10
+100
+20
+100
+0
+VERTEX
+8
+CUT
+10
+0
+20
+100
+0
+SEQEND
+0
+ENDBLK
+0
+ENDSEC
+0
+EOF
+`
+    const r = importDxfFromString(dxf)
+    expect(r.error).toBeUndefined()
+    expect(r.pieces.length).toBe(1)
   })
 })

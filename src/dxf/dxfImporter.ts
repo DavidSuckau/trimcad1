@@ -14,6 +14,7 @@ import {
   notchTypeForLayer,
   isDrillLayer,
   isGrainLayer,
+  isExcludedLayerFallback,
 } from './dxfImportLayers'
 import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
@@ -92,6 +93,28 @@ function transformPoint(
 }
 
 type BBox = { minX: number; minY: number; maxX: number; maxY: number }
+
+function polygonArea(pts: DxfPoint[]): number {
+  if (pts.length < 3) return 0
+  let a = 0
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length
+    a += pts[i].x * pts[j].y - pts[j].x * pts[i].y
+  }
+  return Math.abs(a / 2)
+}
+
+function getBlockCaseInsensitive(
+  blocks: Map<string, import('./dxfParser').DxfBlock>,
+  name: string
+): import('./dxfParser').DxfBlock | undefined {
+  if (blocks.has(name)) return blocks.get(name)
+  const u = name.toUpperCase()
+  for (const [k, v] of blocks) {
+    if (k.toUpperCase() === u) return v
+  }
+  return undefined
+}
 
 function boundsOf(pts: DxfPoint[]): BBox {
   let minX = Infinity,
@@ -268,7 +291,7 @@ function extractPieceDrafts(
 
   for (const e of entities) {
     if (e.type !== 'INSERT') continue
-    const blk = blocks.get(e.blockName)
+    const blk = getBlockCaseInsensitive(blocks, e.blockName)
     if (!blk) continue
 
     const cuts: Array<{ vertices: DxfPoint[]; closed: boolean }> = []
@@ -334,6 +357,63 @@ function extractPieceDrafts(
     })
   }
 
+  return drafts
+}
+
+/**
+ * Wenn keine Standard-Schnitt-Layer passen: geschlossene Polylines auf „neutralen“ Layern
+ * (keine Kerben/Bohrung/Grain/Naht, keine typischen Hilfs-Layer-Namen).
+ */
+function extractFallbackCutDrafts(parsed: {
+  entities: DxfEntity[]
+  blocks: Map<string, import('./dxfParser').DxfBlock>
+  insUnits: number
+}): PieceDraft[] {
+  const { entities, blocks, insUnits } = parsed
+  const unitScale = insUnits === 4 ? 10 : 1
+  const candidates: Array<{ vertices: DxfPoint[]; layer: string }> = []
+
+  const consider = (pts: DxfPoint[], closed: boolean, layer: string) => {
+    if (pts.length < 3) return
+    if (isExcludedLayerFallback(layer)) return
+    const c = closed || isClosed(pts)
+    if (!c) return
+    if (polygonArea(pts) < 2) return
+    candidates.push({ vertices: pts, layer })
+  }
+
+  for (const e of entities) {
+    if (e.type === 'INSERT') {
+      const blk = getBlockCaseInsensitive(blocks, e.blockName)
+      if (!blk) continue
+      for (const be of blk.entities) {
+        const pl = polylineFromEntity(be)
+        if (!pl) continue
+        const pts = pl.vertices.map((p) => transformPoint(p, e, unitScale) as DxfPoint)
+        consider(pts, pl.closed || isClosed(pts), pl.layer)
+      }
+      continue
+    }
+    const pl = polylineFromEntity(e)
+    if (!pl) continue
+    const pts = applyUnitScale(pl.vertices, insUnits)
+    consider(pts, pl.closed || isClosed(pts), pl.layer)
+  }
+
+  candidates.sort((a, b) => polygonArea(b.vertices) - polygonArea(a.vertices))
+  const maxPieces = 80
+  const drafts: PieceDraft[] = []
+  for (let i = 0; i < Math.min(candidates.length, maxPieces); i++) {
+    const c = candidates[i]
+    drafts.push({
+      cutVertices: c.vertices,
+      closed: true,
+      seamVertices: null,
+      notchesFromLayers: [],
+      drillsFromLayers: [],
+      grainLine: null,
+    })
+  }
   return drafts
 }
 
@@ -455,20 +535,22 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
   const warnings: string[] = []
   const extraCutLayers = options?.extraCutLayers ?? []
 
-  if (isBinaryDxf(content)) {
+  const text = content.replace(/^\uFEFF/, '')
+
+  if (isBinaryDxf(text)) {
     return {
       pieces: [],
       error: 'Binär-DXF wird nicht unterstützt. Bitte als ASCII R12 (AC1009) exportieren.',
     }
   }
 
-  const unsupported = scanUnsupportedEntityHints(content)
+  const unsupported = scanUnsupportedEntityHints(text)
   for (const u of unsupported) {
     warnings.push(`${u}-Entities werden ignoriert.`)
   }
 
   try {
-    const parsed = parseDxf(content)
+    const parsed = parseDxf(text)
     const { insUnits } = parsed
     const scale = insUnits === 4 ? 10 : 1
 
@@ -476,13 +558,21 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       warnings.push('Keine Entities in der ENTITIES-Sektion gefunden. Prüfen Sie, ob die Datei DXF R12 ASCII ist.')
     }
 
-    const drafts = extractPieceDrafts(parsed, extraCutLayers)
+    let drafts = extractPieceDrafts(parsed, extraCutLayers)
+    if (drafts.length === 0) {
+      drafts = extractFallbackCutDrafts(parsed)
+      if (drafts.length > 0) {
+        warnings.push(
+          'Kein bekannter Schnitt-Layer: geschlossene Konturen wurden von anderen Layern übernommen (Fläche ≥ 2 mm², keine Hilfs-/Beschriftungs-Layer).'
+        )
+      }
+    }
 
     if (drafts.length === 0) {
       return {
         pieces: [],
         error:
-          'Keine Schnittkonturen gefunden. Erwartet: POLYLINE/LWPOLYLINE auf einem Schnitt-Layer (z. B. CUT, 1, BOUNDARY) oder in Blöcken. Optional in den Einstellungen zusätzliche Schnitt-Layer eintragen.',
+          'Keine Schnittkonturen gefunden. Erwartet: POLYLINE/LWPOLYLINE (ggf. mit Bulge) auf einem Schnitt-Layer (z. B. CUT, 1, BOUNDARY) oder in Blöcken. In den Einstellungen zusätzliche Schnitt-Layer eintragen oder in der Quelle als R12 ASCII mit geschlossenen Polylines exportieren.',
         warnings: warnings.length ? warnings : undefined,
       }
     }

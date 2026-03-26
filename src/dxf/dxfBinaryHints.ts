@@ -13,8 +13,6 @@ export function scanUnsupportedEntityHints(text: string): string[] {
   const found = new Set<string>()
   const u = text
   const patterns: Array<[RegExp, string]> = [
-    [/\n0\nSPLINE\n/i, 'SPLINE'],
-    [/\n0\nELLIPSE\n/i, 'ELLIPSE'],
     [/\n0\nSOLID\n/i, 'SOLID'],
     [/\n0\n3DFACE\n/i, '3DFACE'],
     [/\n0\nMTEXT\n/i, 'MTEXT'],
