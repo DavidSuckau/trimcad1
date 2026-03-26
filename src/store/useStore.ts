@@ -1542,35 +1542,53 @@ export const useStore = create<Store>((set, get) => ({
   offsetSegment: (pieceId, curveIndex, deltaMm) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
-      if (!piece || piece.cutLine.length === 0) return s
-      const pts = offsetSegmentPoints(piece.cutLine, curveIndex, deltaMm)
+      if (!piece) return s
+      const seamPc = useSeamLineForPointCurveEditing(piece)
+      const master = seamPc ? piece.seamLine : piece.cutLine
+      if (master.length === 0) return s
+      const pts = offsetSegmentPoints(master, curveIndex, deltaMm)
       if (!pts) return s
-      const n = piece.cutLine.length
+      const n = master.length
       const prevIdx = (curveIndex - 1 + n) % n
       const nextIdx = (curveIndex + 1) % n
+      let toastMessage: string | null = null
+      const pieces = s.workspace.pieces.map((p) => {
+        if (p.id !== pieceId) return p
+        const seamPcP = useSeamLineForPointCurveEditing(p)
+        const m = seamPcP ? p.seamLine : p.cutLine
+        const nextMaster = m.map((c) =>
+          c.type === 'line'
+            ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
+            : { type: 'bezier' as const, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
+        )
+        const seg = nextMaster[curveIndex]
+        if (seg.type === 'bezier' && pts.cp1 && pts.cp2) {
+          nextMaster[curveIndex] = { type: 'bezier', start: pts.start, end: pts.end, cp1: pts.cp1, cp2: pts.cp2 }
+        } else {
+          nextMaster[curveIndex] = { ...nextMaster[curveIndex], start: pts.start, end: pts.end } as Curve
+        }
+        nextMaster[prevIdx] = { ...nextMaster[prevIdx], end: pts.start } as Curve
+        nextMaster[nextIdx] = { ...nextMaster[nextIdx], start: pts.end } as Curve
+        if (seamPcP && p.seamAllowanceMm != null) {
+          const seamLine = nextMaster
+          const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
+          if (!derived.ok) {
+            toastMessage = `warn:${derived.message}`
+            return p
+          }
+          const cutLine = derived.cutLine
+          const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+          const softVertices = (p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+        }
+        const cutLine = nextMaster
+        const seamLine =
+          p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+        return applySharpCornerPromotion({ ...p, cutLine, seamLine })
+      })
       return {
-        workspace: {
-          ...s.workspace,
-          pieces: s.workspace.pieces.map((p) => {
-            if (p.id !== pieceId) return p
-            const cutLine = p.cutLine.map((c) =>
-              c.type === 'line'
-                ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
-                : { type: 'bezier' as const, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
-            )
-            const seg = cutLine[curveIndex]
-            if (seg.type === 'bezier' && pts.cp1 && pts.cp2) {
-              cutLine[curveIndex] = { type: 'bezier', start: pts.start, end: pts.end, cp1: pts.cp1, cp2: pts.cp2 }
-            } else {
-              cutLine[curveIndex] = { ...cutLine[curveIndex], start: pts.start, end: pts.end } as Curve
-            }
-            cutLine[prevIdx] = { ...cutLine[prevIdx], end: pts.start } as Curve
-            cutLine[nextIdx] = { ...cutLine[nextIdx], start: pts.end } as Curve
-            const seamLine =
-              p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-            return applySharpCornerPromotion({ ...p, cutLine, seamLine })
-          }),
-        },
+        workspace: { ...s.workspace, pieces },
+        ...(toastMessage ? { toastMessage } : {}),
       }
     }),
 

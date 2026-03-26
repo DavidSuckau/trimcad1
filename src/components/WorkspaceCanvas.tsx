@@ -2261,10 +2261,11 @@ export function WorkspaceCanvas() {
           const piecesToCheck =
             selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
           for (const p of piecesToCheck) {
-            if (p.cutLine.length === 0) continue
+            const masterK = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+            if (masterK.length === 0) continue
             const local = worldToPieceLocal(world, p)
-            const r = nearestCurveIndexAndPoint(local, p.cutLine)
-            const curve = r ? p.cutLine[r.curveIndex] : null
+            const r = nearestCurveIndexAndPoint(local, masterK)
+            const curve = r ? masterK[r.curveIndex] : null
             if (
               r &&
               curve?.type === 'line' &&
@@ -2812,7 +2813,8 @@ export function WorkspaceCanvas() {
           const mm = parseMm()
           const p = pieces.find((x) => x.id === segmentActive.pieceId)
           if (p) {
-            const pts = offsetSegmentPoints(p.cutLine, segmentActive.curveIndex, mm)
+            const masterSeg = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+            const pts = offsetSegmentPoints(masterSeg, segmentActive.curveIndex, mm)
             if (pts) addInternalLine(segmentActive.pieceId, { type: 'line', start: pts.start, end: pts.end })
           }
           closeSegmentMenu()
@@ -3636,7 +3638,8 @@ export function WorkspaceCanvas() {
               const mm = Number.isFinite(parseFloat(segmentMenuMm)) ? parseFloat(segmentMenuMm) : 5
               const p = pieces.find((x) => x.id === segmentForMenu.pieceId)
               if (p) {
-                const pts = offsetSegmentPoints(p.cutLine, segmentForMenu.curveIndex, mm)
+                const masterSeg = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+                const pts = offsetSegmentPoints(masterSeg, segmentForMenu.curveIndex, mm)
                 if (pts) {
                   addInternalLine(segmentForMenu.pieceId, { type: 'line', start: pts.start, end: pts.end })
                 }
@@ -3755,11 +3758,12 @@ export function WorkspaceCanvas() {
               hoveredSegmentOnSeam={
                 effectiveSegmentForHighlight != null &&
                 effectiveSegmentForHighlight.pieceId === piece.id &&
-                tool === 'curvepoint' &&
-                hoveredCurvepointSegment != null &&
-                hoveredCurvepointSegment.pieceId === effectiveSegmentForHighlight.pieceId &&
-                hoveredCurvepointSegment.curveIndex === effectiveSegmentForHighlight.curveIndex &&
-                useSeamLineForPointCurveEditing(piece)
+                useSeamLineForPointCurveEditing(piece) &&
+                (tool === 'kante' ||
+                  (tool === 'curvepoint' &&
+                    hoveredCurvepointSegment != null &&
+                    hoveredCurvepointSegment.pieceId === effectiveSegmentForHighlight.pieceId &&
+                    hoveredCurvepointSegment.curveIndex === effectiveSegmentForHighlight.curveIndex))
               }
               hoveredInternalLineCurveIndex={hoveredInternalLine?.pieceId === piece.id ? hoveredInternalLine.curveIndex : null}
               onPointerDown={handlePointerDown}
