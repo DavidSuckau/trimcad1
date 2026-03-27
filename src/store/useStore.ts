@@ -1,6 +1,25 @@
 import { create } from 'zustand'
-import type { Workspace, PatternPiece, ViewState, Point, Line, Curve, Notch, Drill, SeamAssignment, DigitizeNode, DigitizeState } from '../types/model'
-import { offsetCurvesInwardForSeam, deriveCutLineFromSeamWithValidation, offsetSegmentPoints } from '../geometry/offset'
+import type {
+  Workspace,
+  PatternPiece,
+  ViewState,
+  Point,
+  Line,
+  Curve,
+  Notch,
+  Drill,
+  SeamAssignment,
+  SeamAssignmentKindId,
+  DigitizeNode,
+  DigitizeState,
+} from '../types/model'
+import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
+import {
+  offsetCurvesInwardForSeam,
+  deriveCutLineFromSeamWithValidation,
+  offsetSegmentPoints,
+  validateContourAfterVertexMove,
+} from '../geometry/offset'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import {
@@ -21,6 +40,11 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '..
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
+import { applySeamAssignmentCutTrim } from '../geometry/seamAssignmentCutTrim'
+import type { TrimTexProjectFileV1 } from '../persistence/trimtexProjectJson'
+import type { ConfiguratorInstance, ConfiguratorKindId, ConfiguratorPartParams } from '../configurators/types'
+import { generateConfiguratorPartGeometry } from '../configurators/generators'
+import { getDefaultConfiguratorParts } from '../configurators/registry'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -202,12 +226,18 @@ type Store = {
   toastMessage: string | null
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
   seamAdjustmentDialog: string | null
+  /** Nahtzuordnung: Eigenschaften (Nummer, Nahtart), Leertaste bei Hover */
+  seamAssignmentMetaDialogId: string | null
   /** Maßstab: Referenzkante gewählt, Ziel-Länge eingeben. */
   massstabDialog: { pieceId: string; curveIndices: number[]; currentLengthMm: number } | null
   digitizeState: DigitizeState | null
   imageDigitizeSession: ImageDigitizeSession | null
   /** Hintergrundbild ist ausgewählt (wie ein Teil). */
   workspaceImageSelected: boolean
+  /** Konfigurator-Modale/Instanzen sind rein UI-Staat (noch nicht im Projekt persistiert). */
+  configuratorModalOpen: boolean
+  configuratorInstances: ConfiguratorInstance[]
+  rockGeneratorModalOpen: boolean
 
   setView: (v: Partial<ViewState>) => void
   addPiece: (piece?: Partial<PatternPiece>) => string
@@ -233,6 +263,15 @@ type Store = {
   setShowSettingsModal: (v: boolean) => void
   setShowHelpModal: (v: boolean) => void
   setShowShortcutListModal: (v: boolean) => void
+  setShowConfiguratorModal: (v: boolean) => void
+  setShowRockGeneratorModal: (v: boolean) => void
+  createConfiguratorInstance: (kindId: ConfiguratorKindId) => string
+  updateConfiguratorPartParams: (
+    instanceId: string,
+    partId: string,
+    patch: Partial<ConfiguratorPartParams>,
+  ) => void
+  regenerateConfiguratorPart: (instanceId: string, partId: string) => void
   setDxfExportScale: (v: number) => void
   setDxfImportExtraCutLayers: (v: string) => void
   setToastMessage: (v: string | null) => void
@@ -240,6 +279,11 @@ type Store = {
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
   removeSeamAssignment: (id: string) => void
   setSeamAdjustmentDialog: (v: string | null) => void
+  setSeamAssignmentMetaDialogId: (v: string | null) => void
+  updateSeamAssignmentMeta: (
+    assignmentId: string,
+    patch: { orderNumber?: number | null; seamKind?: SeamAssignmentKindId | null }
+  ) => void
   setMassstabDialog: (v: Store['massstabDialog']) => void
   /** Skaliert das Teil so, dass die gewählte Referenzkante `targetLengthMm` hat (Dialog schließen bei Erfolg). */
   applyMassstab: (targetLengthMm: number) => void
@@ -320,6 +364,9 @@ type Store = {
   setWorkspaceImageSelected: (selected: boolean) => void
   setWorkspaceImageLocked: (locked: boolean) => void
   cancelImageSession: () => void
+
+  /** Gespeicherte TrimTex-JSON-Projektdatei laden (ersetzt Arbeitsfläche, DXF-Einstellungen, Kerben-Voreinstellungen, ggf. Hintergrundbild). */
+  loadProjectFromFile: (project: TrimTexProjectFileV1) => void
 }
 
 function generateId(): string {
@@ -416,10 +463,14 @@ export const useStore = create<Store>((set, get) => ({
   dxfImportExtraCutLayers: '',
   toastMessage: null,
   seamAdjustmentDialog: null,
+  seamAssignmentMetaDialogId: null,
   massstabDialog: null,
   digitizeState: null,
   imageDigitizeSession: null,
   workspaceImageSelected: false,
+  configuratorModalOpen: false,
+  configuratorInstances: [],
+  rockGeneratorModalOpen: false,
   notchSettings: Array.from({ length: 10 }, () => ({
     type: 'strich' as NotchType,
     widthMm: 6,
@@ -513,6 +564,90 @@ export const useStore = create<Store>((set, get) => ({
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
   setShowHelpModal: (v) => set({ showHelpModal: v }),
   setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
+  setShowConfiguratorModal: (v) => set({ configuratorModalOpen: v }),
+  setShowRockGeneratorModal: (v) => set({ rockGeneratorModalOpen: v }),
+
+  createConfiguratorInstance: (kindId) => {
+    const instanceId = generateId()
+    const createdAt = new Date().toISOString()
+    const partsDef = getDefaultConfiguratorParts(kindId)
+
+    // Erzeugt die Workspace-Pieces (CutLine + Transform) und merkt sich dann die Zuordnung zu diesem Konfigurator-Teil.
+    const parts: ConfiguratorInstance['parts'] = partsDef.map((pd) => {
+      const geom = generateConfiguratorPartGeometry(kindId, pd.partId, pd.params)
+      const pieceId = get().addPiece({
+        name: geom.pieceName,
+        transform: geom.transform,
+        cutLine: geom.cutLine,
+        internalLines: geom.internalLines ?? [],
+      })
+      return {
+        id: generateId(),
+        kindId,
+        partId: pd.partId,
+        label: pd.label,
+        params: pd.params,
+        pieceId,
+      }
+    })
+
+    set((s) => ({
+      configuratorInstances: [
+        ...s.configuratorInstances,
+        {
+          id: instanceId,
+          kindId,
+          createdAt,
+          parts,
+        },
+      ],
+    }))
+
+    return instanceId
+  },
+
+  updateConfiguratorPartParams: (instanceId, partId, patch) =>
+    set((s) => ({
+      configuratorInstances: s.configuratorInstances.map((inst) => {
+        if (inst.id !== instanceId) return inst
+        return {
+          ...inst,
+          parts: inst.parts.map((p) => (p.id === partId ? { ...p, params: { ...p.params, ...patch } } : p)),
+        }
+      }),
+    })),
+
+  regenerateConfiguratorPart: (instanceId, partId) => {
+    const inst = get().configuratorInstances.find((i) => i.id === instanceId)
+    if (!inst) return
+    const part = inst.parts.find((p) => p.id === partId)
+    if (!part) return
+
+    const geom = generateConfiguratorPartGeometry(inst.kindId, part.partId, part.params)
+
+    // Cut- und Zusatzinfos für dieses Teil überschreiben. SeamAssignments sind Ansichtsdaten und werden entfernt, da
+    // neue Kontur-Indizes nicht mehr zu alten Zuweisungen passen.
+    get().updatePiece(part.pieceId, {
+      name: geom.pieceName,
+      cutLine: geom.cutLine,
+      transform: geom.transform,
+      seamAllowanceMm: null,
+      seamLine: [],
+      notches: [],
+      drills: [],
+      internalLines: geom.internalLines ?? [],
+      grainLine: null,
+      softVertices: [],
+    })
+
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        seamAssignments: s.workspace.seamAssignments.filter((a) => a.pieceIdA !== part.pieceId && a.pieceIdB !== part.pieceId),
+      },
+    }))
+  },
+
   setDxfExportScale: (v) => set({ dxfExportScale: v }),
   setDxfImportExtraCutLayers: (v) => set({ dxfImportExtraCutLayers: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
@@ -554,16 +689,35 @@ export const useStore = create<Store>((set, get) => ({
     const pieceA = after.workspace.pieces.find((p) => p.id === pieceIdA)
     const pieceB = after.workspace.pieces.find((p) => p.id === pieceIdB)
     if (!pieceA || !pieceB) return
-    const lenA = edgeTotalLength(pieceA, normA)
-    const lenB = edgeTotalLength(pieceB, normB)
+    const trimmed = applySeamAssignmentCutTrim(pieceA, pieceB, normA, normB)
+    if (trimmed) {
+      set((st) => ({
+        workspace: {
+          ...st.workspace,
+          pieces: st.workspace.pieces.map((p) => {
+            if (p.id === pieceIdA) return trimmed.pieceA
+            if (p.id === pieceIdB) return trimmed.pieceB
+            return p
+          }),
+        },
+        toastMessage:
+          'success:Naht-Ecken: Schnittkontur an den Enden der Kanten-Zuordnung gekürzt (Nahtlinie unverändert).',
+      }))
+    }
+    const afterTrim = get()
+    const pieceA2 = afterTrim.workspace.pieces.find((p) => p.id === pieceIdA)
+    const pieceB2 = afterTrim.workspace.pieces.find((p) => p.id === pieceIdB)
+    if (!pieceA2 || !pieceB2) return
+    const lenA = edgeTotalLength(pieceA2, normA)
+    const lenB = edgeTotalLength(pieceB2, normB)
     const totalDiffMm = Math.abs(lenA - lenB)
     if (totalDiffMm >= 0.1) return
-    const ncA = countNotchesOnEdge(pieceA, normA)
-    const ncB = countNotchesOnEdge(pieceB, normB)
+    const ncA = countNotchesOnEdge(pieceA2, normA)
+    const ncB = countNotchesOnEdge(pieceB2, normB)
     if (ncA < 1) return
     let subDiff = false
-    const subsA = getSubSegments(pieceA, normA)
-    const subsB = getSubSegments(pieceB, normB)
+    const subsA = getSubSegments(pieceA2, normA)
+    const subsB = getSubSegments(pieceB2, normB)
     const pairing = bestSeamSubSegmentPairing(subsA, subsB)
     if (ncA === ncB && pairing && subsA.length >= 2 && pairing.maxSegmentMismatchMm >= 0.1) {
       subDiff = true
@@ -580,6 +734,48 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
   setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v }),
+  setSeamAssignmentMetaDialogId: (v) => set({ seamAssignmentMetaDialogId: v }),
+  updateSeamAssignmentMeta: (assignmentId, patch) => {
+    const s = get()
+    const idx = s.workspace.seamAssignments.findIndex((a) => a.id === assignmentId)
+    if (idx < 0) return
+    const current = s.workspace.seamAssignments[idx]
+    const nextOrder =
+      patch.orderNumber !== undefined ? patch.orderNumber : current.orderNumber ?? null
+    if (nextOrder != null) {
+      const n = Math.floor(Number(nextOrder))
+      if (!Number.isFinite(n) || n < 1) {
+        set({ toastMessage: 'error:Nummer muss eine ganze Zahl ≥ 1 sein (oder leer).' })
+        return
+      }
+      const taken = s.workspace.seamAssignments.some((a, i) => i !== idx && a.orderNumber === n)
+      if (taken) {
+        set({ toastMessage: 'error:Jede Nummer nur einmal vergeben.' })
+        return
+      }
+    }
+    let nextKind = patch.seamKind !== undefined ? patch.seamKind : current.seamKind ?? null
+    if (nextKind != null && !(SEAM_ASSIGNMENT_KIND_IDS as readonly string[]).includes(nextKind)) {
+      set({ toastMessage: 'error:Unbekannte Nahtart.' })
+      return
+    }
+    set((st) => ({
+      workspace: {
+        ...st.workspace,
+        seamAssignments: st.workspace.seamAssignments.map((a) =>
+          a.id === assignmentId
+            ? {
+                ...a,
+                orderNumber: patch.orderNumber !== undefined ? patch.orderNumber : a.orderNumber,
+                seamKind: patch.seamKind !== undefined ? patch.seamKind : a.seamKind,
+              }
+            : a
+        ),
+      },
+      seamAssignmentMetaDialogId: null,
+      toastMessage: 'success:Naht-Eigenschaften gespeichert.',
+    }))
+  },
   setMassstabDialog: (v) => set({ massstabDialog: v }),
 
   applyMassstab: (targetLengthMm) => {
@@ -1305,6 +1501,11 @@ export const useStore = create<Store>((set, get) => ({
               nextCurves[vertexIndex - 1] = { ...nextCurves[vertexIndex - 1], end: point } as Curve
               nextCurves[vertexIndex] = { ...nextCurves[vertexIndex], start: point } as Curve
             }
+            const contourCheck = validateContourAfterVertexMove(nextCurves)
+            if (!contourCheck.ok) {
+              toastMessage = `warn:${contourCheck.message}`
+              return p
+            }
             let cutLine = p.cutLine
             let seamLine = p.seamLine
             const cutRebuiltFromSeam =
@@ -1320,9 +1521,23 @@ export const useStore = create<Store>((set, get) => ({
               cutLine = derived.cutLine
             } else if (!useSeamMaster) {
               cutLine = nextCurves
-              seamLine = skipSeamRecalc
-                ? p.seamLine
-                : (seamAllowance != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, seamAllowance) : p.seamLine)
+              if (skipSeamRecalc) {
+                seamLine = p.seamLine
+              } else if (seamAllowance != null && cutLine.length >= 3) {
+                const newSeam = offsetCurvesInwardForSeam(cutLine, seamAllowance)
+                if (newSeam.length < 3) {
+                  toastMessage = `warn:Nahtlinie konnte nicht berechnet werden.`
+                  return p
+                }
+                const seamFromCutCheck = validateContourAfterVertexMove(newSeam)
+                if (!seamFromCutCheck.ok) {
+                  toastMessage = `warn:${seamFromCutCheck.message} (Naht aus Schnittkontur)`
+                  return p
+                }
+                seamLine = newSeam
+              } else {
+                seamLine = p.seamLine
+              }
             }
             const baseline = notchOpts?.notchResyncBaseline
             const notches = cutRebuiltFromSeam
@@ -1362,6 +1577,11 @@ export const useStore = create<Store>((set, get) => ({
         }
         const next = [...target]
         next[curveIndex] = bezier
+        const replaceBezierContourCheck = validateContourAfterVertexMove(next)
+        if (!replaceBezierContourCheck.ok) {
+          toastMessage = `warn:${replaceBezierContourCheck.message}`
+          return p
+        }
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
           const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
@@ -1407,6 +1627,11 @@ export const useStore = create<Store>((set, get) => ({
         }
         const next = [...target]
         next[curveIndex] = bezier
+        const moveOnCurveContourCheck = validateContourAfterVertexMove(next)
+        if (!moveOnCurveContourCheck.ok) {
+          toastMessage = `warn:${moveOnCurveContourCheck.message}`
+          return p
+        }
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
           const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
@@ -1789,11 +2014,14 @@ export const useStore = create<Store>((set, get) => ({
       rulerMode: false,
       rulerLine: null,
       seamAdjustmentDialog: null,
+      seamAssignmentMetaDialogId: null,
       massstabDialog: null,
       showHelpModal: false,
       showShortcutListModal: false,
       showSettingsModal: false,
       workspaceImageSelected: false,
+      configuratorModalOpen: false,
+      rockGeneratorModalOpen: false,
       toastMessage: null,
     })),
 
@@ -1871,5 +2099,41 @@ export const useStore = create<Store>((set, get) => ({
       digitizeState: null,
       tool: 'select',
     })),
+
+  loadProjectFromFile: (project) => {
+    const notchSettings = Array.from({ length: 10 }, (_, i) => {
+      const n = project.notchSettings[i]
+      return n && (n.type === 'strich' || n.type === 'kerbe')
+        ? { type: n.type, widthMm: n.widthMm, depthMm: n.depthMm }
+        : { type: 'strich' as const, widthMm: 6, depthMm: 4 }
+    })
+    const firstId = project.workspace.pieces[0]?.id
+    set({
+      workspace: project.workspace,
+      dxfExportScale: project.dxfExportScale,
+      dxfImportExtraCutLayers: project.dxfImportExtraCutLayers,
+      notchSettings,
+      imageDigitizeSession: project.imageDigitizeSession,
+      workspaceImageSelected: Boolean(project.imageDigitizeSession?.imageDataUrl),
+      selectedPieceIds: firstId ? [firstId] : [],
+      selectedPoint: null,
+      tool: 'select',
+      digitizeState: null,
+      pendingNahtzugabeClick: false,
+      nahtzugabeDialogPieceId: null,
+      piecePropertiesDialogPieceId: null,
+      nahtzuordnungMode: 'idle',
+      pendingNahtzuordnungFirst: null,
+      rulerMode: false,
+      rulerLine: null,
+      seamAdjustmentDialog: null,
+      seamAssignmentMetaDialogId: null,
+      massstabDialog: null,
+      showHelpModal: false,
+      showShortcutListModal: false,
+      showSettingsModal: false,
+      toastMessage: null,
+    })
+  },
 
 }))

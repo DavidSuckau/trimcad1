@@ -6,6 +6,14 @@ import ClipperLib from 'clipper-lib'
 /** Höhere Auflösung reduziert sichtbare „Stufen“ bei Nahtzugabe (Clipper arbeitet mit Integer-Koordinaten). */
 const SCALE = 100000
 
+/**
+ * Clipper `MiterLimit` relativ zur Nahtzugabe (Offset-Distanz d).
+ * Sehr hohe Werte (z. B. 50) lassen bei spitzen Winkeln extrem lange Miter-Spitzen zu.
+ * Typisch 2–4: Überschreitung → Bevel (Ecke wird „abgeschnitten“, wie im Textil-/CAD-Standard).
+ * Nur die abgeleitete Schnittkontur (cutLine), nicht die Nahtlinie.
+ */
+export const CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET = 3
+
 type IntPoint = { X: number; Y: number }
 
 function toIntPoint(p: Point): IntPoint {
@@ -17,6 +25,8 @@ function fromIntPoint(ip: IntPoint): Point {
 }
 
 const BEZIER_SAMPLES = 64
+/** Höhere Abtastung nur für Selbstüberschneidungs-Checks (Bézier kann sonst „durchrutschen“). */
+const BEZIER_SAMPLES_VALIDATION = 128
 
 export type OffsetOptions = {
   joinType?: 'miter' | 'round' | 'square'
@@ -30,7 +40,7 @@ function samePoint(a: Point, b: Point, eps = 1e-6): boolean {
 }
 
 /** Kurven in Punktliste umwandeln; Bézier wird fein abgetastet, damit die Naht oben der Kurve folgt. */
-function curvesToPoints(curves: Curve[]): Point[] {
+function curvesToPoints(curves: Curve[], bezierSamples: number = BEZIER_SAMPLES): Point[] {
   const out: Point[] = []
   for (const c of curves) {
     if (c.type === 'line') {
@@ -42,8 +52,9 @@ function curvesToPoints(curves: Curve[]): Point[] {
       if (out.length === 0 || !samePoint(out[out.length - 1], c.start)) {
         out.push({ ...c.start })
       }
-      for (let i = 1; i < BEZIER_SAMPLES; i++) {
-        out.push(bezierAt(c, i / BEZIER_SAMPLES))
+      const bs = Math.max(8, bezierSamples)
+      for (let i = 1; i < bs; i++) {
+        out.push(bezierAt(c, i / bs))
       }
       out.push({ ...c.end })
     }
@@ -194,6 +205,9 @@ function reverseCurves(curves: Curve[]): Curve[] {
  * Offset nach INNEN um die Nahtzugabe. Gleichmäßiger Abstand durch Clipper.
  * Clipper garantiert konstante Distanz – kein Dünnerwerden an Ecken/Kurven.
  */
+/** Douglas-Peucker nach Clipper-Offset: zu klein → sehr viele fast kollineare Punkte (viele rote Eckpunkte in der UI); zu groß → echte Ecken können mitziehen. */
+const SEAM_FROM_CUT_SIMPLIFY_MM = 0.22
+
 export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: number): Curve[] {
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
   // Keine Vereinfachung (0), damit Ecken beim Vertex-Ziehen nicht wegfallen und das Teil nicht „verzieht“
@@ -201,8 +215,8 @@ export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: num
   // (Bézier→Clipper), ohne echte Ecken zu zerstören (Toleranz klein).
   const raw = offsetCurves(cutLine, -seamAllowanceMm, {
     joinType: 'miter',
-    miterLimit: 50,
-    simplifyTolerance: 0.1,
+    miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
+    simplifyTolerance: SEAM_FROM_CUT_SIMPLIFY_MM,
   })
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)
@@ -220,7 +234,7 @@ export function offsetCurvesOutwardForCut(seamLine: Curve[], seamAllowanceMm: nu
   if (seamLine.length === 0 || seamAllowanceMm <= 0) return []
   const { lineCurves: raw } = clipperOffsetClosedPolygon(seamLine, seamAllowanceMm, {
     joinType: 'miter',
-    miterLimit: 50,
+    miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
     simplifyTolerance: 0.06,
   })
   if (raw.length === 0) return []
@@ -275,6 +289,34 @@ export function closedPolylineSelfIntersects(pts: Point[]): boolean {
   return false
 }
 
+/** V liegt auf der offenen Strecke AB (nicht in den Endpunkten); verhindert T-Kreuzungen ohne „proper“ Schnitt. */
+function pointOnOpenSegment(v: Point, a: Point, b: Point, eps: number): boolean {
+  if (samePoint(v, a, eps) || samePoint(v, b, eps)) return false
+  const cross = Math.abs((b.x - a.x) * (v.y - a.y) - (b.y - a.y) * (v.x - a.x))
+  const len = Math.hypot(b.x - a.x, b.y - a.y)
+  if (len < eps) return false
+  if (cross > eps * len * 4) return false
+  const dot = (v.x - a.x) * (b.x - a.x) + (v.y - a.y) * (b.y - a.y)
+  const lenSq = len * len
+  return dot > eps * len && dot < lenSq - eps * len
+}
+
+/** Ein Eckpunkt liegt auf einer nicht benachbarten Kante (T-Kreuzung). */
+function polygonVertexOnNonAdjacentEdge(vertices: Point[], eps: number): boolean {
+  const n = vertices.length
+  if (n < 4) return false
+  for (let vi = 0; vi < n; vi++) {
+    const v = vertices[vi]
+    for (let ej = 0; ej < n; ej++) {
+      if (ej === (vi - 1 + n) % n || ej === vi) continue
+      const a = vertices[ej]
+      const b = vertices[(ej + 1) % n]
+      if (pointOnOpenSegment(v, a, b, eps)) return true
+    }
+  }
+  return false
+}
+
 function minChordLengthMm(curves: Curve[]): number {
   let m = Infinity
   for (const c of curves) {
@@ -285,6 +327,49 @@ function minChordLengthMm(curves: Curve[]): number {
     if (len < m) m = len
   }
   return m === Infinity ? 0 : m
+}
+
+/** Mindestkante beim Verschieben von Eckpunkten (mm); darunter numerische Artefakte und Clipper-Fehler. */
+export const MIN_VERTEX_EDGE_LENGTH_MM = 0.12
+
+/** Fläche unterhalb derer die Kontur als kollabiert gilt (mm²). */
+const MIN_POLYGON_SIGNED_AREA_MM2 = 0.05
+
+/**
+ * Prüft Kontur nach Verschieben eines Eckpunkts (oder ähnlicher Edit): keine Nullkanten, keine Selbstüberschneidung.
+ * Verhindert „zerreißende“ Teile, wenn eine Ecke über eine andere oder durch die Kontur gezogen wird.
+ */
+export function validateContourAfterVertexMove(
+  curves: Curve[]
+): { ok: true } | { ok: false; message: string } {
+  if (curves.length < 3) {
+    return { ok: false, message: 'Kontur hat zu wenig Segmente.' }
+  }
+  const minChord = minChordLengthMm(curves)
+  if (minChord < MIN_VERTEX_EDGE_LENGTH_MM) {
+    return {
+      ok: false,
+      message: `Kante zu kurz (< ${MIN_VERTEX_EDGE_LENGTH_MM} mm); Ziehen nicht möglich.`,
+    }
+  }
+  const areaAbs = Math.abs(signedAreaCurves(curves))
+  if (areaAbs < MIN_POLYGON_SIGNED_AREA_MM2) {
+    return { ok: false, message: 'Kontur ist zu klein oder entartet; Ziehen nicht möglich.' }
+  }
+  const cornerEps = 0.08
+  const corners = curves.map((c) => ({ ...c.start }))
+  if (corners.length >= 4 && polygonVertexOnNonAdjacentEdge(corners, cornerEps)) {
+    return { ok: false, message: 'Ecke liegt auf einer gegenüberliegenden Kante; Ziehen nicht möglich.' }
+  }
+  const flat = curvesToPoints(curves, BEZIER_SAMPLES_VALIDATION)
+  if (flat.length >= 4) {
+    const ring = [...flat]
+    if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
+    if (ring.length >= 4 && closedPolylineSelfIntersects(ring)) {
+      return { ok: false, message: 'Kontur überschneidet sich; Ziehen nicht möglich.' }
+    }
+  }
+  return { ok: true }
 }
 
 export type DeriveCutLineFromSeamResult =
@@ -333,7 +418,7 @@ export function deriveCutLineFromSeamWithValidation(
 
   const { lineCurves: raw, solutionPathCount } = clipperOffsetClosedPolygon(seamLine, seamAllowanceMm, {
     joinType: 'miter',
-    miterLimit: 50,
+    miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
     simplifyTolerance: 0.06,
   })
 

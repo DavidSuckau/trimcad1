@@ -4,10 +4,20 @@ import { downloadDxf } from '../dxf/dxfWriter'
 import { downloadAamaDxf } from '../dxf/aamaWriter'
 import { downloadAstmDxf } from '../dxf/astmWriter'
 import { importDxfFromString, parseExtraCutLayers } from '../dxf/dxfImporter'
+import { downloadBlob } from '../dxf/dxfShared'
+import {
+  buildTrimTexProjectFile,
+  stringifyTrimTexProject,
+  parseTrimTexProjectJson,
+  suggestedTrimTexProjectFilename,
+} from '../persistence/trimtexProjectJson'
 import { validateSeamAllowance } from '../geometry/offset'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
+import { SeamAssignmentMetaModal } from './SeamAssignmentMetaModal'
 import { MassstabModal } from './MassstabModal'
+import { ConfiguratorModal } from './ConfiguratorModal'
+import { RockGeneratorModal } from './RockGeneratorModal'
 
 type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle' | 'massstab'
 type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
@@ -60,33 +70,41 @@ export function Toolbar() {
     setShowShortcutListModal,
     dxfExportScale,
     dxfImportExtraCutLayers,
+    notchSettings,
+    imageDigitizeSession,
     startDigitize,
     startImageSession,
     setToastMessage,
+    loadProjectFromFile,
+    createConfiguratorInstance,
+    setShowConfiguratorModal,
+    setShowRockGeneratorModal,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
   const [openMenu, setOpenMenu] = useState<MenuId>(null)
-  const [erzeugenSubmenu, setErzeugenSubmenu] = useState<'interne-elemente' | null>(null)
+  const [erzeugenSubmenu, setErzeugenSubmenu] = useState<'interne-elemente' | 'konfigurator' | null>(null)
   const [dateiSubmenu, setDateiSubmenu] = useState<'exportieren' | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const dxfImportInputRef = useRef<HTMLInputElement>(null)
+  const jsonImportInputRef = useRef<HTMLInputElement>(null)
   const imageImportInputRef = useRef<HTMLInputElement>(null)
 
   const MAX_IMAGE_DIMENSION_PX = 3000
 
   useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
+    /** pointerdown statt mousedown: die Arbeitsfläche ruft preventDefault auf pointerdown auf und unterdrückt damit mousedown. */
+    function handlePointerOutside(e: PointerEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setOpenMenu(null)
         setErzeugenSubmenu(null)
       }
     }
     if (openMenu) {
-      document.addEventListener('mousedown', handleClickOutside, true)
-      return () => document.removeEventListener('mousedown', handleClickOutside, true)
+      document.addEventListener('pointerdown', handlePointerOutside, true)
+      return () => document.removeEventListener('pointerdown', handlePointerOutside, true)
     }
   }, [openMenu])
 
@@ -96,14 +114,14 @@ export function Toolbar() {
   }, [openMenu])
 
   useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
+    function handlePointerOutside(e: PointerEvent) {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setExportMenuOpen(false)
       }
     }
     if (exportMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside, true)
-      return () => document.removeEventListener('mousedown', handleClickOutside, true)
+      document.addEventListener('pointerdown', handlePointerOutside, true)
+      return () => document.removeEventListener('pointerdown', handlePointerOutside, true)
     }
   }, [exportMenuOpen])
 
@@ -124,9 +142,51 @@ export function Toolbar() {
     closeMenu()
   }
 
+  const handleSaveProjectJson = () => {
+    const file = buildTrimTexProjectFile({
+      workspace,
+      dxfExportScale,
+      dxfImportExtraCutLayers,
+      notchSettings,
+      imageDigitizeSession,
+    })
+    const json = stringifyTrimTexProject(file)
+    downloadBlob(json, suggestedTrimTexProjectFilename(workspace.name), 'application/json;charset=utf-8')
+    closeMenu()
+  }
+
+  const handleImportProjectJson = () => {
+    jsonImportInputRef.current?.click()
+    closeMenu()
+  }
+
   const handleImportDxf = () => {
     dxfImportInputRef.current?.click()
     closeMenu()
+  }
+
+  const handleJsonFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    closeMenu()
+    const reader = new FileReader()
+    reader.onerror = () => setToastMessage('error:Datei konnte nicht gelesen werden')
+    reader.onload = () => {
+      try {
+        const text = reader.result as string
+        const result = parseTrimTexProjectJson(text)
+        if (!result.ok) {
+          setToastMessage('error:' + result.error)
+          return
+        }
+        loadProjectFromFile(result.data)
+        setToastMessage('success:Projekt geladen.')
+      } catch (err) {
+        setToastMessage('error:' + (err instanceof Error ? err.message : 'Laden fehlgeschlagen'))
+      }
+    }
+    reader.readAsText(file, 'UTF-8')
   }
 
   const handleDxfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -225,6 +285,13 @@ export function Toolbar() {
   return (
     <header className="menubar" ref={menuRef}>
       <input
+        ref={jsonImportInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+        onChange={handleJsonFileChange}
+      />
+      <input
         ref={dxfImportInputRef}
         type="file"
         accept=".dxf"
@@ -295,6 +362,16 @@ export function Toolbar() {
           </button>
           {openMenu === 'datei' && (
             <ul className="menubar-dropdown">
+              <li>
+                <button type="button" className="menubar-dropdown-btn" onClick={handleSaveProjectJson}>
+                  Projekt speichern (JSON) …
+                </button>
+              </li>
+              <li>
+                <button type="button" className="menubar-dropdown-btn" onClick={handleImportProjectJson}>
+                  Projekt öffnen (JSON) …
+                </button>
+              </li>
               <li>
                 <button type="button" className="menubar-dropdown-btn" onClick={handleImportDxf}>
                   DXF importieren …
@@ -459,6 +536,58 @@ export function Toolbar() {
                         onClick={() => handleErzeugen('steppung')}
                       >
                         Steppung
+                      </button>
+                    </li>
+                  </ul>
+                )}
+              </li>
+              <li
+                className="menubar-submenu-wrap"
+                onMouseEnter={() => setErzeugenSubmenu('konfigurator')}
+                onMouseLeave={() => setErzeugenSubmenu(null)}
+              >
+                <span className="menubar-dropdown-btn menubar-dropdown-btn-submenu">Konfigurator</span>
+                {erzeugenSubmenu === 'konfigurator' && (
+                  <ul className="menubar-dropdown menubar-submenu">
+                    <li>
+                      <button
+                        type="button"
+                        className="menubar-dropdown-btn"
+                        onClick={() => {
+                          createConfiguratorInstance('tshirt')
+                          setShowConfiguratorModal(true)
+                          closeMenu()
+                          setErzeugenSubmenu(null)
+                        }}
+                      >
+                        T-Shirt
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        type="button"
+                        className="menubar-dropdown-btn"
+                        onClick={() => {
+                          setShowRockGeneratorModal(true)
+                          closeMenu()
+                          setErzeugenSubmenu(null)
+                        }}
+                      >
+                        Rock
+                      </button>
+                    </li>
+                    <li className="menubar-separator" />
+                    <li>
+                      <button
+                        type="button"
+                        className="menubar-dropdown-btn"
+                        onClick={() => {
+                          setShowConfiguratorModal(true)
+                          closeMenu()
+                          setErzeugenSubmenu(null)
+                        }}
+                      >
+                        Konfigurator bearbeiten
                       </button>
                     </li>
                   </ul>
@@ -819,7 +948,10 @@ export function Toolbar() {
       </div>
       <SettingsModal />
       <SeamAdjustmentModal />
+      <SeamAssignmentMetaModal />
       <MassstabModal />
+      <ConfiguratorModal />
+      <RockGeneratorModal />
       {nahtzugabeDialogPieceId && (() => {
         const dialogPiece = workspace.pieces.find((p) => p.id === nahtzugabeDialogPieceId)
         const hasExisting = dialogPiece?.seamAllowanceMm != null

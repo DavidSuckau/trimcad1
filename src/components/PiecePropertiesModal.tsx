@@ -7,6 +7,7 @@ export function PiecePropertiesModal() {
     piecePropertiesDialogPieceId,
     setPiecePropertiesDialogPieceId,
     updatePiece,
+    removeSeamAllowance,
   } = useStore()
 
   const piece =
@@ -32,9 +33,18 @@ export function PiecePropertiesModal() {
     >
       <div className="nahtzugabe-dialog" style={{ minWidth: 320 }} onClick={(e) => e.stopPropagation()}>
         <h3 className="nahtzugabe-dialog-title">Teil-Eigenschaften</h3>
-        <p className="nahtzugabe-dialog-hint" style={{ marginBottom: 12 }}>
-          Teilnummer: <strong>{piece.number}</strong>
-        </p>
+
+        <label className="nahtzugabe-dialog-label">
+          <span>Teilnummer</span>
+          <input
+            type="text"
+            className="nahtzugabe-dialog-input"
+            style={{ width: '100%', boxSizing: 'border-box' }}
+            value={piece.number}
+            onChange={(e) => updatePiece(piece.id, { number: e.target.value })}
+            autoComplete="off"
+          />
+        </label>
 
         <label className="nahtzugabe-dialog-label">
           <span>Teilename</span>
@@ -47,6 +57,25 @@ export function PiecePropertiesModal() {
             autoComplete="off"
           />
         </label>
+
+        {piece.seamAllowanceMm != null && (
+          <div
+            className="nahtzugabe-dialog-label"
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}
+          >
+            <span>
+              Nahtzugabe: <strong>{piece.seamAllowanceMm}</strong> mm
+            </span>
+            <button
+              type="button"
+              className="sidebar-btn"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={() => removeSeamAllowance(piece.id)}
+            >
+              Nahtzugabe entfernen
+            </button>
+          </div>
+        )}
 
         <fieldset style={{ border: 'none', margin: '12px 0 0', padding: 0 }}>
           <legend className="nahtzugabe-dialog-label" style={{ marginBottom: 8, padding: 0 }}>

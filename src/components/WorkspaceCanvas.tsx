@@ -30,6 +30,7 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '..
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
+import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
 
@@ -460,6 +461,15 @@ const VIEWBOX_HEIGHT = 600
 
 /** Treffer-/Hover-Distanz (mm) für Nahtzuordnung: Klick oder Zeiger auf Konturlinie (Kante von Punkt zu Punkt) */
 const SEAM_HIT_MM = 18
+
+/** Eckpunkt ziehen/löschen: max. Abstand Maus→Ecke (mm). Klein = Klick muss näher am Eckpunkt sitzen. */
+const VERTEX_DRAG_HIT_MM = 5
+/** Gleiches bei Naht als Master-Kontur (Nahtpolylinie ggf. dichter). */
+const VERTEX_DRAG_HIT_SEAM_MM = 8
+/** Bézier-Mitte („Kurvenpunkt“) greifen: etwas großzügiger als Ecke, damit beides unterscheidbar bleibt. */
+const POINT_ON_CURVE_DRAG_HIT_MM = 10
+/** Hover für Entf-Löschen / Hervorhebung Ecke – an Klick-Toleranz angeglichen. */
+const VERTEX_HOVER_DELETE_MM = 5
 
 /** Prüft ob ein Klick auf der Innenseite der Kante liegt (Richtung Stück-Inneres).
  *  Nur Klicks von der Innenseite werden für die Nahtzuordnung akzeptiert. */
@@ -1066,6 +1076,8 @@ export function WorkspaceCanvas() {
     setWorkspaceImageLocked,
     exitAllModes,
     setMassstabDialog,
+    setSeamAssignmentMetaDialogId,
+    seamAssignmentMetaDialogId,
   } = useStore()
   const { pieces, view } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
@@ -1359,9 +1371,9 @@ export function WorkspaceCanvas() {
         return
       }
 
-      const VERTEX_HIT = 12
-      const VERTEX_HIT_SEAM = 18
-      const POINT_ON_CURVE_HIT = 12
+      const VERTEX_HIT = VERTEX_DRAG_HIT_MM
+      const VERTEX_HIT_SEAM = VERTEX_DRAG_HIT_SEAM_MM
+      const POINT_ON_CURVE_HIT = POINT_ON_CURVE_DRAG_HIT_MM
       // Treffer: Seam-as-Master = Eckpunkte auf Innenkontur (seamLine); sonst cut/seam je nach Ansicht.
       if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
         let bestPointOnCurve: { dist: number; pieceId: string; curveIndex: number; t: number } | null = null
@@ -1485,7 +1497,7 @@ export function WorkspaceCanvas() {
           return
         }
         if (useVertex && bestVertex) {
-          if (bestVertex.dist <= bestVertex.hitRadius * 1.5) {
+          if (bestVertex.dist <= bestVertex.hitRadius) {
             const p = pieces.find((x) => x.id === bestVertex.pieceId)
             const useSeamMaster = p != null && useSeamLineForVertexEditing(p)
             const curves = useSeamMaster ? p!.seamLine : p!.cutLine
@@ -1876,7 +1888,7 @@ export function WorkspaceCanvas() {
     ]
   )
 
-  const HOVER_DELETE_HIT = 14
+  const HOVER_DELETE_HIT = VERTEX_HOVER_DELETE_MM
   /** Hover/Klick auf Notch – bei Überlappung mit Eckpunkt gewinnt der nähere. */
   const NOTCH_HOVER_HIT = 6
   const NOTCH_CLICK_HIT = 6
@@ -1981,7 +1993,7 @@ export function WorkspaceCanvas() {
           const piecesForHover =
             selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
           let bestVertex: { dist: number; value: typeof hoveredDeletablePoint } = {
-            dist: HOVER_DELETE_HIT + 1,
+            dist: VERTEX_HOVER_DELETE_MM + 1,
             value: null,
           }
           for (const p of piecesForHover) {
@@ -2684,6 +2696,17 @@ export function WorkspaceCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (seamAssignmentMetaDialogId && e.key === 'Escape') {
+        e.preventDefault()
+        setSeamAssignmentMetaDialogId(null)
+        return
+      }
+      if (seamAssignmentMetaDialogId && e.key === ' ') {
+        if (!target.closest('.nahtzugabe-dialog')) {
+          e.preventDefault()
+          return
+        }
+      }
       if (!inInput && lineLengthEditor && e.key === 'Escape') {
         e.preventDefault()
         if (lineLengthEditor.mode === 'draw') {
@@ -2708,7 +2731,12 @@ export function WorkspaceCanvas() {
         })
         return
       }
-      if (!inInput && !dragging && hoveredInternalLine && e.key === ' ') {
+      if (!inInput && hoveredSeamAssignmentId && e.key === ' ') {
+        e.preventDefault()
+        setSeamAssignmentMetaDialogId(hoveredSeamAssignmentId)
+        return
+      }
+      if (!inInput && !dragging && hoveredInternalLine && !hoveredSeamAssignmentId && e.key === ' ') {
         const piece = pieces.find((p) => p.id === hoveredInternalLine.pieceId)
         const curve = piece?.internalLines[hoveredInternalLine.curveIndex]
         if (piece && curve) {
@@ -2737,6 +2765,15 @@ export function WorkspaceCanvas() {
         return
       }
       if (!inInput && e.key === 'Escape') {
+        if (tool === 'notch') {
+          e.preventDefault()
+          if (dragging?.kind === 'notch') {
+            setDragging(null)
+            return
+          }
+          setTool('select')
+          return
+        }
         if (tool === 'digitize' && digitizeState) {
           e.preventDefault()
           cancelDigitize()
@@ -2984,6 +3021,8 @@ export function WorkspaceCanvas() {
     hoveredDeletableNotch,
     hoveredInternalLine,
     hoveredSeamAssignmentId,
+    seamAssignmentMetaDialogId,
+    setSeamAssignmentMetaDialogId,
     hoveredSegment,
     segmentMenuPinned,
     pinnedSegment,
@@ -3023,6 +3062,7 @@ export function WorkspaceCanvas() {
     setPiecePivot,
     setToastMessage,
     tool,
+    setDragging,
   ])
 
   const handlePointerUp = useCallback((_e?: React.PointerEvent) => {
@@ -3170,7 +3210,6 @@ export function WorkspaceCanvas() {
             vertexIndex,
           })
         }
-        setTool('select')
       }
     } else if (dragging?.kind === 'drill') {
       const { pieceId, center, current } = dragging
@@ -4228,7 +4267,7 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
-          {showPoints && seamAssignments.length > 0 &&
+          {seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
               const pieceA = pieces.find((p) => p.id === a.pieceIdA)
               const pieceB = pieces.find((p) => p.id === a.pieceIdB)
@@ -4283,6 +4322,12 @@ export function WorkspaceCanvas() {
               const wing2 = { x: base.x - arrowWing * -uy, y: base.y - arrowWing * ux }
               const labelX = (midA.x + midB.x) / 2
               const labelY = (midA.y + midB.y) / 2 - 8
+              const metaParts: string[] = []
+              if (a.orderNumber != null) metaParts.push(String(a.orderNumber))
+              if (a.seamKind) metaParts.push(SEAM_ASSIGNMENT_KIND_LABELS[a.seamKind])
+              const metaText = metaParts.join(' · ')
+              const warnStack =
+                (showLengthDiff ? 11 : 0) + (notchMismatch ? 11 : 0) + (subSegMismatch ? 11 : 0)
               return (
                 <g
                   key={a.id}
@@ -4290,12 +4335,29 @@ export function WorkspaceCanvas() {
                   onPointerEnter={() => setHoveredSeamAssignmentId(a.id)}
                   onPointerLeave={() => setHoveredSeamAssignmentId(null)}
                   style={{ cursor: hoveredSeamAssignmentId === a.id ? 'pointer' : 'default' }}
-                  data-title="Backspace oder Entf: Nahtverbindung entfernen"
                 >
+                  <title>
+                    Leertaste: Nummer und Nahtart · Backspace/Entf: Zuordnung löschen
+                  </title>
                   {/* Unsichtbare breite Linie für Hover-/Trefferfläche */}
                   <line x1={midA.x} y1={midA.y} x2={midB.x} y2={midB.y} stroke="transparent" strokeWidth={14} />
-                  <line x1={midA.x} y1={midA.y} x2={midB.x} y2={midB.y} stroke="#1565c0" strokeWidth={1} strokeDasharray="6 4" />
-                  <path d={`M ${wing1.x} ${wing1.y} L ${midB.x} ${midB.y} L ${wing2.x} ${wing2.y}`} fill="none" stroke="#1565c0" strokeWidth={1} />
+                  <line
+                    x1={midA.x}
+                    y1={midA.y}
+                    x2={midB.x}
+                    y2={midB.y}
+                    stroke="#1565c0"
+                    strokeWidth={1}
+                    strokeDasharray="6 4"
+                    pointerEvents="none"
+                  />
+                  <path
+                    d={`M ${wing1.x} ${wing1.y} L ${midB.x} ${midB.y} L ${wing2.x} ${wing2.y}`}
+                    fill="none"
+                    stroke="#1565c0"
+                    strokeWidth={1}
+                    pointerEvents="none"
+                  />
                   {showLengthDiff && (
                     <text
                       x={labelX}
@@ -4305,6 +4367,7 @@ export function WorkspaceCanvas() {
                       fill="#c62828"
                       fontWeight="600"
                       fontFamily="sans-serif"
+                      pointerEvents="none"
                     >
                       Δ {diffMm.toFixed(1)} mm
                     </text>
@@ -4318,6 +4381,7 @@ export function WorkspaceCanvas() {
                       fill="#e65100"
                       fontWeight="600"
                       fontFamily="sans-serif"
+                      pointerEvents="none"
                     >
                       ⚠ Notch {notchCountA}:{notchCountB}
                     </text>
@@ -4335,8 +4399,23 @@ export function WorkspaceCanvas() {
                       fill="#e65100"
                       fontWeight="600"
                       fontFamily="sans-serif"
+                      pointerEvents="none"
                     >
                       ⚠ Kerben-Abstände max Δ {subPairing.maxSegmentMismatchMm.toFixed(1)} mm
+                    </text>
+                  )}
+                  {metaText && (
+                    <text
+                      x={labelX}
+                      y={labelY + warnStack}
+                      textAnchor="middle"
+                      fontSize={8}
+                      fill="#1565c0"
+                      fontWeight="600"
+                      fontFamily="sans-serif"
+                      pointerEvents="none"
+                    >
+                      {metaText}
                     </text>
                   )}
                   {subDiffs && subDiffs.map((sd, i) => {

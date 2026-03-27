@@ -87,6 +87,24 @@ export type ViewState = {
   panY: number
 }
 
+/** Vorgegebene Naht-Arten für Nahtzuordnungen (Eigenschaften-Dialog). */
+export const SEAM_ASSIGNMENT_KIND_IDS = [
+  'schluessel',
+  'saum',
+  'kapp',
+  'doppelkapp',
+  'beleg',
+] as const
+export type SeamAssignmentKindId = (typeof SEAM_ASSIGNMENT_KIND_IDS)[number]
+
+export const SEAM_ASSIGNMENT_KIND_LABELS: Record<SeamAssignmentKindId, string> = {
+  schluessel: 'Schlisnaht',
+  saum: 'Saumnaht',
+  kapp: 'Kappnaht',
+  doppelkapp: 'Doppelkappnaht',
+  beleg: 'Naht mit Beleg',
+}
+
 /** Zuordnung zweier Nahtkanten (Eckpunkt→Eckpunkt) zwischen zwei Teilen. Nur Ansicht, nicht im DXF. */
 export type SeamAssignment = {
   id: string
@@ -102,6 +120,10 @@ export type SeamAssignment = {
   /** Wie curveIndicesA: Master-Kontur des anderen Teils */
   curveIndicesB: number[]
   clickedCurveB: number
+  /** Reihenfolge beim Nähen; jede Nummer höchstens einmal pro Arbeitsfläche. */
+  orderNumber?: number | null
+  /** Art der Naht (optional). */
+  seamKind?: SeamAssignmentKindId | null
 }
 
 export type Workspace = {
