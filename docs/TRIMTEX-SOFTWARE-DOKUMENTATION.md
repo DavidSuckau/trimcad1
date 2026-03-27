@@ -276,8 +276,9 @@ Die vollständige Liste steht im Typ **`Store`** in `useStore.ts`. Gruppiert:
 - `docs/SPEC-PHASE1.md` – konsolidierte Phase-1-Spezifikation
 - `docs/ZIELFORMATE-AAMA-ASTM.md` – Zielformate Export
 - `docs/DXF-MASTER-SPEZIFIKATION.txt` – DXF-R12-Details für den einfachen Writer
+- `docs/KI-NUTZERHILFE-QUELLE.md` – Bedienung, Workflows, Kürzel; zentrale Quelle für KI-gestützte Nutzerhilfe (ergänzend zur integrierten Hilfe)
 - `.cursor/rules/` – Entwicklungsregeln (u. a. Seam-as-Master, AAMA/ASTM-Fokus)
 
 ---
 
-*Dieses Dokument beschreibt die Software aus Entwickler- und Power-User-Sicht. Für reine Bedienanleitungen siehe die integrierte Hilfe (`HelpModal`, `data/helpEntries.ts`) und die Menüeinträge in der Toolbar.*
+*Dieses Dokument beschreibt die Software aus Entwickler- und Power-User-Sicht. Für reine Bedienanleitungen siehe die integrierte Hilfe (`HelpModal`, `data/helpEntries.ts`), die Menüeinträge in der Toolbar und `docs/KI-NUTZERHILFE-QUELLE.md`.*

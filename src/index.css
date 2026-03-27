@@ -481,6 +481,173 @@ body {
   min-height: 0;
   overflow: hidden;
   background: #fff;
+  position: relative;
+}
+
+/* KI-Chat rechts im Arbeitsbereich (nicht Konfigurator) */
+.workspace-ai-chat-panel {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 60;
+  width: min(300px, calc(100% - 16px));
+  max-height: min(75vh, calc(100% - 48px));
+  overflow: auto;
+  padding: 0.75rem;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 0.8125rem;
+}
+
+.workspace-ai-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+
+.workspace-ai-chat-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.workspace-ai-chat-collapse {
+  padding: 0.15rem 0.4rem;
+  font-size: 0.75rem;
+  color: #555;
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.workspace-ai-chat-collapse:hover {
+  background: #e8e8e8;
+}
+
+.workspace-ai-chat-hint {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.75rem;
+  color: #555;
+  line-height: 1.35;
+}
+
+.workspace-ai-chat-meta {
+  margin: 0.35rem 0 0 0;
+  font-size: 0.7rem;
+  color: #999;
+  line-height: 1.3;
+}
+
+.workspace-ai-chat-error {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.75rem;
+  color: #c62828;
+}
+
+.workspace-ai-chat-warn {
+  font-size: 0.75rem;
+  color: #9a6700;
+}
+
+.workspace-ai-chat-preview {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.workspace-ai-chat-preview-rationale {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.75rem;
+  color: #333;
+  line-height: 1.4;
+}
+
+.workspace-ai-chat-action-list {
+  margin: 0 0 0.75rem 1rem;
+  padding: 0;
+  font-size: 0.75rem;
+  color: #222;
+}
+
+.workspace-ai-chat-tab {
+  position: absolute;
+  top: 40%;
+  right: 0;
+  z-index: 60;
+  padding: 0.5rem 0.35rem;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  background: #111;
+  border: 1px solid #ccc;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+  cursor: pointer;
+  box-shadow: -2px 2px 8px rgba(0, 0, 0, 0.2);
+}
+.workspace-ai-chat-tab:hover {
+  background: #333;
+}
+
+.workspace-ai-chat-image-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workspace-ai-chat-file {
+  font-size: 0.75rem;
+  max-width: 100%;
+}
+
+.workspace-ai-chat-thumb-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.workspace-ai-chat-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 100px;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+.workspace-ai-chat-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.workspace-ai-chat-help-answer {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: #f6f9fc;
+  border: 1px solid #d0dce8;
+  border-radius: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.workspace-ai-chat-help-answer-title {
+  display: block;
+  font-size: 0.7rem;
+  color: #345;
+  margin-bottom: 0.45rem;
+}
+
+.workspace-ai-chat-help-answer-body {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #222;
+  white-space: pre-wrap;
 }
 
 .workspace-canvas {

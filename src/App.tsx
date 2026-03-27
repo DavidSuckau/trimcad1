@@ -1,6 +1,7 @@
 import { Toolbar } from './components/Toolbar'
 import { Sidebar } from './components/Sidebar'
 import { WorkspaceCanvas } from './components/WorkspaceCanvas'
+import { WorkspaceAiChatPanel } from './components/WorkspaceAiChatPanel'
 import { DesignBar } from './components/DesignBar'
 import { HelpModal } from './components/HelpModal'
 import { ShortcutListModal } from './components/ShortcutListModal'
@@ -14,6 +15,7 @@ export default function App() {
         <Sidebar />
         <main className="workspace-wrap">
           <WorkspaceCanvas />
+          <WorkspaceAiChatPanel />
         </main>
       </div>
       <DesignBar />
