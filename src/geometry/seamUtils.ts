@@ -19,6 +19,31 @@ function vertexPositionOnClosedCurves(curves: Curve[], vertexIndex: number): Poi
   return vi === 0 ? { ...curves[0].start } : { ...curves[vi - 1].end }
 }
 
+/** Toleranz Cut→Master: gleiche „logische Ecke“ trotz Offset (mm). */
+const MAP_CUT_TO_MASTER_EPS_MM = 8
+
+/**
+ * Master-Vertex (Naht) → nächstliegender Eckpunkt auf der cutLine (für softVertices, die immer cut-indiziert sind).
+ */
+export function mapMasterVertexIndexToCutVertexIndex(piece: PatternPiece, masterVi: number): number | null {
+  const master = getCurvesForSeamEdge(piece)
+  const cut = piece.cutLine
+  if (masterVi < 0 || masterVi >= master.length) return null
+  if (master === cut) return masterVi < cut.length ? masterVi : null
+  const masterPt = vertexPositionOnClosedCurves(master, masterVi)
+  let best = -1
+  let bestD = Infinity
+  for (let i = 0; i < cut.length; i++) {
+    const p = vertexPositionOnClosedCurves(cut, i)
+    const d = Math.hypot(p.x - masterPt.x, p.y - masterPt.y)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  }
+  return best >= 0 ? best : null
+}
+
 /**
  * softVertices und Notch-vertexIndex beziehen sich auf die cutLine.
  * Für Eckpunkt-Logik auf der Master-Kontur (seamLine) müssen sie auf Master-Vertex-Indizes gemappt werden.
@@ -41,12 +66,10 @@ function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number
       best = i
     }
   }
-  /** Toleranz: gleiche „logische Ecke“ trotz Offset (mm). */
-  const MAP_EPS_MM = 8
-  return best >= 0 && bestD <= MAP_EPS_MM ? best : null
+  return best >= 0 && bestD <= MAP_CUT_TO_MASTER_EPS_MM ? best : null
 }
 
-function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
+export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   const master = getCurvesForSeamEdge(piece)
   const cut = piece.cutLine
   const out = new Set<number>()
@@ -61,7 +84,7 @@ function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   return out
 }
 
-function masterNotchVertexIndexSet(piece: PatternPiece): Set<number> {
+export function masterNotchVertexIndexSet(piece: PatternPiece): Set<number> {
   const master = getCurvesForSeamEdge(piece)
   const cut = piece.cutLine
   const out = new Set<number>()

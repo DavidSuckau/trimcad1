@@ -292,6 +292,7 @@ export function Toolbar() {
 
   return (
     <header className="menubar" ref={menuRef}>
+      <img src="/logo-trimcad.png" alt="TrimCAD" className="menubar-logo" />
       <input
         ref={jsonImportInputRef}
         type="file"
@@ -357,7 +358,6 @@ export function Toolbar() {
           reader.readAsDataURL(file)
         }}
       />
-      <img src="/logo-trimcad.png" alt="TrimCAD" className="menubar-logo" />
       <nav className="menubar-nav">
         <div className="menubar-item-wrap">
           <button

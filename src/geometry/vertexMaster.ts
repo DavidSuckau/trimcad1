@@ -8,24 +8,17 @@ import type { PatternPiece } from '../types/model'
  * `getCurvesForSeamEdge` (Naht als Master → **seamLine**); Notch-`vertexIndex` auf **cutLine**
  * (nach Rebuild: `resyncNotchesAfterCutLineRebuilt`). Siehe `docs/TRIMTEX-SOFTWARE-DOKUMENTATION.md` 6.1.
  *
- * **Hier:** Wenn `seamLine.length > cutLine.length`, liefern wir false — Eckpunkte folgen dann der
- * **cutLine**, damit die Indexbasis zur dichten Kontur passt. Punkt-/Kurvenpunkt-Werkzeug:
- * `useSeamLineForPointCurveEditing`.
+ * **Hier:** Sobald Nahtzugabe gesetzt ist und eine gültige Nahtlinie existiert, ist die **Innenkontur
+ * (seamLine)** die Bearbeitungsbasis — unabhängig von Schnitt/Naht-Ansicht (welche Linie durchgezogen
+ * gezeichnet wird) und unabhängig vom Segmentvergleich seam↔cut (kein Wechsel auf cutLine).
  */
 export function useSeamLineForVertexEditing(piece: PatternPiece): boolean {
-  if (piece.seamAllowanceMm == null || piece.seamLine.length < 3 || piece.cutLine.length < 3) {
-    return false
-  }
-  if (piece.seamLine.length > piece.cutLine.length) {
-    return false
-  }
-  return true
+  return piece.seamAllowanceMm != null && piece.seamLine.length >= 3 && piece.cutLine.length >= 3
 }
 
 /**
- * Punkt-Werkzeug, Kurvenpunkt (Bézier) und Punkt-auf-Kurve ziehen: auf der **Nahtlinie**,
- * sobald Nahtzugabe aktiv ist und eine Nahtlinie existiert (unabhängig von cut/seam in der Ansicht).
+ * Punkt-Werkzeug, Kurvenpunkt (Bézier), Punkt einfügen: dieselbe Master-Kontur wie Eckpunkte.
  */
 export function useSeamLineForPointCurveEditing(piece: PatternPiece): boolean {
-  return piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+  return useSeamLineForVertexEditing(piece)
 }

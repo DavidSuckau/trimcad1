@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { useStore } from '../store/useStore'
 import {
   closedPathD,
@@ -25,12 +25,15 @@ import {
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
   bestSeamSubSegmentPairing,
+  masterSoftVertexIndexSet,
+  masterNotchVertexIndexSet,
 } from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
+import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
-import type { PatternPiece, Point, Line, Curve, SeamAssignment } from '../types/model'
+import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
@@ -118,6 +121,7 @@ function isWorldInsideWorkspaceImage(
 /** t vom Vertex weghalten, damit ein verschobener Notch nicht exakt auf einen Eckpunkt fällt. */
 const NOTCH_MOVE_T_MIN = 0.05
 const NOTCH_MOVE_T_MAX = 0.95
+const POINT_INSERT_HIT_MM = 15
 
 function pointOnCurveAt(c: Curve, t: number): Point {
   if (c.type === 'line') {
@@ -133,6 +137,24 @@ function pointAtDistanceOnRay(start: Point, current: Point, distanceMm: number):
   if (len <= 1e-6) return { x: start.x + distanceMm, y: start.y }
   const s = distanceMm / len
   return { x: start.x + dx * s, y: start.y + dy * s }
+}
+
+function nearestPointForMasterPointEditing(piece: PatternPiece, local: Point, hitMm: number) {
+  const seamPc = useSeamLineForPointCurveEditing(piece)
+  const master = seamPc ? piece.seamLine : piece.cutLine
+  if (master.length === 0) return null
+  // Nahtzugabe: Maus oft auf der äußeren cutLine; Abstand zur seamLine ≈ Nahtzugabe → Trefferradius anpassen.
+  const hitMaster =
+    seamPc && piece.seamAllowanceMm != null ? Math.max(hitMm, piece.seamAllowanceMm + 6) : hitMm
+  const hitCut =
+    seamPc && piece.seamAllowanceMm != null ? Math.max(hitMm, piece.seamAllowanceMm + 6) : hitMm
+  const nearestMaster = nearestCurveIndexAndPoint(local, master)
+  if (nearestMaster && nearestMaster.distance <= hitMaster) return nearestMaster
+  const seamMasterActive = master === piece.seamLine && piece.cutLine.length > 0
+  if (!seamMasterActive) return null
+  const nearestCut = nearestCurveIndexAndPoint(local, piece.cutLine)
+  if (!nearestCut || nearestCut.distance > hitCut) return null
+  return nearestCurveIndexAndPoint(nearestCut.point, master)
 }
 
 function snapLineTo45Deg(start: Point, current: Point): Point {
@@ -177,6 +199,15 @@ function pieceLocalToWorld(local: Point, piece: PatternPiece): Point {
     x: tx + lx * cos - ly * sin,
     y: ty + lx * sin + ly * cos,
   }
+}
+
+/** Weltposition eines Eckpunkts auf der bearbeitbaren Kontur (immer Master-Vertices, ohne Ansichts-Projektion). */
+function getVertexWorldForBatchHighlight(piece: PatternPiece, vi: number): Point | null {
+  const useSeamMaster = useSeamLineForVertexEditing(piece)
+  const curvesForVertices = useSeamMaster ? piece.seamLine : piece.cutLine
+  if (!curvesForVertices.length || vi < 0 || vi >= curvesForVertices.length) return null
+  const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
+  return pieceLocalToWorld(vertexPos, piece)
 }
 
 /** Abstand Punkt → Strecke [a,b] in mm; t = Projektion auf die Strecke, auf [0,1] geklemmt. */
@@ -419,27 +450,48 @@ const VERTEX_HOVER_DELETE_MM = 5
 /** Kerbe: gleiche Toleranz wie Hover zum Verschieben/Löschen. */
 const PIVOT_SNAP_NOTCH_MM = 6
 
+type DeletableHoverTarget =
+  | { pieceId: string; kind: 'vertex'; vertexIndex: number }
+  | { pieceId: string; kind: 'pointOnCurve'; curveIndex: number }
+
+/**
+ * Gleiche Priorität wie Pointer-Down (select/point/curvepoint): bei gleichem Abstand gewinnt
+ * der Kurvenpunkt (Bézier-Mitte) vor der Ecke, damit Entf/Löschen dieselbe geometrische
+ * Stelle trifft wie Ziehen/Klicken.
+ */
+function mergeDeletableHoverVertexVsCurve(
+  bestVertex: { dist: number; value: DeletableHoverTarget | null },
+  bestCurve: { dist: number; value: DeletableHoverTarget | null }
+): { dist: number; value: DeletableHoverTarget | null } {
+  if (bestCurve.value == null && bestVertex.value == null) {
+    return { dist: VERTEX_HOVER_DELETE_MM + 1, value: null }
+  }
+  if (bestCurve.value == null) return bestVertex
+  if (bestVertex.value == null) return bestCurve
+  if (bestCurve.dist <= bestVertex.dist) return bestCurve
+  return bestVertex
+}
+
 /**
  * Nächstgelegene Kerbe, Ecke oder Bézier-Mitte unter dem Mauszeiger (Drehpunkt für Alt+D).
  * Entspricht der Hover-Logik für „Punkte anzeigen“, ohne dass diese Option aktiv sein muss.
  */
-function findPivotSnapTargetAtWorld(
-  world: Point,
-  pieces: PatternPiece[],
-  cutSeamSwappedSet: Set<string>
-): { pieceId: string; pivotLocal: Point } | null {
+function findPivotSnapTargetAtWorld(world: Point, pieces: PatternPiece[]): { pieceId: string; pivotLocal: Point } | null {
   const HOVER_DELETE_HIT = VERTEX_HOVER_DELETE_MM
   const NOTCH_HOVER_HIT = PIVOT_SNAP_NOTCH_MM
 
-  let bestVertex: {
-    dist: number
-    value: { pieceId: string; kind: 'vertex' | 'pointOnCurve'; vertexIndex?: number; curveIndex?: number } | null
-  } = { dist: VERTEX_HOVER_DELETE_MM + 1, value: null }
+  let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
+    dist: VERTEX_HOVER_DELETE_MM + 1,
+    value: null,
+  }
+  let bestCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
+    dist: VERTEX_HOVER_DELETE_MM + 1,
+    value: null,
+  }
 
   for (const p of pieces) {
     if (!p || p.cutLine.length === 0) continue
     const local = worldToPieceLocal(world, p)
-    const hasSeam = p.seamLine.length >= 3
     const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
     const useSeamMaster = useSeamLineForVertexEditing(p)
     const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
@@ -451,13 +503,9 @@ function findPivotSnapTargetAtWorld(
       }
       if (curvesForHover.length <= 3) continue
       const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
-      const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
-      const useSeam = hasSeam && !solidIsCut
-      const hitPos =
-        useSeamMaster || !useSeam ? vertexPos : nearestCurveIndexAndPoint(vertexPos, p.seamLine)?.point ?? vertexPos
-      const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
-      if (d < bestVertex.dist)
-        bestVertex = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
+      const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
+      if (d < bestVertexOnly.dist)
+        bestVertexOnly = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
     }
     const curvesPcHover = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
     for (let ci = 0; ci < curvesPcHover.length; ci++) {
@@ -465,10 +513,12 @@ function findPivotSnapTargetAtWorld(
       if (c.type !== 'bezier') continue
       const pt = bezierAt(c, 0.5)
       const d = Math.hypot(local.x - pt.x, local.y - pt.y)
-      if (d < bestVertex.dist)
-        bestVertex = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
+      if (d < bestCurveOnly.dist)
+        bestCurveOnly = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
     }
   }
+
+  const bestVertex = mergeDeletableHoverVertexVsCurve(bestVertexOnly, bestCurveOnly)
 
   let bestNotch: { dist: number; pieceId: string; notchId: string } = {
     dist: NOTCH_HOVER_HIT + 1,
@@ -1162,6 +1212,16 @@ export function WorkspaceCanvas() {
     setMassstabDialog,
     setSeamAssignmentMetaDialogId,
     seamAssignmentMetaDialogId,
+    batchSelectionFilter,
+    batchSelectionTargets,
+    batchUiHighlightByTargetId,
+    setBatchSelectionFilter,
+    setBatchSelectionTargets,
+    clearBatchSelection,
+    setBatchUiHighlightForFiltered,
+    clearBatchUiHighlight,
+    batchSetVerticesSoft,
+    batchDeleteFiltered,
   } = useStore()
   const { pieces, view } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
@@ -1200,6 +1260,8 @@ export function WorkspaceCanvas() {
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
     | { kind: 'rectangle'; start: Point; current: Point }
+    /** Fensterauswahl im Select-Tool (leerer Bereich). */
+    | { kind: 'selectionMarquee'; start: Point; current: Point }
     | { kind: 'line'; pieceId: string; start: Point; current: Point }
     | { kind: 'notch'; pieceId: string; position: Point; current: Point; curveIndex: number; t: number; useSeamLine?: boolean }
     | { kind: 'notchMove'; pieceId: string; notchId: string }
@@ -1220,6 +1282,10 @@ export function WorkspaceCanvas() {
   >(null)
   const [hoveredPieceId, setHoveredPieceId] = useState<string | null>(null)
   const [cutSeamSwappedSet, setCutSeamSwappedSet] = useState<Set<string>>(new Set())
+  const filteredBatchTargets = useMemo(
+    () => filterBatchTargets(batchSelectionTargets, batchSelectionFilter),
+    [batchSelectionTargets, batchSelectionFilter]
+  )
   const [hoveredDeletablePoint, setHoveredDeletablePoint] = useState<
     | { pieceId: string; kind: 'vertex'; vertexIndex: number }
     | { pieceId: string; kind: 'pointOnCurve'; curveIndex: number }
@@ -1331,6 +1397,10 @@ export function WorkspaceCanvas() {
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!containerRef.current) return
+      /** UI-Leiste Fensterauswahl: nicht als Canvas-Klick/Marquee behandeln (sonst blockiert preventDefault das Dropdown). */
+      if (e.target instanceof Element && e.target.closest('.batch-selection-bar')) {
+        return
+      }
       /** Mittelklick: nur globaler Abbruch, kein Ziehen/Keine Punkte ändern (Propagation kommt i. d. R. nicht bis hier). */
       if (e.button === 1) {
         e.preventDefault()
@@ -1470,11 +1540,8 @@ export function WorkspaceCanvas() {
           const curvesForVertices = useSeamMaster ? p!.seamLine : p?.cutLine ?? []
           if (!p || curvesForVertices.length === 0) continue
           const local = worldToPieceLocal(world, p)
-          const hasSeam = p.seamLine.length >= 3
-          const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
-          const useSeam = hasSeam && !solidIsCut
           const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
-          const vertexHitR = useSeam || useSeamMaster ? VERTEX_HIT_SEAM : VERTEX_HIT
+          const vertexHitR = useSeamMaster ? VERTEX_HIT_SEAM : VERTEX_HIT
           const curvesForPointCurve = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           // Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur
           for (let ci = 0; ci < curvesForPointCurve.length; ci++) {
@@ -1495,12 +1562,7 @@ export function WorkspaceCanvas() {
               continue
             }
             const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
-            const hitPos = useSeamMaster
-              ? vertexPos
-              : !useSeam
-                ? vertexPos
-                : (nearestCurveIndexAndPoint(vertexPos, p.seamLine)?.point ?? vertexPos)
-            const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
+            const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
             if (d < vertexHitR && (!bestVertex || d < bestVertex.dist)) {
               bestVertex = { dist: d, pieceId: p.id, vertexIndex: vi, hitRadius: vertexHitR }
             }
@@ -1573,8 +1635,15 @@ export function WorkspaceCanvas() {
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
-        const usePointOnCurve = bestPointOnCurve && (!bestVertex || bestPointOnCurve.dist <= bestVertex.dist)
-        const useVertex = bestVertex && (!bestPointOnCurve || bestVertex.dist < bestPointOnCurve.dist)
+        // Punkt-/Kurvenpunkt-Werkzeug: kein Eck- oder Bézier-Mittelpunkt-Ziehen (sonst wird nie eingefügt/umgewandelt).
+        const usePointOnCurve =
+          tool === 'select' &&
+          bestPointOnCurve &&
+          (!bestVertex || bestPointOnCurve.dist <= bestVertex.dist)
+        const useVertex =
+          tool === 'select' &&
+          bestVertex &&
+          (!bestPointOnCurve || bestVertex.dist < bestPointOnCurve.dist)
         if (usePointOnCurve && bestPointOnCurve) {
           setDragging({ kind: 'pointOnCurve', pieceId: bestPointOnCurve.pieceId, curveIndex: bestPointOnCurve.curveIndex, t: bestPointOnCurve.t })
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
@@ -1611,8 +1680,8 @@ export function WorkspaceCanvas() {
         const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
         if (masterPc.length > 0) {
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestCurveIndexAndPoint(local, masterPc)
-          if (nearest && nearest.distance < 15) {
+          const nearest = nearestPointForMasterPointEditing(piece, local, POINT_INSERT_HIT_MM)
+          if (nearest) {
             const curve = masterPc[nearest.curveIndex]
             if (curve.type === 'line') {
               const seg = masterPc[nearest.curveIndex]
@@ -1636,6 +1705,7 @@ export function WorkspaceCanvas() {
           }
         }
         }
+        return
       }
       if (tool === 'point' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
@@ -1644,20 +1714,27 @@ export function WorkspaceCanvas() {
         const masterPt = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
         if (masterPt.length > 0) {
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestCurveIndexAndPoint(local, masterPt)
-          if (nearest && nearest.distance < 15) {
+          const nearest = nearestPointForMasterPointEditing(piece, local, POINT_INSERT_HIT_MM)
+          if (nearest) {
             const curve = masterPt[nearest.curveIndex]
+            let inserted = false
             if (curve.type === 'line') {
-              insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
-            } else if (curve.type === 'bezier' && nearest.t != null) {
-              insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
+              inserted = insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
+            } else if (
+              curve.type === 'bezier' &&
+              nearest.t != null &&
+              nearest.t > 1e-6 &&
+              nearest.t < 1 - 1e-6
+            ) {
+              inserted = insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
             }
-            setPointPreview(null)
+            if (inserted) setPointPreview(null)
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
           }
         }
         }
+        return
       }
       if (tool === 'select') {
         if (hoveredDeletableNotch) {
@@ -1831,7 +1908,8 @@ export function WorkspaceCanvas() {
           }
         }
         setWorkspaceImageSelected(false)
-        selectPiece(null)
+        setDragging({ kind: 'selectionMarquee', start: world, current: world })
+        ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
       if ((tool === 'line' || tool === 'internalLine') && selectedPieceIds.length === 1) {
@@ -2077,14 +2155,17 @@ export function WorkspaceCanvas() {
           const piecesForHover = pieces.filter((p) => selectedPieceIds.includes(p.id))
           const piecesForNotchHover =
             piecesForHover.some((p) => p.notches.length > 0) ? piecesForHover : pieces
-          let bestVertex: { dist: number; value: typeof hoveredDeletablePoint } = {
+          let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
+            dist: VERTEX_HOVER_DELETE_MM + 1,
+            value: null,
+          }
+          let bestCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
             dist: VERTEX_HOVER_DELETE_MM + 1,
             value: null,
           }
           for (const p of piecesForHover) {
             if (!p || p.cutLine.length === 0) continue
             const local = worldToPieceLocal(world, p)
-            const hasSeam = p.seamLine.length >= 3
             const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
             const useSeamMaster = useSeamLineForVertexEditing(p)
             const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
@@ -2096,14 +2177,9 @@ export function WorkspaceCanvas() {
               }
               if (curvesForHover.length <= 3) continue
               const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
-              const solidIsCut = !hasSeam || cutSeamSwappedSet.has(p.id)
-              const useSeam = hasSeam && !solidIsCut
-              const hitPos = useSeamMaster || !useSeam
-                ? vertexPos
-                : (nearestCurveIndexAndPoint(vertexPos, p.seamLine)?.point ?? vertexPos)
-              const d = Math.hypot(local.x - hitPos.x, local.y - hitPos.y)
-              if (d < bestVertex.dist)
-                bestVertex = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
+              const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
+              if (d < bestVertexOnly.dist)
+                bestVertexOnly = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
             }
             const curvesPcHover = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
             for (let ci = 0; ci < curvesPcHover.length; ci++) {
@@ -2111,10 +2187,11 @@ export function WorkspaceCanvas() {
               if (c.type !== 'bezier') continue
               const pt = bezierAt(c, 0.5)
               const d = Math.hypot(local.x - pt.x, local.y - pt.y)
-              if (d < bestVertex.dist)
-                bestVertex = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
+              if (d < bestCurveOnly.dist)
+                bestCurveOnly = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
             }
           }
+          const bestVertex = mergeDeletableHoverVertexVsCurve(bestVertexOnly, bestCurveOnly)
           let bestNotch: { dist: number; pieceId: string; notchId: string } = {
             dist: NOTCH_HOVER_HIT + 1,
             pieceId: '',
@@ -2392,7 +2469,6 @@ export function WorkspaceCanvas() {
         }
         if (tool === 'point' && selectedPieceIds.length === 1) {
           const world = toWorld(e.clientX, e.clientY)
-          const HIT = 15
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
           if (!p) {
@@ -2401,8 +2477,8 @@ export function WorkspaceCanvas() {
           const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           if (masterPv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const nearest = nearestCurveIndexAndPoint(local, masterPv)
-            if (nearest && nearest.distance < HIT) {
+            const nearest = nearestPointForMasterPointEditing(p, local, POINT_INSERT_HIT_MM)
+            if (nearest) {
               setPointPreview({ pieceId: p.id, point: nearest.point })
             } else {
               setPointPreview(null)
@@ -2416,7 +2492,6 @@ export function WorkspaceCanvas() {
         }
         if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
           const world = toWorld(e.clientX, e.clientY)
-          const HOVER_CURVEPOINT_HIT = 15
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
           if (!p) {
@@ -2425,8 +2500,8 @@ export function WorkspaceCanvas() {
           const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           if (masterCv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const r = nearestCurveIndexAndPoint(local, masterCv)
-            if (r && r.distance < HOVER_CURVEPOINT_HIT && masterCv[r.curveIndex]?.type === 'line') {
+            const r = nearestPointForMasterPointEditing(p, local, POINT_INSERT_HIT_MM)
+            if (r && masterCv[r.curveIndex]?.type === 'line') {
               setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: r.curveIndex })
             } else {
               setHoveredCurvepointSegment(null)
@@ -2520,6 +2595,9 @@ export function WorkspaceCanvas() {
       } else if (dragging.kind === 'rectangle') {
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'rectangle' ? { ...d, current } : d))
+      } else if (dragging.kind === 'selectionMarquee') {
+        const current = toWorld(e.clientX, e.clientY)
+        setDragging((d) => (d && d.kind === 'selectionMarquee' ? { ...d, current } : d))
       } else if (dragging.kind === 'vertex') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -2853,6 +2931,11 @@ export function WorkspaceCanvas() {
         return
       }
       if (!inInput && e.key === 'Escape') {
+        if (batchSelectionTargets.length > 0) {
+          e.preventDefault()
+          clearBatchSelection()
+          return
+        }
         if (tool === 'notch') {
           e.preventDefault()
           if (dragging?.kind === 'notch') {
@@ -3022,7 +3105,7 @@ export function WorkspaceCanvas() {
         const world = toWorld(lastPointerClientRef.current.x, lastPointerClientRef.current.y)
         const snapped =
           piecesForPivot.length > 0
-            ? findPivotSnapTargetAtWorld(world, piecesForPivot, cutSeamSwappedSet)
+            ? findPivotSnapTargetAtWorld(world, piecesForPivot)
             : null
         if (snapped && selectedPieceIds.includes(snapped.pieceId)) {
           setPiecePivot(snapped.pieceId, snapped.pivotLocal)
@@ -3089,6 +3172,11 @@ export function WorkspaceCanvas() {
         return
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (!inInput && batchSelectionTargets.length > 0) {
+        e.preventDefault()
+        batchDeleteFiltered()
+        return
+      }
       if (workspaceImageSelected && imageDigitizeSession && !hoveredDeletablePoint) {
         e.preventDefault()
         cancelImageSession()
@@ -3173,8 +3261,10 @@ export function WorkspaceCanvas() {
     setToastMessage,
     tool,
     setDragging,
-    cutSeamSwappedSet,
     toWorld,
+    batchSelectionTargets,
+    clearBatchSelection,
+    batchDeleteFiltered,
   ])
 
   const handlePointerUp = useCallback((_e?: React.PointerEvent) => {
@@ -3192,6 +3282,34 @@ export function WorkspaceCanvas() {
       const len = Math.hypot(end.x - dragging.start.x, end.y - dragging.start.y)
       if (len >= 0.1) {
         setRulerLine({ start: dragging.start, end })
+      }
+      setDragging(null)
+      return
+    }
+    if (dragging?.kind === 'selectionMarquee') {
+      const { start, current } = dragging
+      const minX = Math.min(start.x, current.x)
+      const minY = Math.min(start.y, current.y)
+      const maxX = Math.max(start.x, current.x)
+      const maxY = Math.max(start.y, current.y)
+      const w = maxX - minX
+      const h = maxY - minY
+      if (w < 1 || h < 1) {
+        selectPiece(null)
+        clearBatchSelection()
+      } else {
+        const targets = collectMarqueeTargets(pieces, { minX, minY, maxX, maxY })
+        setBatchSelectionTargets(targets, Boolean(_e?.shiftKey))
+        const merged = useStore.getState().batchSelectionTargets
+        const uniqPieceIds = [...new Set(merged.map((t) => t.pieceId))]
+        if (uniqPieceIds.length === 0) {
+          selectPiece(null)
+        } else {
+          selectPiece(uniqPieceIds[0])
+          for (let i = 1; i < uniqPieceIds.length; i++) {
+            selectPiece(uniqPieceIds[i], true)
+          }
+        }
       }
       setDragging(null)
       return
@@ -3413,6 +3531,10 @@ export function WorkspaceCanvas() {
     lineLengthEditor,
     toWorld,
     setGrainLine,
+    selectPiece,
+    clearBatchSelection,
+    setBatchSelectionTargets,
+    cutSeamSwappedSet,
   ])
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -3461,6 +3583,106 @@ export function WorkspaceCanvas() {
       }}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>
+      {batchSelectionTargets.length > 0 && (
+        <div
+          className="batch-selection-bar"
+          style={{
+            position: 'fixed',
+            bottom: 12,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 10000,
+            isolation: 'isolate',
+            pointerEvents: 'auto',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 8,
+            padding: '10px 14px',
+            background: 'rgba(255,255,255,0.96)',
+            border: '1px solid #bdbdbd',
+            borderRadius: 8,
+            boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+            maxWidth: 'min(96vw, 920px)',
+            fontSize: 13,
+            fontFamily: 'system-ui, sans-serif',
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <span style={{ fontWeight: 600, marginRight: 4 }}>Fensterauswahl</span>
+          <span style={{ color: '#555' }}>
+            {filteredBatchTargets.length} von {batchSelectionTargets.length}
+          </span>
+          <span style={{ color: '#999' }}>|</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            Filter:
+            <select
+              value={batchSelectionFilter}
+              onChange={(e) => setBatchSelectionFilter(e.currentTarget.value as BatchSelectionFilter)}
+              style={{ fontSize: 13 }}
+            >
+              <option value="all">Alles</option>
+              <option value="vertices">Eckpunkte</option>
+              <option value="notches">Kerben</option>
+              <option value="curvePoints">Kurvenpunkte</option>
+              <option value="internalLines">Interne Linien</option>
+            </select>
+          </label>
+          <span style={{ color: '#999' }}>|</span>
+          <span style={{ fontSize: 12, color: '#666' }}>Markierung (nur Anzeige):</span>
+          <button
+            type="button"
+            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            onClick={() => setBatchUiHighlightForFiltered('#ff9800')}
+          >
+            Orange
+          </button>
+          <button
+            type="button"
+            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            onClick={() => setBatchUiHighlightForFiltered('#e91e63')}
+          >
+            Magenta
+          </button>
+          <button
+            type="button"
+            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            onClick={() => setBatchUiHighlightForFiltered('#2e7d32')}
+          >
+            Grün
+          </button>
+          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => clearBatchUiHighlight()}>
+            Markierung aus
+          </button>
+          <span style={{ color: '#999' }}>|</span>
+          <span style={{ fontSize: 12, color: '#666' }}>Eckpunkte:</span>
+          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => batchSetVerticesSoft(true)}>
+            weich (blau)
+          </button>
+          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => batchSetVerticesSoft(false)}>
+            fest (rot)
+          </button>
+          <span style={{ color: '#999' }}>|</span>
+          <button
+            type="button"
+            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            onClick={() => {
+              if (window.confirm('Ausgewählte Elemente (gefiltert) wirklich löschen?')) batchDeleteFiltered()
+            }}
+          >
+            Löschen
+          </button>
+          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => clearBatchSelection()}>
+            Auswahl aufheben
+          </button>
+          <span style={{ fontSize: 11, color: '#888', width: '100%', marginTop: 2 }}>
+            Shift+Fensterauswahl: zur bestehenden Auswahl hinzufügen · Entf: gefilterte löschen · Esc: Auswahl aufheben
+          </span>
+        </div>
+      )}
       {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"
@@ -4006,15 +4228,7 @@ export function WorkspaceCanvas() {
           {pointPreview && (() => {
             const piece = pieces.find((p) => p.id === pointPreview.pieceId)
             if (!piece) return null
-            const onSeamPc = useSeamLineForPointCurveEditing(piece)
-            const hasSeam = piece.seamLine.length >= 3
-            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
-            const useSeam = hasSeam && !solidIsCut
-            const displayPoint =
-              onSeamPc || !useSeam
-                ? pointPreview.point
-                : (nearestCurveIndexAndPoint(pointPreview.point, piece.seamLine)?.point ?? pointPreview.point)
-            const w = pieceLocalToWorld(displayPoint, piece)
+            const w = pieceLocalToWorld(pointPreview.point, piece)
             const ps = 1 / Math.max(view.zoom, 1e-6)
             const [fill, stroke] = COLOR_SOFT_PUNKT
             return (
@@ -4038,18 +4252,14 @@ export function WorkspaceCanvas() {
                 const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
                 const curvesForVertices = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
                 if (!piece || curvesForVertices.length === 0) return []
-                const hasSeam = piece.seamLine.length >= 3
                 const n = curvesForVertices.length
+                const softOnMaster = masterSoftVertexIndexSet(piece)
+                const notchOnMaster = masterNotchVertexIndexSet(piece)
                 return Array.from({ length: n }, (_, vi) => {
-                  if (piece.notches.some((no) => no.vertexIndex === vi)) return null
+                  if (notchOnMaster.has(vi)) return null
                   const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
-                  const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
-                  const useSeam = hasSeam && !solidIsCut
-                  const v = useSeamMaster || !useSeam
-                    ? vertexPos
-                    : (nearestCurveIndexAndPoint(vertexPos, piece.seamLine)?.point ?? vertexPos)
-                  const w = pieceLocalToWorld(v, piece)
-                  const isSoft = (piece.softVertices ?? []).includes(vi)
+                  const w = pieceLocalToWorld(vertexPos, piece)
+                  const isSoft = useSeamMaster ? softOnMaster.has(vi) : (piece.softVertices ?? []).includes(vi)
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
                   const eckSize = POINT_SCREEN_RECT * ps
                   return isSoft ? (
@@ -4215,6 +4425,100 @@ export function WorkspaceCanvas() {
               pointerEvents="none"
             />
           )}
+          {dragging?.kind === 'selectionMarquee' && (
+            <rect
+              x={Math.min(dragging.start.x, dragging.current.x)}
+              y={Math.min(dragging.start.y, dragging.current.y)}
+              width={Math.abs(dragging.current.x - dragging.start.x)}
+              height={Math.abs(dragging.current.y - dragging.start.y)}
+              fill="rgba(21,101,192,0.08)"
+              stroke="#1565c0"
+              strokeWidth={0.8}
+              strokeDasharray="5 3"
+              pointerEvents="none"
+            />
+          )}
+          {filteredBatchTargets.length > 0 &&
+            filteredBatchTargets.map((t) => {
+              const piece = pieces.find((p) => p.id === t.pieceId)
+              if (!piece) return null
+              const key = batchTargetKey(t)
+              const hi = batchUiHighlightByTargetId[key]
+              const ringStroke = hi ?? '#7b1fa2'
+              const ringFill = hi ? `${hi}55` : 'none'
+              const ps = 1 / Math.max(view.zoom, 1e-6)
+              const tx = `translate(${piece.transform.x},${piece.transform.y}) rotate(${piece.transform.rotation}) scale(${piece.transform.mirrored ? -1 : 1},1)`
+              if (t.kind === 'vertex') {
+                const w = getVertexWorldForBatchHighlight(piece, t.vertexIndex)
+                if (!w) return null
+                return (
+                  <circle
+                    key={key}
+                    cx={w.x}
+                    cy={w.y}
+                    r={(POINT_SCREEN_R + 2.5) * ps}
+                    fill={ringFill}
+                    stroke={ringStroke}
+                    strokeWidth={1.2 * ps}
+                    pointerEvents="none"
+                  />
+                )
+              }
+              if (t.kind === 'curvePoint') {
+                const curvesDraw = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+                const c = curvesDraw[t.curveIndex]
+                if (!c || c.type !== 'bezier') return null
+                const ptOnCurve = bezierAt(c, 0.5)
+                const w = pieceLocalToWorld(ptOnCurve, piece)
+                return (
+                  <circle
+                    key={key}
+                    cx={w.x}
+                    cy={w.y}
+                    r={(POINT_SCREEN_R + 2.5) * ps}
+                    fill={ringFill}
+                    stroke={ringStroke}
+                    strokeWidth={1.2 * ps}
+                    pointerEvents="none"
+                  />
+                )
+              }
+              if (t.kind === 'notch') {
+                const n = piece.notches.find((x) => x.id === t.notchId)
+                if (!n) return null
+                const cutPos = getNotchPositionAndAngleOnCutLine(n, piece.cutLine, piece.seamLine)
+                const w = pieceLocalToWorld(cutPos.position, piece)
+                return (
+                  <circle
+                    key={key}
+                    cx={w.x}
+                    cy={w.y}
+                    r={5 * ps}
+                    fill={ringFill}
+                    stroke={ringStroke}
+                    strokeWidth={1.2 * ps}
+                    pointerEvents="none"
+                  />
+                )
+              }
+              if (t.kind === 'internalLine') {
+                const curve = piece.internalLines[t.curveIndex]
+                if (!curve) return null
+                return (
+                  <g key={key} transform={tx} pointerEvents="none">
+                    <path
+                      d={curveToPathD([curve])}
+                      fill="none"
+                      stroke={ringStroke}
+                      strokeWidth={2.2}
+                      strokeDasharray="4 2"
+                      opacity={0.95}
+                    />
+                  </g>
+                )
+              }
+              return null
+            })}
           {dragging?.kind === 'line' && (() => {
             const piece = pieces.find((p) => p.id === dragging.pieceId)
             if (!piece) return null

@@ -11,20 +11,20 @@ function square(size: number): Curve[] {
   ]
 }
 
-describe('insertPointOnCutLine (seam master)', () => {
+describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
   beforeEach(() => {
-    const seamLine = square(100)
+    const cutLine = square(100)
     const workspace: Workspace = {
-      id: 'ws-seam-point',
+      id: 'ws-upd-seam',
       name: 'Test',
       pieces: [
         {
           id: 'p1',
           number: '001',
           name: 'Teil 001',
-          cutLine: seamLine,
-          seamLine,
-          seamAllowanceMm: 10,
+          cutLine,
+          seamLine: [],
+          seamAllowanceMm: null,
           notches: [],
           drills: [],
           grainLine: null,
@@ -43,18 +43,17 @@ describe('insertPointOnCutLine (seam master)', () => {
     useStore.setState({ workspace, selectedPieceIds: ['p1'] })
   })
 
-  it('fügt auch bei t nahe 0 robust auf der seamLine ein', () => {
-    const { insertPointOnCutLine } = useStore.getState()
-    insertPointOnCutLine('p1', 0, { x: 0, y: 0 }, 0)
+  it('übernimmt die bisherige Kontur als seamLine (Master) und leitet cutLine nach außen ab', () => {
+    useStore.getState().updatePiece('p1', { seamAllowanceMm: 10 })
     const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p1')
     expect(p).toBeDefined()
-    expect(p!.seamLine.length).toBe(5)
-    const first = p!.seamLine[0]
-    expect(first.type).toBe('line')
-    if (first.type === 'line') {
-      const len = Math.hypot(first.end.x - first.start.x, first.end.y - first.start.y)
-      expect(len).toBeGreaterThan(0)
+    expect(p!.seamAllowanceMm).toBe(10)
+    expect(p!.seamLine.length).toBe(4)
+    expect(p!.cutLine.length).toBeGreaterThanOrEqual(3)
+    const outer = p!.cutLine[0]
+    expect(outer.type).toBe('line')
+    if (outer.type === 'line') {
+      expect(Math.hypot(outer.end.x - outer.start.x, outer.end.y - outer.start.y)).toBeGreaterThan(100)
     }
   })
-
 })

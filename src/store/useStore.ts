@@ -12,6 +12,8 @@ import type {
   SeamAssignmentKindId,
   DigitizeNode,
   DigitizeState,
+  BatchSelectionFilter,
+  BatchSelectionTarget,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import {
@@ -32,6 +34,7 @@ import {
   bestSeamSubSegmentPairing,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
+  mapMasterVertexIndexToCutVertexIndex,
 } from '../geometry/seamUtils'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
@@ -45,6 +48,7 @@ import type { TrimTexProjectFileV1 } from '../persistence/trimtexProjectJson'
 import type { ConfiguratorInstance, ConfiguratorKindId, ConfiguratorPartParams } from '../configurators/types'
 import { generateConfiguratorPartGeometry } from '../configurators/generators'
 import { getDefaultConfiguratorParts } from '../configurators/registry'
+import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../workspace/workspaceMarqueeSelection'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -134,6 +138,21 @@ function cloneCurvesArray(curves: Curve[]): Curve[] {
       ? { type: 'line', start: { ...c.start }, end: { ...c.end } }
       : { type: 'bezier', start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
   )
+}
+
+function nearestCutVertexIndex(cutLine: Curve[], point: Point): number | null {
+  if (cutLine.length === 0) return null
+  let bestIdx = 0
+  let bestDist = Infinity
+  for (let i = 0; i < cutLine.length; i++) {
+    const v = i === 0 ? cutLine[0].start : cutLine[i - 1].end
+    const d = Math.hypot(point.x - v.x, point.y - v.y)
+    if (d < bestDist) {
+      bestDist = d
+      bestIdx = i
+    }
+  }
+  return bestIdx
 }
 
 function createDefaultPiece(id: string, number: string): PatternPiece {
@@ -322,7 +341,7 @@ type Store = {
   setSelectedPoint: (v: Store['selectedPoint']) => void
   applyOffset: (pieceId: string, deltaMm: number) => void
   removeSeamAllowance: (pieceId: string) => void
-  insertPointOnCutLine: (pieceId: string, curveIndex: number, point: Point, t?: number) => void
+  insertPointOnCutLine: (pieceId: string, curveIndex: number, point: Point, t?: number) => boolean
   updateVertex: (
     pieceId: string,
     vertexIndex: number,
@@ -379,6 +398,19 @@ type Store = {
 
   /** Gespeicherte TrimTex-JSON-Projektdatei laden (ersetzt Arbeitsfläche, DXF-Einstellungen, Kerben-Voreinstellungen, ggf. Hintergrundbild). */
   loadProjectFromFile: (project: TrimTexProjectFileV1, opts?: { projectFileName?: string }) => void
+
+  /** Fensterauswahl: Filter und Ziele (nur Editor-UI, nicht im Projekt/DXF). */
+  batchSelectionFilter: BatchSelectionFilter
+  batchSelectionTargets: BatchSelectionTarget[]
+  /** Temporäre Markierung: CSS-Farbe pro `batchTargetKey`. */
+  batchUiHighlightByTargetId: Record<string, string>
+  setBatchSelectionFilter: (f: BatchSelectionFilter) => void
+  setBatchSelectionTargets: (targets: BatchSelectionTarget[], merge?: boolean) => void
+  clearBatchSelection: () => void
+  setBatchUiHighlightForFiltered: (color: string | null) => void
+  clearBatchUiHighlight: () => void
+  batchSetVerticesSoft: (soft: boolean) => void
+  batchDeleteFiltered: () => void
 }
 
 function generateId(): string {
@@ -485,6 +517,9 @@ export const useStore = create<Store>((set, get) => ({
   configuratorModalOpen: false,
   configuratorInstances: [],
   rockGeneratorModalOpen: false,
+  batchSelectionFilter: 'all' as BatchSelectionFilter,
+  batchSelectionTargets: [] as BatchSelectionTarget[],
+  batchUiHighlightByTargetId: {} as Record<string, string>,
   notchSettings: Array.from({ length: 10 }, () => ({
     type: 'strich' as NotchType,
     widthMm: 6,
@@ -525,7 +560,27 @@ export const useStore = create<Store>((set, get) => ({
             }
             next.cutLine = derived.cutLine
           } else if (next.cutLine.length >= 3) {
-            next.seamLine = offsetCurvesInwardForSeam(next.cutLine, next.seamAllowanceMm)
+            // Wie applyOffset / Dialogtext: bisherige Schnittkontur wird Nahtlinie (Master), cutLine nach außen.
+            // Nicht: seam = Inset(cut) bei unveränderter cutLine — das verliert die editierbare Topologie und bricht Punkt-/Vertex-Werkzeuge.
+            const oldCut = p.cutLine
+            const seamLine = cloneCurvesArray(next.cutLine)
+            const derived = deriveCutLineFromSeamWithValidation(seamLine, next.seamAllowanceMm)
+            if (!derived.ok) {
+              toastMessage = `warn:${derived.message}`
+              return p
+            }
+            next.seamLine = seamLine
+            next.cutLine = derived.cutLine
+            next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
+            const newCut = derived.cutLine
+            const newSoft = new Set<number>()
+            for (const vi of p.softVertices ?? []) {
+              if (vi < 0 || vi >= oldCut.length) continue
+              const pt = vi === 0 ? oldCut[0].start : oldCut[vi - 1].end
+              const mapped = nearestCutVertexIndex(newCut, pt)
+              if (mapped != null) newSoft.add(mapped)
+            }
+            next.softVertices = [...newSoft].sort((a, b) => a - b)
           }
         } else {
           next.seamLine = []
@@ -558,6 +613,83 @@ export const useStore = create<Store>((set, get) => ({
             : [id],
       workspaceImageSelected: id != null ? false : s.workspaceImageSelected,
     })),
+
+  setBatchSelectionFilter: (f) => set({ batchSelectionFilter: f }),
+
+  setBatchSelectionTargets: (targets, merge) =>
+    set((s) => ({
+      batchSelectionTargets: merge ? mergeBatchTargets(s.batchSelectionTargets, targets) : targets,
+    })),
+
+  clearBatchSelection: () =>
+    set({
+      batchSelectionTargets: [],
+      batchUiHighlightByTargetId: {},
+      batchSelectionFilter: 'all',
+    }),
+
+  setBatchUiHighlightForFiltered: (color) =>
+    set((s) => {
+      const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter)
+      const next = { ...s.batchUiHighlightByTargetId }
+      for (const t of filtered) {
+        const k = batchTargetKey(t)
+        if (color == null) delete next[k]
+        else next[k] = color
+      }
+      return { batchUiHighlightByTargetId: next }
+    }),
+
+  clearBatchUiHighlight: () => set({ batchUiHighlightByTargetId: {} }),
+
+  batchSetVerticesSoft: (soft) => {
+    const s = get()
+    const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter)
+    for (const t of filtered) {
+      if (t.kind === 'vertex') get().setVertexSoft(t.pieceId, t.vertexIndex, soft)
+    }
+  },
+
+  batchDeleteFiltered: () => {
+    const s = get()
+    const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter)
+    type G = {
+      vertices: number[]
+      notches: string[]
+      internalLines: number[]
+      curvePoints: number[]
+    }
+    const byPiece = new Map<string, G>()
+    for (const t of filtered) {
+      if (!byPiece.has(t.pieceId)) {
+        byPiece.set(t.pieceId, { vertices: [], notches: [], internalLines: [], curvePoints: [] })
+      }
+      const g = byPiece.get(t.pieceId)!
+      if (t.kind === 'vertex') g.vertices.push(t.vertexIndex)
+      else if (t.kind === 'notch') g.notches.push(t.notchId)
+      else if (t.kind === 'internalLine') g.internalLines.push(t.curveIndex)
+      else if (t.kind === 'curvePoint') g.curvePoints.push(t.curveIndex)
+    }
+    for (const [pieceId, g] of byPiece) {
+      for (const ci of [...new Set(g.internalLines)].sort((a, b) => b - a)) {
+        get().removeInternalLine(pieceId, ci)
+      }
+      for (const ci of [...new Set(g.curvePoints)]) {
+        get().convertBezierSegmentToLine(pieceId, ci)
+      }
+      for (const nid of [...new Set(g.notches)]) {
+        get().removeNotch(pieceId, nid)
+      }
+      for (const vi of [...new Set(g.vertices)].sort((a, b) => b - a)) {
+        get().removeVertex(pieceId, vi)
+      }
+    }
+    set({
+      batchSelectionTargets: [],
+      batchUiHighlightByTargetId: {},
+      batchSelectionFilter: 'all',
+    })
+  },
 
   setTool: (t) => set({ tool: t }),
   setShowGrid: (v) => set({ showGrid: v }),
@@ -1429,7 +1561,8 @@ export const useStore = create<Store>((set, get) => ({
       },
     })),
 
-  insertPointOnCutLine: (pieceId, curveIndex, point, t) =>
+  insertPointOnCutLine: (pieceId, curveIndex, point, t) => {
+    let inserted = false
     set((s) => {
       const pieceBefore = s.workspace.pieces.find((p) => p.id === pieceId)
       const seamPc = pieceBefore != null && useSeamLineForPointCurveEditing(pieceBefore)
@@ -1479,7 +1612,12 @@ export const useStore = create<Store>((set, get) => ({
               }
               const cutLine = derived.cutLine
               const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-              const softVertices = (p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length)
+              const insertedOnSeam = newMaster[curveIndex].end
+              const insertedCutVi = nearestCutVertexIndex(cutLine, insertedOnSeam)
+              const softSet = new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length))
+              if (insertedCutVi != null) softSet.add(insertedCutVi)
+              const softVertices = [...softSet].sort((a, b) => a - b)
+              inserted = true
               return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
             }
 
@@ -1497,12 +1635,15 @@ export const useStore = create<Store>((set, get) => ({
             ]
             const seamLine =
               p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+            inserted = true
             return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
           }),
         },
         ...(toastMessage ? { toastMessage } : {}),
       }
-    }),
+    })
+    return inserted
+  },
 
   // Vertex verschieben. Seam-as-Master: Bei Nahtzugabe wird die seamLine (Innenkontur) bearbeitet, cutLine folgt.
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc, notchOpts) =>
@@ -1808,9 +1949,12 @@ export const useStore = create<Store>((set, get) => ({
           } else if (notchVIs.has(vertexIndex)) {
             return p
           }
+          const cutViForSoft =
+            useSeamMaster ? mapMasterVertexIndexToCutVertexIndex(p, vertexIndex) : vertexIndex
+          if (cutViForSoft == null) return p
           const set = new Set(p.softVertices ?? [])
-          if (soft) set.add(vertexIndex)
-          else set.delete(vertexIndex)
+          if (soft) set.add(cutViForSoft)
+          else set.delete(cutViForSoft)
           const softVertices = [...set].sort((a, b) => a - b)
           return applySharpCornerPromotion({ ...p, softVertices })
         }),
@@ -2077,6 +2221,9 @@ export const useStore = create<Store>((set, get) => ({
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
       toastMessage: null,
+      batchSelectionFilter: 'all',
+      batchSelectionTargets: [],
+      batchUiHighlightByTargetId: {},
     })),
 
   finishDigitize: () => {
@@ -2198,6 +2345,9 @@ export const useStore = create<Store>((set, get) => ({
       showSettingsModal: false,
       showStuecklisteModal: false,
       toastMessage: null,
+      batchSelectionFilter: 'all',
+      batchSelectionTargets: [],
+      batchUiHighlightByTargetId: {},
     })
   },
 

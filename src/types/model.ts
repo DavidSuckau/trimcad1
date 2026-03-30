@@ -150,6 +150,16 @@ export type Workspace = {
 export const DXF_LAYERS = ['CUT', 'SEAM', 'NOTCH', 'DRILL', 'GRAIN', 'TEXT'] as const
 export type DxfLayer = (typeof DXF_LAYERS)[number]
 
+/** Fensterauswahl: Filter für Batch-Aktionen (nur UI, nicht exportiert). */
+export type BatchSelectionFilter = 'all' | 'vertices' | 'notches' | 'curvePoints' | 'internalLines'
+
+/** Einzelziel der Fensterauswahl (Teil + geometrische Referenz). */
+export type BatchSelectionTarget =
+  | { kind: 'vertex'; pieceId: string; vertexIndex: number }
+  | { kind: 'curvePoint'; pieceId: string; curveIndex: number }
+  | { kind: 'notch'; pieceId: string; notchId: string }
+  | { kind: 'internalLine'; pieceId: string; curveIndex: number }
+
 /** Einzelner Knoten beim Digitalisieren (Pen-Tool). */
 export type DigitizeNode = {
   point: Point
