@@ -18,6 +18,7 @@ import { SeamAssignmentMetaModal } from './SeamAssignmentMetaModal'
 import { MassstabModal } from './MassstabModal'
 import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
+import { StuecklisteModal } from './StuecklisteModal'
 
 type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle' | 'massstab'
 type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
@@ -66,6 +67,7 @@ export function Toolbar() {
     nahtzuordnungMode,
     setNahtzuordnungMode,
     setShowSettingsModal,
+    setShowStuecklisteModal,
     setShowHelpModal,
     setShowShortcutListModal,
     dxfExportScale,
@@ -76,6 +78,7 @@ export function Toolbar() {
     startImageSession,
     setToastMessage,
     loadProjectFromFile,
+    updateWorkspace,
     createConfiguratorInstance,
     setShowConfiguratorModal,
     setShowRockGeneratorModal,
@@ -143,15 +146,17 @@ export function Toolbar() {
   }
 
   const handleSaveProjectJson = () => {
+    const fileName = suggestedTrimTexProjectFilename(workspace.name)
+    updateWorkspace({ projectFileName: fileName })
     const file = buildTrimTexProjectFile({
-      workspace,
+      workspace: useStore.getState().workspace,
       dxfExportScale,
       dxfImportExtraCutLayers,
       notchSettings,
       imageDigitizeSession,
     })
     const json = stringifyTrimTexProject(file)
-    downloadBlob(json, suggestedTrimTexProjectFilename(workspace.name), 'application/json;charset=utf-8')
+    downloadBlob(json, fileName, 'application/json;charset=utf-8')
     closeMenu()
   }
 
@@ -180,7 +185,7 @@ export function Toolbar() {
           setToastMessage('error:' + result.error)
           return
         }
-        loadProjectFromFile(result.data)
+        loadProjectFromFile(result.data, { projectFileName: file.name })
         setToastMessage('success:Projekt geladen.')
       } catch (err) {
         setToastMessage('error:' + (err instanceof Error ? err.message : 'Laden fehlgeschlagen'))
@@ -793,7 +798,16 @@ export function Toolbar() {
           {openMenu === 'stueckliste' && (
             <ul className="menubar-dropdown">
               <li>
-                <span className="menubar-dropdown-btn menubar-dropdown-btn-disabled">In Entwicklung</span>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setShowStuecklisteModal(true)
+                    closeMenu()
+                  }}
+                >
+                  Stückliste anzeigen
+                </button>
               </li>
             </ul>
           )}
@@ -947,6 +961,7 @@ export function Toolbar() {
         </div>
       </div>
       <SettingsModal />
+      <StuecklisteModal />
       <SeamAdjustmentModal />
       <SeamAssignmentMetaModal />
       <MassstabModal />

@@ -58,6 +58,19 @@ export function PiecePropertiesModal() {
           />
         </label>
 
+        <label className="nahtzugabe-dialog-label">
+          <span>Material (Stückliste)</span>
+          <input
+            type="text"
+            className="nahtzugabe-dialog-input"
+            style={{ width: '100%', boxSizing: 'border-box' }}
+            value={piece.material ?? ''}
+            onChange={(e) => updatePiece(piece.id, { material: e.target.value })}
+            placeholder="z. B. Baumwolle"
+            autoComplete="off"
+          />
+        </label>
+
         {piece.seamAllowanceMm != null && (
           <div
             className="nahtzugabe-dialog-label"

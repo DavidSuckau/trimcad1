@@ -38,7 +38,7 @@ import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransfor
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
-import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
+import { resyncNotchesAfterCutLineRebuilt, seamVertexNearProjectedNotch } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
 import { applySeamAssignmentCutTrim } from '../geometry/seamAssignmentCutTrim'
 import type { TrimTexProjectFileV1 } from '../persistence/trimtexProjectJson'
@@ -152,6 +152,8 @@ function createDefaultPiece(id: string, number: string): PatternPiece {
     transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     softVertices: [],
     fillInterior: true,
+    material: '',
+    bomQuantity: 1,
   }
 }
 
@@ -216,6 +218,7 @@ type Store = {
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
   showSettingsModal: boolean
+  showStuecklisteModal: boolean
   showHelpModal: boolean
   /** Kompakte Tastenkürzel-Übersicht (Hilfe-Menü). */
   showShortcutListModal: boolean
@@ -261,6 +264,7 @@ type Store = {
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
+  setShowStuecklisteModal: (v: boolean) => void
   setShowHelpModal: (v: boolean) => void
   setShowShortcutListModal: (v: boolean) => void
   setShowConfiguratorModal: (v: boolean) => void
@@ -328,6 +332,8 @@ type Store = {
   movePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point, skipSeamRecalc?: boolean) => void
   removeVertex: (pieceId: string, vertexIndex: number) => void
   convertBezierSegmentToLine: (pieceId: string, curveIndex: number) => void
+  /** Eckpunkt weich (blau) / fest (rot); gleiche Index-Basis wie updateVertex/removeVertex. */
+  setVertexSoft: (pieceId: string, vertexIndex: number, soft: boolean) => void
   flipPieceAlongGrain: (pieceId: string) => void
   /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
   rotatePiece90: (pieceId: string) => void
@@ -365,8 +371,11 @@ type Store = {
   setWorkspaceImageLocked: (locked: boolean) => void
   cancelImageSession: () => void
 
+  /** Teilfelder der Arbeitsfläche (Metadaten, Name, …). */
+  updateWorkspace: (patch: Partial<Workspace>) => void
+
   /** Gespeicherte TrimTex-JSON-Projektdatei laden (ersetzt Arbeitsfläche, DXF-Einstellungen, Kerben-Voreinstellungen, ggf. Hintergrundbild). */
-  loadProjectFromFile: (project: TrimTexProjectFileV1) => void
+  loadProjectFromFile: (project: TrimTexProjectFileV1, opts?: { projectFileName?: string }) => void
 }
 
 function generateId(): string {
@@ -457,6 +466,7 @@ export const useStore = create<Store>((set, get) => ({
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   showSettingsModal: false,
+  showStuecklisteModal: false,
   showHelpModal: false,
   showShortcutListModal: false,
   dxfExportScale: 1,
@@ -562,6 +572,7 @@ export const useStore = create<Store>((set, get) => ({
   setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
+  setShowStuecklisteModal: (v) => set({ showStuecklisteModal: v }),
   setShowHelpModal: (v) => set({ showHelpModal: v }),
   setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
   setShowConfiguratorModal: (v) => set({ configuratorModalOpen: v }),
@@ -1764,6 +1775,31 @@ export const useStore = create<Store>((set, get) => ({
       }
     }),
 
+  setVertexSoft: (pieceId, vertexIndex, soft) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          const useSeamMaster = useSeamLineForVertexEditing(p)
+          const curves = useSeamMaster ? p.seamLine : p.cutLine
+          const n = curves.length
+          if (n <= 3 || vertexIndex < 0 || vertexIndex >= n) return p
+          const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
+          if (useSeamMaster) {
+            if (seamVertexNearProjectedNotch(p, vertexIndex)) return p
+          } else if (notchVIs.has(vertexIndex)) {
+            return p
+          }
+          const set = new Set(p.softVertices ?? [])
+          if (soft) set.add(vertexIndex)
+          else set.delete(vertexIndex)
+          const softVertices = [...set].sort((a, b) => a - b)
+          return applySharpCornerPromotion({ ...p, softVertices })
+        }),
+      },
+    })),
+
   offsetSegment: (pieceId, curveIndex, deltaMm) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
@@ -2019,6 +2055,7 @@ export const useStore = create<Store>((set, get) => ({
       showHelpModal: false,
       showShortcutListModal: false,
       showSettingsModal: false,
+      showStuecklisteModal: false,
       workspaceImageSelected: false,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
@@ -2100,7 +2137,12 @@ export const useStore = create<Store>((set, get) => ({
       tool: 'select',
     })),
 
-  loadProjectFromFile: (project) => {
+  updateWorkspace: (patch) =>
+    set((s) => ({
+      workspace: { ...s.workspace, ...patch },
+    })),
+
+  loadProjectFromFile: (project, opts) => {
     const notchSettings = Array.from({ length: 10 }, (_, i) => {
       const n = project.notchSettings[i]
       return n && (n.type === 'strich' || n.type === 'kerbe')
@@ -2108,8 +2150,12 @@ export const useStore = create<Store>((set, get) => ({
         : { type: 'strich' as const, widthMm: 6, depthMm: 4 }
     })
     const firstId = project.workspace.pieces[0]?.id
+    const ws =
+      opts?.projectFileName != null
+        ? { ...project.workspace, projectFileName: opts.projectFileName }
+        : project.workspace
     set({
-      workspace: project.workspace,
+      workspace: ws,
       dxfExportScale: project.dxfExportScale,
       dxfImportExtraCutLayers: project.dxfImportExtraCutLayers,
       notchSettings,
@@ -2132,6 +2178,7 @@ export const useStore = create<Store>((set, get) => ({
       showHelpModal: false,
       showShortcutListModal: false,
       showSettingsModal: false,
+      showStuecklisteModal: false,
       toastMessage: null,
     })
   },

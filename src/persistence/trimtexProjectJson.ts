@@ -99,6 +99,12 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
     },
     softVertices: Array.isArray(raw.softVertices) ? raw.softVertices.filter((n): n is number => typeof n === 'number') : [],
     fillInterior: raw.fillInterior === undefined ? true : Boolean(raw.fillInterior),
+    material: typeof raw.material === 'string' ? raw.material : '',
+    bomQuantity: (() => {
+      const q = Number(raw.bomQuantity)
+      if (!Number.isFinite(q)) return 1
+      return Math.max(1, Math.floor(q))
+    })(),
   }
   return applySharpCornerPromotion(base)
 }
@@ -159,6 +165,10 @@ export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
     pieces,
     view,
     seamAssignments: normalizeSeamAssignments(w.seamAssignments),
+    ...(typeof w.projectFileName === 'string' ? { projectFileName: w.projectFileName } : {}),
+    ...(typeof w.bomDocumentVersion === 'string' ? { bomDocumentVersion: w.bomDocumentVersion } : {}),
+    ...(typeof w.bomDeveloperName === 'string' ? { bomDeveloperName: w.bomDeveloperName } : {}),
+    ...(typeof w.bomEngineerName === 'string' ? { bomEngineerName: w.bomEngineerName } : {}),
   }
 }
 

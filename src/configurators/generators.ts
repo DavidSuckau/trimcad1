@@ -80,13 +80,17 @@ function generateRockInternalLines(params: ConfiguratorPartParams): Curve[] {
   const yHip = clamp01(waistToHipMm / rockHeightMm) * rockHeightMm
   const yWaist = 0
 
-  const yTip = yHip * 0.78
+  const defaultDartLength = yHip * 0.78
+  const dartLengthMm = Math.max(1, Math.min(rockHeightMm, params.dartLengthMm ?? defaultDartLength))
+  const yTip = yWaist + dartLengthMm
 
   // Abnäher als interne Linien (AAMA/ASTM Layer INTERNAL).
   // Typisch: 2 Abnäher pro Teil (links/rechts), je Abnäher 2 Kantenlinien (Wedge).
-  const leftTipX = -waistWidthMm * 0.22
-  const rightTipX = waistWidthMm * 0.22
-  const dartOpening = waistWidthMm * 0.06
+  const leftRatio = clamp01(params.dartPosLeftRatio ?? 0.28)
+  const rightRatio = clamp01(params.dartPosRightRatio ?? 0.72)
+  const leftTipX = -waistWidthMm / 2 + waistWidthMm * leftRatio
+  const rightTipX = -waistWidthMm / 2 + waistWidthMm * rightRatio
+  const dartOpening = Math.max(1, params.dartOpeningMm ?? waistWidthMm * 0.06)
 
   const leftStartL = leftTipX - dartOpening
   const leftStartR = leftTipX + dartOpening

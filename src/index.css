@@ -765,6 +765,263 @@ body {
   flex-direction: column;
 }
 
+.settings-modal.stueckliste-modal {
+  width: min(960px, 95vw);
+  max-width: 95vw;
+}
+
+.stueckliste-summary {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+  font-size: 0.8125rem;
+}
+
+.stueckliste-summary h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #444;
+}
+
+.stueckliste-summary-material-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.stueckliste-summary-table-wrap {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.stueckliste-material-pie-column {
+  flex: 0 1 260px;
+  min-width: 200px;
+}
+
+.stueckliste-material-pie-caption {
+  margin: 0 0 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #555;
+}
+
+.stueckliste-material-pie {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: flex-start;
+}
+
+.stueckliste-material-pie-svg {
+  flex-shrink: 0;
+  display: block;
+}
+
+.stueckliste-material-pie-legend {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.stueckliste-material-pie-legend li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.stueckliste-material-pie-legend li:last-child {
+  margin-bottom: 0;
+}
+
+.stueckliste-material-pie-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  margin-top: 0.2em;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.stueckliste-material-pie-legend-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.stueckliste-material-pie-name {
+  word-break: break-word;
+}
+
+.stueckliste-material-pie-pct {
+  font-variant-numeric: tabular-nums;
+  color: #666;
+  font-weight: 600;
+}
+
+.stueckliste-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0;
+}
+
+.stueckliste-summary-table th,
+.stueckliste-summary-table td {
+  text-align: right;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.stueckliste-summary-table th:first-child,
+.stueckliste-summary-table td:first-child {
+  text-align: left;
+}
+
+.stueckliste-grand {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.5rem;
+  background: #f7f7f7;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.stueckliste-naehplan-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.stueckliste-naehplan-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.stueckliste-naehplan-list {
+  margin: 0.5rem 0 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.stueckliste-naehplan-list li + li {
+  margin-top: 0.35rem;
+}
+
+.stueckliste-overview-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e0e0e0;
+}
+
+.stueckliste-overview-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #444;
+}
+
+.stueckliste-overview-hint {
+  margin: 0 0 0.6rem;
+  font-size: 0.75rem;
+  color: #777;
+  line-height: 1.35;
+}
+
+.stueckliste-overview-wrap {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.stueckliste-overview-svg-host svg {
+  width: 100%;
+  height: 200px;
+  display: block;
+  vertical-align: top;
+}
+
+.stueckliste-overview-placeholder {
+  padding: 1.25rem 0.75rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: #888;
+  border: 1px dashed #ddd;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.stueckliste-doc-meta {
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+}
+
+.stueckliste-doc-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.stueckliste-doc-row:last-of-type {
+  margin-bottom: 0.65rem;
+}
+
+.stueckliste-doc-label {
+  font-weight: 600;
+  color: #555;
+  min-width: 4.5rem;
+}
+
+.stueckliste-doc-value {
+  color: #111;
+  word-break: break-all;
+}
+
+.stueckliste-doc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.stueckliste-doc-field:first-of-type {
+  margin-top: 0.65rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e8e8e8;
+}
+
+.stueckliste-doc-field span {
+  font-weight: 600;
+  color: #555;
+  font-size: 0.75rem;
+}
+
+.stueckliste-doc-field .nahtzugabe-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.stueckliste-material-input {
+  min-width: 7rem;
+  max-width: 12rem;
+}
+
 .settings-header {
   display: flex;
   align-items: center;
@@ -843,6 +1100,10 @@ body {
   justify-content: flex-end;
   padding: 0.75rem 1.25rem;
   border-top: 1px solid #e0e0e0;
+}
+
+.stueckliste-footer-actions {
+  gap: 0.5rem;
 }
 
 /* Notch-Tabelle */

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store/useStore'
 import type { ConfiguratorPartParams } from '../configurators/types'
+import type { ConfiguratorPatchProposal } from '../configurators/chatPatch'
+import { ConfiguratorAiChatPanel } from './ConfiguratorAiChatPanel'
 
 function clampFiniteNumber(v: string, fallback: number, min: number, max: number): number {
   const n = Number(v)
@@ -69,6 +71,19 @@ export function ConfiguratorModal() {
     regenerateConfiguratorPart(selectedInstance.id, selectedPart.id)
   }
 
+  const onApplyAiProposal = (proposal: ConfiguratorPatchProposal) => {
+    if (!selectedInstance || !selectedPart) return
+    if (proposal.scope === 'all_parts') {
+      for (const part of selectedInstance.parts) {
+        updateConfiguratorPartParams(selectedInstance.id, part.id, proposal.patch)
+        regenerateConfiguratorPart(selectedInstance.id, part.id)
+      }
+      return
+    }
+    updateConfiguratorPartParams(selectedInstance.id, selectedPart.id, proposal.patch)
+    regenerateConfiguratorPart(selectedInstance.id, selectedPart.id)
+  }
+
   const isValidDraft = !!draft
     ? (() => {
         const widthMm = draft.widthMm
@@ -76,6 +91,10 @@ export function ConfiguratorModal() {
         const hipWidthMm = draft.hipWidthMm ?? widthMm
         const hemWidthMm = draft.hemWidthMm ?? hipWidthMm
         const waistToHipMm = draft.waistToHipMm ?? 180
+        const dartLengthMm = draft.dartLengthMm ?? waistToHipMm * 0.78
+        const dartOpeningMm = draft.dartOpeningMm ?? widthMm * 0.06
+        const dartPosLeftRatio = draft.dartPosLeftRatio ?? 0.28
+        const dartPosRightRatio = draft.dartPosRightRatio ?? 0.72
 
         const baseOk = Number.isFinite(widthMm) && Number.isFinite(heightMm) && widthMm >= 1 && heightMm >= 1
         const offsetsOk = Number.isFinite(draft.offsetX) && Number.isFinite(draft.offsetY)
@@ -86,9 +105,19 @@ export function ConfiguratorModal() {
           Number.isFinite(hipWidthMm) &&
           Number.isFinite(hemWidthMm) &&
           Number.isFinite(waistToHipMm) &&
+          Number.isFinite(dartLengthMm) &&
+          Number.isFinite(dartOpeningMm) &&
+          Number.isFinite(dartPosLeftRatio) &&
+          Number.isFinite(dartPosRightRatio) &&
           hipWidthMm >= 1 &&
           hemWidthMm >= 1 &&
-          waistToHipMm >= 1
+          waistToHipMm >= 1 &&
+          dartLengthMm >= 1 &&
+          dartOpeningMm >= 1 &&
+          dartPosLeftRatio >= 0 &&
+          dartPosLeftRatio <= 1 &&
+          dartPosRightRatio >= 0 &&
+          dartPosRightRatio <= 1
         )
       })()
     : false
@@ -229,6 +258,61 @@ export function ConfiguratorModal() {
                             }}
                           />
                         </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Abnäher-Länge (mm)</span>
+                          <input
+                            type="number"
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.dartLengthMm ?? 0}
+                            onChange={(e) => {
+                              const dartLengthMm = clampFiniteNumber(
+                                e.target.value,
+                                draft?.dartLengthMm ?? draft?.waistToHipMm ?? 140,
+                                1,
+                                10000,
+                              )
+                              setDraft((d) => (d ? { ...d, dartLengthMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Abnäher-Öffnung (mm)</span>
+                          <input
+                            type="number"
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.dartOpeningMm ?? 0}
+                            onChange={(e) => {
+                              const dartOpeningMm = clampFiniteNumber(e.target.value, draft?.dartOpeningMm ?? 24, 1, 10000)
+                              setDraft((d) => (d ? { ...d, dartOpeningMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Abnäher links Position (0..1)</span>
+                          <input
+                            type="number"
+                            step={0.01}
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.dartPosLeftRatio ?? 0}
+                            onChange={(e) => {
+                              const dartPosLeftRatio = clampFiniteNumber(e.target.value, draft?.dartPosLeftRatio ?? 0.28, 0, 1)
+                              setDraft((d) => (d ? { ...d, dartPosLeftRatio } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Abnäher rechts Position (0..1)</span>
+                          <input
+                            type="number"
+                            step={0.01}
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.dartPosRightRatio ?? 0}
+                            onChange={(e) => {
+                              const dartPosRightRatio = clampFiniteNumber(e.target.value, draft?.dartPosRightRatio ?? 0.72, 0, 1)
+                              setDraft((d) => (d ? { ...d, dartPosRightRatio } : d))
+                            }}
+                          />
+                        </label>
                       </>
                     )}
                   </div>
@@ -241,6 +325,15 @@ export function ConfiguratorModal() {
                       Neu erzeugen
                     </button>
                   </div>
+
+                  {!isRock && (
+                    <ConfiguratorAiChatPanel
+                      kindId={selectedInstance.kindId}
+                      partLabel={selectedPart.label}
+                      currentParams={selectedPart.params}
+                      onApplyProposal={onApplyAiProposal}
+                    />
+                  )}
                 </>
               ) : (
                 <>

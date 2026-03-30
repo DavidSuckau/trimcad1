@@ -28,6 +28,13 @@ export type ConfiguratorPartParams = {
   waistToHipMm?: number
   hipWidthMm?: number
   hemWidthMm?: number
+  /** Abnäher: Länge von Taillenlinie nach unten (pro Teil). */
+  dartLengthMm?: number
+  /** Abnäher: Gesamtöffnung an der Taille je Abnäher (pro Teil). */
+  dartOpeningMm?: number
+  /** Abnäher-Positionen relativ zur Taillenbreite (0..1, links/rechts). */
+  dartPosLeftRatio?: number
+  dartPosRightRatio?: number
 }
 
 export type ConfiguratorPart = {

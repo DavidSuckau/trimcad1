@@ -79,6 +79,10 @@ export type PatternPiece = {
    * Fehlt bei alten Daten → wie true behandeln.
    */
   fillInterior?: boolean
+  /** Freitext für Stückliste / Verbrauch (z. B. Stoffart). */
+  material?: string
+  /** Stückzahl für BOM; ganzzahlig ≥ 1. */
+  bomQuantity?: number
 }
 
 export type ViewState = {
@@ -133,6 +137,14 @@ export type Workspace = {
   view: ViewState
   /** Nahtzuordnungen (welche Naht an welcher zusammennähen). Nur für die Ansicht, nicht DXF-Export. */
   seamAssignments: SeamAssignment[]
+  /** Zuletzt gespeicherter oder geladener Projektdateiname (Anzeige Stückliste). */
+  projectFileName?: string
+  /** Stückliste: Dokumentversion (frei). */
+  bomDocumentVersion?: string
+  /** Stückliste: Entwickler (Name). */
+  bomDeveloperName?: string
+  /** Stückliste: Ingenieur (Name). */
+  bomEngineerName?: string
 }
 
 export const DXF_LAYERS = ['CUT', 'SEAM', 'NOTCH', 'DRILL', 'GRAIN', 'TEXT'] as const

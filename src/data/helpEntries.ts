@@ -154,6 +154,14 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
+    name: 'Konturpunkt: weich, fest, Kurve',
+    description:
+      'Mit „Punkte anzeigen“: genau ein Teil auswählen, Maus auf roten/blauen Eckpunkt oder grüne Bézier-Mitte. P = weicher Punkt (blau), E = fester Eckpunkt (rot), C = von dieser Ecke aus das nächste gerade Segment in eine Bézier-Kurve umwandeln (wie Kurvenpunkt-Werkzeug). An der grünen Kurvenmitte: E = Segment wieder zur Linie (wie Entf). Wenn ein Kanten-Segment-Menü offen ist, bleibt P dort die Parallellinie.',
+    access: 'Punkte anzeigen · Auswahl / Punkt / Kurvenpunkt · Ecke oder grüner Punkt hovern',
+    shortcut: 'P, E, C · E',
+  },
+  {
+    category: 'Werkzeuge',
     name: 'Punkt in 5-mm-Schritten verschieben',
     description:
       'Beim Ziehen eines Eckpunkts die Alt-Taste gedrückt halten: Die Bewegung erfolgt nur in 5-mm-Schritten relativ zur Startposition (±5, ±10, ±15 …).',
@@ -202,9 +210,9 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Drehpunkt auf Ecke, Kerbe oder Kurve setzen',
     description:
-      'Ohne extra Menü: Teil auswählen, gewünschten Punkt mit der Maus anfahren (wie beim Löschen), dann Alt+P. Kerben gehen immer; Ecken und Bézier-Kurvenpunkte, wenn „Punkte anzeigen“ aktiv ist. Der Drehpunkt (Kreuz) springt dorthin — drehen wie gewohnt am blauen Griff.',
-    access: 'Auswahl-Werkzeug · Punkt/Kerbe hovern · Alt+P',
-    shortcut: 'Alt+P',
+      'Ohne extra Menü: Teil auswählen, Maus auf Ecke, Kerbe oder Bézier-Mitte (grüner Kurvenpunkt) legen, dann Alt+D („D“ wie Drehpunkt; P bleibt für das Punkt-Werkzeug). Funktioniert auch ohne „Punkte anzeigen“. Der Drehpunkt (Kreuz) springt dorthin — drehen wie gewohnt am blauen Griff.',
+    access: 'Auswahl-Werkzeug · Punkt/Kerbe hovern · Wahltaste/Alt + D',
+    shortcut: 'Alt+D (Mac: ⌥D)',
   },
 
   // —— Datei ——
