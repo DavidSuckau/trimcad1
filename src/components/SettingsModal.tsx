@@ -21,6 +21,8 @@ export function SettingsModal() {
     setDxfExportScale,
     dxfImportExtraCutLayers,
     setDxfImportExtraCutLayers,
+    dxfImportScale,
+    setDxfImportScale,
   } = useStore()
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
 
@@ -106,6 +108,38 @@ export function SettingsModal() {
               <h3 style={{ margin: '20px 0 12px', fontSize: '14px' }}>DXF-Import</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <label style={{ fontSize: '13px' }}>
+                  Import-Maßstab (nach DXF-Units, Standard <code>1</code>)
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    type="number"
+                    style={{ width: '100px', padding: '4px 6px', fontSize: '13px' }}
+                    min={0.0001}
+                    step={0.1}
+                    value={dxfImportScale}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      if (v > 0) setDxfImportScale(v)
+                    }}
+                  />
+                  <span style={{ fontSize: '12px', color: '#888' }}>
+                    Aktuell: ×{dxfImportScale}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[1, 10, 0.1].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      className="sidebar-btn"
+                      style={{ fontSize: '11px', padding: '3px 8px' }}
+                      onClick={() => setDxfImportScale(preset)}
+                    >
+                      ×{preset}
+                    </button>
+                  ))}
+                </div>
+                <label style={{ fontSize: '13px' }}>
                   Zusätzliche Schnitt-Layer (Komma-getrennt, z. B. <code>MUSTER,MY_CUT</code>)
                 </label>
                 <input
@@ -116,6 +150,9 @@ export function SettingsModal() {
                   placeholder="z.B. MUSTER, FABRIC"
                 />
                 <p style={{ fontSize: '11px', color: '#999', margin: '4px 0 0' }}>
+                  Falls Teile 10x zu klein importiert werden: Import-Maßstab auf <code>10</code> setzen.
+                </p>
+                <p style={{ fontSize: '11px', color: '#999', margin: '0' }}>
                   Wenn die Schnittkontur in der DXF-Datei auf einem anderen Layer liegt als die Standard-Layer (CUT),
                   hier die exakten Namen eintragen. Siehe auch docs/DXF-IMPORT-FREMDSYSTEME.md.
                 </p>

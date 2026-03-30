@@ -28,6 +28,7 @@ export type TrimTexProjectFileV1 = {
   workspace: Workspace
   dxfExportScale: number
   dxfImportExtraCutLayers: string
+  dxfImportScale: number
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
 }
@@ -176,6 +177,7 @@ export function buildTrimTexProjectFile(args: {
   workspace: Workspace
   dxfExportScale: number
   dxfImportExtraCutLayers: string
+  dxfImportScale: number
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
 }): TrimTexProjectFileV1 {
@@ -187,6 +189,7 @@ export function buildTrimTexProjectFile(args: {
     workspace,
     dxfExportScale: args.dxfExportScale,
     dxfImportExtraCutLayers: args.dxfImportExtraCutLayers,
+    dxfImportScale: args.dxfImportScale,
     notchSettings: args.notchSettings.map((n) => ({ ...n })),
     imageDigitizeSession: args.imageDigitizeSession
       ? { ...args.imageDigitizeSession, imageSizePx: args.imageDigitizeSession.imageSizePx ? { ...args.imageDigitizeSession.imageSizePx } : null }
@@ -242,6 +245,8 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
   const dxfExportScale =
     typeof o.dxfExportScale === 'number' && Number.isFinite(o.dxfExportScale) && o.dxfExportScale > 0 ? o.dxfExportScale : 1
   const dxfImportExtraCutLayers = typeof o.dxfImportExtraCutLayers === 'string' ? o.dxfImportExtraCutLayers : ''
+  const dxfImportScale =
+    typeof o.dxfImportScale === 'number' && Number.isFinite(o.dxfImportScale) && o.dxfImportScale > 0 ? o.dxfImportScale : 1
 
   let imageDigitizeSession: TrimTexProjectImageSession | null = null
   if (o.imageDigitizeSession !== undefined && o.imageDigitizeSession !== null) {
@@ -278,6 +283,7 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     workspace,
     dxfExportScale,
     dxfImportExtraCutLayers,
+    dxfImportScale,
     notchSettings: notchSettings.length >= 10 ? notchSettings : Array.from({ length: 10 }, (_, i) => notchSettings[i] ?? { type: 'strich', widthMm: 6, depthMm: 4 }),
     imageDigitizeSession,
   }

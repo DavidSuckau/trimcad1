@@ -225,6 +225,8 @@ type Store = {
   dxfExportScale: number
   /** Kommagetrennte zusätzliche Layer-Namen für DXF-Import (Schnittkontur). */
   dxfImportExtraCutLayers: string
+  /** Globaler Faktor für DXF-Import nach Unit-Erkennung (z. B. 10 bei 10x zu klein). */
+  dxfImportScale: number
   notchSettings: NotchSetting[]
   toastMessage: string | null
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
@@ -278,6 +280,7 @@ type Store = {
   regenerateConfiguratorPart: (instanceId: string, partId: string) => void
   setDxfExportScale: (v: number) => void
   setDxfImportExtraCutLayers: (v: string) => void
+  setDxfImportScale: (v: number) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
@@ -471,6 +474,7 @@ export const useStore = create<Store>((set, get) => ({
   showShortcutListModal: false,
   dxfExportScale: 1,
   dxfImportExtraCutLayers: '',
+  dxfImportScale: 1,
   toastMessage: null,
   seamAdjustmentDialog: null,
   seamAssignmentMetaDialogId: null,
@@ -661,6 +665,7 @@ export const useStore = create<Store>((set, get) => ({
 
   setDxfExportScale: (v) => set({ dxfExportScale: v }),
   setDxfImportExtraCutLayers: (v) => set({ dxfImportExtraCutLayers: v }),
+  setDxfImportScale: (v) => set({ dxfImportScale: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
     set((s) => {
@@ -1428,6 +1433,7 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       const pieceBefore = s.workspace.pieces.find((p) => p.id === pieceId)
       const seamPc = pieceBefore != null && useSeamLineForPointCurveEditing(pieceBefore)
+      const LINE_SPLIT_MIN_MM = 0.5
       let toastMessage: string | null = null
       return {
         workspace: {
@@ -1442,8 +1448,19 @@ export const useStore = create<Store>((set, get) => ({
             const curve = master[curveIndex]
             let newMaster: Curve[] | null = null
             if (curve.type === 'line') {
-              const seg1: Curve = { type: 'line', start: { ...curve.start }, end: { ...point } }
-              const seg2: Curve = { type: 'line', start: { ...point }, end: { ...curve.end } }
+              // Robust gegenüber Klicks nahe Segment-Enden (t≈0/1): kein degenerierter Split.
+              const lineLen = Math.hypot(curve.end.x - curve.start.x, curve.end.y - curve.start.y)
+              const minT = Math.min(0.49, LINE_SPLIT_MIN_MM / Math.max(lineLen, 1e-6))
+              const tt = Number.isFinite(t) ? Math.min(1 - minT, Math.max(minT, t as number)) : null
+              const splitPoint =
+                tt == null
+                  ? point
+                  : {
+                      x: curve.start.x + (curve.end.x - curve.start.x) * tt,
+                      y: curve.start.y + (curve.end.y - curve.start.y) * tt,
+                    }
+              const seg1: Curve = { type: 'line', start: { ...curve.start }, end: { ...splitPoint } }
+              const seg2: Curve = { type: 'line', start: { ...splitPoint }, end: { ...curve.end } }
               newMaster = [...master]
               newMaster.splice(curveIndex, 1, seg1, seg2)
             } else if (curve.type === 'bezier' && t != null && t > 0 && t < 1) {
@@ -2158,6 +2175,7 @@ export const useStore = create<Store>((set, get) => ({
       workspace: ws,
       dxfExportScale: project.dxfExportScale,
       dxfImportExtraCutLayers: project.dxfImportExtraCutLayers,
+      dxfImportScale: project.dxfImportScale,
       notchSettings,
       imageDigitizeSession: project.imageDigitizeSession,
       workspaceImageSelected: Boolean(project.imageDigitizeSession?.imageDataUrl),

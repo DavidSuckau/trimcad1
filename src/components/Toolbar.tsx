@@ -72,6 +72,7 @@ export function Toolbar() {
     setShowShortcutListModal,
     dxfExportScale,
     dxfImportExtraCutLayers,
+    dxfImportScale,
     notchSettings,
     imageDigitizeSession,
     startDigitize,
@@ -152,6 +153,7 @@ export function Toolbar() {
       workspace: useStore.getState().workspace,
       dxfExportScale,
       dxfImportExtraCutLayers,
+      dxfImportScale,
       notchSettings,
       imageDigitizeSession,
     })
@@ -206,6 +208,7 @@ export function Toolbar() {
         const content = reader.result as string
         const result = importDxfFromString(content, {
           extraCutLayers: parseExtraCutLayers(dxfImportExtraCutLayers),
+          importScale: dxfImportScale,
         })
         if (result.error) {
           setToastMessage('error:' + result.error)

@@ -25,6 +25,8 @@ const DUPLICATE_THRESHOLD = 0.01
 export type ImportDxfOptions = {
   /** Zusätzliche Layer-Namen (kommagetrennt in den Einstellungen), die als Schnittkontur gelten. */
   extraCutLayers?: string[]
+  /** Optionaler manueller Faktor auf den gesamten Import (nach DXF-Units), z. B. 10 bei 10x zu klein. */
+  importScale?: number
 }
 
 export type ImportDxfResult = {
@@ -73,8 +75,8 @@ function verticesToCurves(vertices: DxfPoint[], closed: boolean): Curve[] {
   return curves
 }
 
-function applyUnitScale(points: DxfPoint[], insUnits: number): DxfPoint[] {
-  const scale = insUnits === 4 ? 10 : 1
+function applyUnitScale(points: DxfPoint[], insUnits: number, importScale = 1): DxfPoint[] {
+  const scale = (insUnits === 4 ? 10 : 1) * importScale
   if (scale === 1) return points
   return points.map((p) => ({ x: p.x * scale, y: p.y * scale }))
 }
@@ -283,10 +285,11 @@ function extractPieceDrafts(
     blocks: Map<string, import('./dxfParser').DxfBlock>
     insUnits: number
   },
-  extraCutLayers: string[]
+  extraCutLayers: string[],
+  importScale: number
 ): PieceDraft[] {
   const { entities, blocks, insUnits } = parsed
-  const unitScale = insUnits === 4 ? 10 : 1
+  const unitScale = (insUnits === 4 ? 10 : 1) * importScale
   const drafts: PieceDraft[] = []
 
   for (const e of entities) {
@@ -334,7 +337,7 @@ function extractPieceDrafts(
     if (e.type === 'INSERT') continue
     const pl = polylineFromEntity(e)
     if (!pl) continue
-    const pts = applyUnitScale(pl.vertices, insUnits)
+    const pts = applyUnitScale(pl.vertices, insUnits, importScale)
     if (isCutLayer(pl.layer, extraCutLayers)) {
       cutsFlat.push({ vertices: pts, closed: pl.closed })
     }
@@ -368,9 +371,9 @@ function extractFallbackCutDrafts(parsed: {
   entities: DxfEntity[]
   blocks: Map<string, import('./dxfParser').DxfBlock>
   insUnits: number
-}): PieceDraft[] {
+}, importScale: number): PieceDraft[] {
   const { entities, blocks, insUnits } = parsed
-  const unitScale = insUnits === 4 ? 10 : 1
+  const unitScale = (insUnits === 4 ? 10 : 1) * importScale
   const candidates: Array<{ vertices: DxfPoint[]; layer: string }> = []
 
   const consider = (pts: DxfPoint[], closed: boolean, layer: string) => {
@@ -396,7 +399,7 @@ function extractFallbackCutDrafts(parsed: {
     }
     const pl = polylineFromEntity(e)
     if (!pl) continue
-    const pts = applyUnitScale(pl.vertices, insUnits)
+    const pts = applyUnitScale(pl.vertices, insUnits, importScale)
     consider(pts, pl.closed || isClosed(pts), pl.layer)
   }
 
@@ -534,6 +537,10 @@ function isClosed(vertices: DxfPoint[]): boolean {
 export function importDxfFromString(content: string, options?: ImportDxfOptions): ImportDxfResult {
   const warnings: string[] = []
   const extraCutLayers = options?.extraCutLayers ?? []
+  const manualImportScale =
+    typeof options?.importScale === 'number' && Number.isFinite(options.importScale) && options.importScale > 0
+      ? options.importScale
+      : 1
 
   const text = content.replace(/^\uFEFF/, '')
 
@@ -552,15 +559,16 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
   try {
     const parsed = parseDxf(text)
     const { insUnits } = parsed
-    const scale = insUnits === 4 ? 10 : 1
+    const unitScale = insUnits === 4 ? 10 : 1
+    const scale = unitScale * manualImportScale
 
     if (parsed.entities.length === 0) {
       warnings.push('Keine Entities in der ENTITIES-Sektion gefunden. Prüfen Sie, ob die Datei DXF R12 ASCII ist.')
     }
 
-    let drafts = extractPieceDrafts(parsed, extraCutLayers)
+    let drafts = extractPieceDrafts(parsed, extraCutLayers, manualImportScale)
     if (drafts.length === 0) {
-      drafts = extractFallbackCutDrafts(parsed)
+      drafts = extractFallbackCutDrafts(parsed, manualImportScale)
       if (drafts.length > 0) {
         warnings.push(
           'Kein bekannter Schnitt-Layer: geschlossene Konturen wurden von anderen Layern übernommen (Fläche ≥ 2 mm², keine Hilfs-/Beschriftungs-Layer).'

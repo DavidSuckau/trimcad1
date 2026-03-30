@@ -1648,7 +1648,7 @@ export function WorkspaceCanvas() {
           if (nearest && nearest.distance < 15) {
             const curve = masterPt[nearest.curveIndex]
             if (curve.type === 'line') {
-              insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point)
+              insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
             } else if (curve.type === 'bezier' && nearest.t != null) {
               insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
             }
@@ -2074,8 +2074,9 @@ export function WorkspaceCanvas() {
         }
         if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
           const world = toWorld(e.clientX, e.clientY)
-          const piecesForHover =
-            selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
+          const piecesForHover = pieces.filter((p) => selectedPieceIds.includes(p.id))
+          const piecesForNotchHover =
+            piecesForHover.some((p) => p.notches.length > 0) ? piecesForHover : pieces
           let bestVertex: { dist: number; value: typeof hoveredDeletablePoint } = {
             dist: VERTEX_HOVER_DELETE_MM + 1,
             value: null,
@@ -2119,7 +2120,7 @@ export function WorkspaceCanvas() {
             pieceId: '',
             notchId: '',
           }
-          for (const p of piecesForHover) {
+          for (const p of piecesForNotchHover) {
             const local = worldToPieceLocal(world, p)
             for (const notch of p.notches) {
               const depth = notch.depth
@@ -2209,8 +2210,11 @@ export function WorkspaceCanvas() {
         } else {
           setHoveredDeletablePoint(null)
           const worldForNotch = toWorld(e.clientX, e.clientY)
+          const selectedPiecesForNotch = selectedPieceIds.length > 0
+            ? pieces.filter((p) => selectedPieceIds.includes(p.id))
+            : []
           const piecesForNotchHover =
-            selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
+            selectedPiecesForNotch.some((p) => p.notches.length > 0) ? selectedPiecesForNotch : pieces
           let bestNotch: { dist: number; pieceId: string; notchId: string } = {
             dist: NOTCH_HOVER_HIT + 1,
             pieceId: '',
@@ -3298,7 +3302,7 @@ export function WorkspaceCanvas() {
             if (curve.type === 'bezier') {
               insertPointOnCutLine(pieceId, curveIndex, position, t)
             } else {
-              insertPointOnCutLine(pieceId, curveIndex, position)
+              insertPointOnCutLine(pieceId, curveIndex, position, t)
             }
             vertexIndex = curveIndex + 1
           } else {
