@@ -1666,6 +1666,9 @@ export const useStore = create<Store>((set, get) => ({
                 newMasterVi,
               ].sort((a, b) => a - b)
               inserted = true
+              if (insertedCutVi == null) {
+                return { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster }
+              }
               return forceCutVertexSoftAfterInsert(
                 { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster },
                 insertedCutVi
