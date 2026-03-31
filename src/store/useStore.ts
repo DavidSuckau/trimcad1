@@ -35,6 +35,8 @@ import {
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
   mapMasterVertexIndexToCutVertexIndex,
+  getEffectiveSoftVerticesCut,
+  syncSoftAfterSharpCornerPromotion,
 } from '../geometry/seamUtils'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
@@ -155,6 +157,34 @@ function nearestCutVertexIndex(cutLine: Curve[], point: Point): number | null {
   return bestIdx
 }
 
+/** Nach Promotion: diese Cut-Indizes bleiben weich (Nutzer/Remap), auch an spitzen Außenkontur-Winkeln. */
+function forceCutVerticesSoftAfterPromotion(piece: PatternPiece, preserveCutVertexIndices: number[]): PatternPiece {
+  const promoted = applySharpCornerPromotion(piece)
+  const set = new Set(getEffectiveSoftVerticesCut(promoted))
+  const n = promoted.cutLine.length
+  for (const vi of preserveCutVertexIndices) {
+    if (vi >= 0 && vi < n) set.add(vi)
+  }
+  return syncSoftAfterSharpCornerPromotion(promoted, [...set].sort((a, b) => a - b))
+}
+
+/** Nach „Punkt einfügen“: neuer Eckpunkt bleibt weich (blau); geometrische Spitzwinkel-Promotion greift dafür nicht. */
+function forceCutVertexSoftAfterInsert(piece: PatternPiece, cutVertexIndex: number): PatternPiece {
+  return forceCutVerticesSoftAfterPromotion(piece, [cutVertexIndex])
+}
+
+/** softVertices von alter auf neue Schnittkontur (gleiche Weltposition → nächster Eckpunkt). */
+function remapSoftVerticesToNewCutLine(oldCut: Curve[], newCut: Curve[], softVertices: number[] | undefined): number[] {
+  const out = new Set<number>()
+  for (const vi of softVertices ?? []) {
+    if (vi < 0 || vi >= oldCut.length) continue
+    const pt = vi === 0 ? oldCut[0].start : oldCut[vi - 1].end
+    const mapped = nearestCutVertexIndex(newCut, pt)
+    if (mapped != null) out.add(mapped)
+  }
+  return [...out].sort((a, b) => a - b)
+}
+
 function createDefaultPiece(id: string, number: string): PatternPiece {
   return {
     id,
@@ -170,6 +200,7 @@ function createDefaultPiece(id: string, number: string): PatternPiece {
     layer: 'CUT',
     transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     softVertices: [],
+    softVerticesMaster: [],
     fillInterior: true,
     material: '',
     bomQuantity: 1,
@@ -558,7 +589,12 @@ export const useStore = create<Store>((set, get) => ({
               toastMessage = `warn:${derived.message}`
               return p
             }
+            const oldCut = p.cutLine
             next.cutLine = derived.cutLine
+            next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
+            const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, derived.cutLine, p.softVertices)
+            next.softVertices = mappedSoft
+            return forceCutVerticesSoftAfterPromotion(next, mappedSoft)
           } else if (next.cutLine.length >= 3) {
             // Wie applyOffset / Dialogtext: bisherige Schnittkontur wird Nahtlinie (Master), cutLine nach außen.
             // Nicht: seam = Inset(cut) bei unveränderter cutLine — das verliert die editierbare Topologie und bricht Punkt-/Vertex-Werkzeuge.
@@ -573,17 +609,14 @@ export const useStore = create<Store>((set, get) => ({
             next.cutLine = derived.cutLine
             next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
             const newCut = derived.cutLine
-            const newSoft = new Set<number>()
-            for (const vi of p.softVertices ?? []) {
-              if (vi < 0 || vi >= oldCut.length) continue
-              const pt = vi === 0 ? oldCut[0].start : oldCut[vi - 1].end
-              const mapped = nearestCutVertexIndex(newCut, pt)
-              if (mapped != null) newSoft.add(mapped)
-            }
-            next.softVertices = [...newSoft].sort((a, b) => a - b)
+            const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, newCut, p.softVertices)
+            next.softVertices = mappedSoft
+            // Außenkontur hat oft spitze Winkel → applySharpCornerPromotion würde Remap wieder entfernen
+            return forceCutVerticesSoftAfterPromotion(next, mappedSoft)
           }
         } else {
           next.seamLine = []
+          next.softVerticesMaster = []
         }
         return applySharpCornerPromotion(next)
       })
@@ -785,6 +818,7 @@ export const useStore = create<Store>((set, get) => ({
       internalLines: geom.internalLines ?? [],
       grainLine: null,
       softVertices: [],
+      softVerticesMaster: [],
     })
 
     set((s) => ({
@@ -1523,6 +1557,7 @@ export const useStore = create<Store>((set, get) => ({
       let toastMessage: string | null = null
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== pieceId || p.cutLine.length < 3) return p
+        const oldCut = p.cutLine
         const sourceInner = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
         const seamLine = cloneCurvesArray(sourceInner)
         const derived = deriveCutLineFromSeamWithValidation(seamLine, deltaMm)
@@ -1531,8 +1566,12 @@ export const useStore = create<Store>((set, get) => ({
           return p
         }
         const cutLine = derived.cutLine
+        const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
         const notches = p.notches.map((n) => ({ ...n, vertexIndex: undefined }))
-        return applySharpCornerPromotion({ ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches })
+        return forceCutVerticesSoftAfterPromotion(
+          { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches, softVertices: mappedSoft },
+          mappedSoft
+        )
       })
       return {
         workspace: { ...s.workspace, pieces },
@@ -1550,12 +1589,16 @@ export const useStore = create<Store>((set, get) => ({
           const oldCut = p.cutLine
           const newCut = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
           const notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, newCut)
+          const mergedCut = getEffectiveSoftVerticesCut(p)
+          const softVertices = remapSoftVerticesToNewCutLine(oldCut, newCut, mergedCut)
           return applySharpCornerPromotion({
             ...p,
             cutLine: newCut,
             seamLine: [],
             seamAllowanceMm: null,
             notches,
+            softVertices,
+            softVerticesMaster: [],
           })
         }),
       },
@@ -1617,8 +1660,16 @@ export const useStore = create<Store>((set, get) => ({
               const softSet = new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length))
               if (insertedCutVi != null) softSet.add(insertedCutVi)
               const softVertices = [...softSet].sort((a, b) => a - b)
+              const newMasterVi = curveIndex + 1
+              const softVerticesMaster = [
+                ...(p.softVerticesMaster ?? []).map((vi) => (vi >= newMasterVi ? vi + 1 : vi)),
+                newMasterVi,
+              ].sort((a, b) => a - b)
               inserted = true
-              return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+              return forceCutVertexSoftAfterInsert(
+                { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster },
+                insertedCutVi
+              )
             }
 
             const cutLine = newMaster
@@ -1636,7 +1687,7 @@ export const useStore = create<Store>((set, get) => ({
             const seamLine =
               p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
             inserted = true
-            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+            return forceCutVertexSoftAfterInsert({ ...p, cutLine, seamLine, notches, softVertices }, newVertexIdx)
           }),
         },
         ...(toastMessage ? { toastMessage } : {}),
@@ -1887,10 +1938,12 @@ export const useStore = create<Store>((set, get) => ({
               seamMaster && seamAllowance != null
                 ? resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
                 : resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-            const softVertices = (p.softVertices ?? [])
+            const oldCut = p.cutLine
+            const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
+            const softVerticesMaster = (p.softVerticesMaster ?? [])
               .filter((vi) => vi !== vertexIndex)
               .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
-            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster })
           }),
         },
       }
@@ -1946,16 +1999,28 @@ export const useStore = create<Store>((set, get) => ({
           const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
           if (useSeamMaster) {
             if (seamVertexNearProjectedNotch(p, vertexIndex)) return p
-          } else if (notchVIs.has(vertexIndex)) {
+            const masterSet = new Set(p.softVerticesMaster ?? [])
+            if (soft) masterSet.add(vertexIndex)
+            else masterSet.delete(vertexIndex)
+            const cutVi = mapMasterVertexIndexToCutVertexIndex(p, vertexIndex)
+            const softCut = new Set(p.softVertices ?? [])
+            if (cutVi != null) softCut.delete(cutVi)
+            const nextP = {
+              ...p,
+              softVerticesMaster: [...masterSet].sort((a, b) => a - b),
+              softVertices: [...softCut].sort((a, b) => a - b),
+            }
+            if (soft) return nextP
+            return applySharpCornerPromotion(nextP)
+          }
+          if (notchVIs.has(vertexIndex)) {
             return p
           }
-          const cutViForSoft =
-            useSeamMaster ? mapMasterVertexIndexToCutVertexIndex(p, vertexIndex) : vertexIndex
-          if (cutViForSoft == null) return p
           const set = new Set(p.softVertices ?? [])
-          if (soft) set.add(cutViForSoft)
-          else set.delete(cutViForSoft)
+          if (soft) set.add(vertexIndex)
+          else set.delete(vertexIndex)
           const softVertices = [...set].sort((a, b) => a - b)
+          if (soft) return { ...p, softVertices }
           return applySharpCornerPromotion({ ...p, softVertices })
         }),
       },

@@ -75,6 +75,11 @@ export type PatternPiece = {
   /** Vertex-Indices die per "Erzeuge Punkt" eingefügt wurden (blaue Punkte, keine Eckpunkte). */
   softVertices?: number[]
   /**
+   * Bei Naht als Master: weiche Eckpunkte **auf der Nahtlinie** (Master-Indizes), 1:1 mit P/E am gleichen Eck.
+   * `softVertices` bleiben Schnittkontur-Indizes (z. B. nach Punkt einfügen / Offset).
+   */
+  softVerticesMaster?: number[]
+  /**
    * Flächenfüllung im Editor (hellgelb). false = nur Kontur, Füllung transparent.
    * Fehlt bei alten Daten → wie true behandeln.
    */

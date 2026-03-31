@@ -2987,6 +2987,46 @@ export function WorkspaceCanvas() {
         })
         return
       }
+      if (!inInput && hoveredDeletablePoint) {
+        const hp = hoveredDeletablePoint
+        if (hp.kind === 'vertex') {
+          if (e.key === 'p' || e.key === 'P') {
+            setVertexSoft(hp.pieceId, hp.vertexIndex, true)
+            e.preventDefault()
+            return
+          }
+          if (e.key === 'e' || e.key === 'E') {
+            setVertexSoft(hp.pieceId, hp.vertexIndex, false)
+            e.preventDefault()
+            return
+          }
+          if (e.key === 'c' || e.key === 'C') {
+            const piece = pieces.find((x) => x.id === hp.pieceId)
+            if (piece) {
+              const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+              const ci = hp.vertexIndex
+              const curve = masterPc[ci]
+              if (curve?.type === 'line') {
+                const seg = curve
+                const { start, end } = seg
+                const dx = end.x - start.x
+                const dy = end.y - start.y
+                const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
+                const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
+                replaceSegmentWithBezier(hp.pieceId, ci, cp1, cp2)
+              } else if (curve?.type === 'bezier') {
+                setToastMessage('warn:Segment ist bereits eine Kurve.')
+              }
+            }
+            e.preventDefault()
+            return
+          }
+        } else if (hp.kind === 'pointOnCurve' && (e.key === 'e' || e.key === 'E')) {
+          convertBezierSegmentToLine(hp.pieceId, hp.curveIndex)
+          e.preventDefault()
+          return
+        }
+      }
       if (segmentActive && !inInput) {
         const parseMm = (): number => {
           const n = parseFloat(segmentMenuMm)
@@ -3026,47 +3066,6 @@ export function WorkspaceCanvas() {
             if (pts) addInternalLine(segmentActive.pieceId, { type: 'line', start: pts.start, end: pts.end })
           }
           closeSegmentMenu()
-          e.preventDefault()
-          return
-        }
-      }
-      const segmentActiveForKeys = hoveredSegment ?? (segmentMenuPinned ? pinnedSegment : null)
-      if (!inInput && !segmentActiveForKeys && hoveredDeletablePoint) {
-        const hp = hoveredDeletablePoint
-        if (hp.kind === 'vertex') {
-          if (e.key === 'p' || e.key === 'P') {
-            setVertexSoft(hp.pieceId, hp.vertexIndex, true)
-            e.preventDefault()
-            return
-          }
-          if (e.key === 'e' || e.key === 'E') {
-            setVertexSoft(hp.pieceId, hp.vertexIndex, false)
-            e.preventDefault()
-            return
-          }
-          if (e.key === 'c' || e.key === 'C') {
-            const piece = pieces.find((x) => x.id === hp.pieceId)
-            if (piece) {
-              const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
-              const ci = hp.vertexIndex
-              const curve = masterPc[ci]
-              if (curve?.type === 'line') {
-                const seg = curve
-                const { start, end } = seg
-                const dx = end.x - start.x
-                const dy = end.y - start.y
-                const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
-                const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
-                replaceSegmentWithBezier(hp.pieceId, ci, cp1, cp2)
-              } else if (curve?.type === 'bezier') {
-                setToastMessage('warn:Segment ist bereits eine Kurve.')
-              }
-            }
-            e.preventDefault()
-            return
-          }
-        } else if (hp.kind === 'pointOnCurve' && (e.key === 'e' || e.key === 'E')) {
-          convertBezierSegmentToLine(hp.pieceId, hp.curveIndex)
           e.preventDefault()
           return
         }

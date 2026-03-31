@@ -99,6 +99,9 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       ...(raw.transform?.pivotLocal && isPoint(raw.transform.pivotLocal) ? { pivotLocal: { ...raw.transform.pivotLocal } } : {}),
     },
     softVertices: Array.isArray(raw.softVertices) ? raw.softVertices.filter((n): n is number => typeof n === 'number') : [],
+    softVerticesMaster: Array.isArray((raw as { softVerticesMaster?: unknown }).softVerticesMaster)
+      ? (raw as { softVerticesMaster: unknown[] }).softVerticesMaster.filter((n): n is number => typeof n === 'number')
+      : [],
     fillInterior: raw.fillInterior === undefined ? true : Boolean(raw.fillInterior),
     material: typeof raw.material === 'string' ? raw.material : '',
     bomQuantity: (() => {

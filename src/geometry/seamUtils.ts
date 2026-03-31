@@ -3,6 +3,7 @@ import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, total
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, extractCurvePortion } from './notchOnCurve'
 import { offsetSegmentPoints } from './offset'
+import { useSeamLineForVertexEditing } from './vertexMaster'
 
 /**
  * Kontur für Nahtzuordnung: seamLine wenn Nahtzugabe gesetzt (Master), sonst cutLine.
@@ -45,8 +46,7 @@ export function mapMasterVertexIndexToCutVertexIndex(piece: PatternPiece, master
 }
 
 /**
- * softVertices und Notch-vertexIndex beziehen sich auf die cutLine.
- * Für Eckpunkt-Logik auf der Master-Kontur (seamLine) müssen sie auf Master-Vertex-Indizes gemappt werden.
+ * Cut→Master mit Distanzdeckel (z. B. Kerben/Notches): nur wenn nahe genug, sonst keine Zuordnung.
  */
 function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number): number | null {
   const master = getCurvesForSeamEdge(piece)
@@ -69,17 +69,74 @@ function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number
   return best >= 0 && bestD <= MAP_CUT_TO_MASTER_EPS_MM ? best : null
 }
 
+/** Alle weichen Eckpunkte auf der Schnittkontur (Cut-Indizes): eingefügte Punkte + per Master gemappte weiche Naht-Ecken. */
+export function getEffectiveSoftVerticesCut(piece: PatternPiece): number[] {
+  const set = new Set(piece.softVertices ?? [])
+  if (useSeamLineForVertexEditing(piece)) {
+    const master = getCurvesForSeamEdge(piece)
+    const n = master.length
+    for (const mvi of piece.softVerticesMaster ?? []) {
+      if (mvi < 0 || mvi >= n) continue
+      const c = mapMasterVertexIndexToCutVertexIndex(piece, mvi)
+      if (c != null) set.add(c)
+    }
+  }
+  return [...set].sort((a, b) => a - b)
+}
+
+/** Cut-Soft-Liste (z. B. nach Remap) wieder in `softVertices` / `softVerticesMaster` aufteilen. */
+export function syncSoftAfterSharpCornerPromotion(piece: PatternPiece, filteredCutSoft: number[]): PatternPiece {
+  const valid = new Set(filteredCutSoft)
+  if (useSeamLineForVertexEditing(piece)) {
+    const masterImpliedCut = new Set(
+      (piece.softVerticesMaster ?? [])
+        .map((m) => mapMasterVertexIndexToCutVertexIndex(piece, m))
+        .filter((x): x is number => x != null)
+    )
+    // Cut-Liste: nur explizit eingefügte / Remap-Indizes; nicht jeden gültigen Cut, der auch durch Master abgedeckt ist
+    const softVertices = [...valid]
+      .filter((c) => {
+        if (!masterImpliedCut.has(c)) return true
+        return (piece.softVertices ?? []).includes(c)
+      })
+      .sort((a, b) => a - b)
+    const softVerticesMaster = (piece.softVerticesMaster ?? [])
+      .filter((m) => {
+        const c = mapMasterVertexIndexToCutVertexIndex(piece, m)
+        return c != null && valid.has(c)
+      })
+      .sort((a, b) => a - b)
+    return {
+      ...piece,
+      softVertices,
+      softVerticesMaster,
+    }
+  }
+  return { ...piece, softVertices: [...filteredCutSoft].sort((a, b) => a - b) }
+}
+
+/**
+ * Weiche Punkte auf der **Master-Kontur** (Naht bzw. Schnitt ohne Zugabe).
+ * Bei Nahtzugabe: `softVerticesMaster` (1:1 P/E) ∪ Cut-Soft aus `softVertices` (Legacy/eingefügt).
+ */
 export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   const master = getCurvesForSeamEdge(piece)
-  const cut = piece.cutLine
+  const n = master.length
   const out = new Set<number>()
-  for (const cutVi of piece.softVertices ?? []) {
-    if (master === cut) {
-      if (cutVi >= 0 && cutVi < master.length) out.add(cutVi)
-    } else {
-      const m = mapCutVertexIndexToMasterVertexIndex(piece, cutVi)
-      if (m != null) out.add(m)
+  if (master === piece.cutLine) {
+    for (const vi of piece.softVertices ?? []) {
+      if (vi >= 0 && vi < n) out.add(vi)
     }
+    return out
+  }
+  for (const vi of piece.softVerticesMaster ?? []) {
+    if (vi >= 0 && vi < n) out.add(vi)
+  }
+  const softCut = new Set(piece.softVertices ?? [])
+  for (let vi = 0; vi < n; vi++) {
+    if (out.has(vi)) continue
+    const cutVi = mapMasterVertexIndexToCutVertexIndex(piece, vi)
+    if (cutVi != null && softCut.has(cutVi)) out.add(vi)
   }
   return out
 }

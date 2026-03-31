@@ -1,9 +1,6 @@
 import type { Curve, PatternPiece, Point } from '../types/model'
 import { bezierDerivativeAt } from './curveToPath'
 
-/** Toleranz in Grad: 90°-Ecken werden trotz Float-Rauschen erkannt. */
-const DEG_EPS = 0.4
-
 function vertexPos(curves: Curve[], vertexIndex: number): Point {
   const n = curves.length
   const i = ((vertexIndex % n) + n) % n
@@ -61,24 +58,9 @@ export function interiorAngleAtVertexDegrees(curves: Curve[], vertexIndex: numbe
 }
 
 /**
- * Entfernt Indizes aus `softVertices`, an denen der Innenwinkel ≤ 90° ist
- * (rechter Winkel und spitze Winkel → fester Eckpunkt, nicht mehr „weicher Punkt“).
- *
- * `softVertices` sind immer Indizes in die **Schnittkontur** (`cutLine`), nie in die
- * ggf. viel dichtere Nahtlinie aus Clipper — Innenwinkel daher immer an `cutLine` messen.
+ * Früher: weiche Punkte an spitzen/rechten Winkeln automatisch zu Eckpunkten „promoten“.
+ * Das wird nicht mehr gemacht: Blau/Rot ändert sich nur bei expliziter Nutzeraktion (P/E).
  */
 export function applySharpCornerPromotion(piece: PatternPiece): PatternPiece {
-  const soft = piece.softVertices ?? []
-  if (soft.length === 0) return piece
-  const curves = piece.cutLine
-  if (curves.length < 3) return piece
-
-  const nextSoft = soft.filter((vi) => {
-    const deg = interiorAngleAtVertexDegrees(curves, vi)
-    if (deg == null) return true
-    return deg > 90 + DEG_EPS
-  })
-
-  if (nextSoft.length === soft.length) return piece
-  return { ...piece, softVertices: nextSoft }
+  return piece
 }

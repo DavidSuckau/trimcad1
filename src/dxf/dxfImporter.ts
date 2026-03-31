@@ -653,6 +653,7 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
         layer: 'CUT',
         transform: { x: 0, y: 0, rotation: 0, mirrored: false },
         softVertices: [],
+        softVerticesMaster: [],
         fillInterior: true,
       }
       pieces.push(piece)

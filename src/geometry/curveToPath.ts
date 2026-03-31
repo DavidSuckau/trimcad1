@@ -39,9 +39,8 @@ export function controlPointForPointOnCurve(
 }
 
 /**
- * Berechnet neues cp1/cp2 so dass die Kurve bei t durch newPoint geht,
- * dabei bleibt der Abstand zwischen cp1 und cp2 erhalten (keine Kollabierung).
- * Delta wird gleichmäßig auf beide Kontrollpunkte verteilt.
+ * Berechnet neues cp1/cp2 so dass die Kurve bei t möglichst zu newPoint passt.
+ * Verschiebung der Kontrollpunkte mit Gewicht (1−t) / t — weniger starr als gleiche Delta auf beide.
  */
 export function adjustControlPointsForPointOnCurve(
   b: BezierCurve,
@@ -55,9 +54,11 @@ export function adjustControlPointsForPointOnCurve(
   const current = bezierAt(b, t)
   const dx = (newPoint.x - current.x) / denom
   const dy = (newPoint.y - current.y) / denom
+  const w1 = u
+  const w2 = t
   return {
-    cp1: { x: b.cp1.x + dx, y: b.cp1.y + dy },
-    cp2: { x: b.cp2.x + dx, y: b.cp2.y + dy },
+    cp1: { x: b.cp1.x + dx * w1, y: b.cp1.y + dy * w1 },
+    cp2: { x: b.cp2.x + dx * w2, y: b.cp2.y + dy * w2 },
   }
 }
 
@@ -72,23 +73,89 @@ export function bezierDerivativeAt(b: BezierCurve, t: number): Point {
   }
 }
 
+/** Anzahl Polygon-Stützstellen für Bézier-Bogenlänge: kurze/gerade Segmente weniger, stark gekrümmte mehr. */
+function bezierArcLengthSampleCount(c: BezierCurve): number {
+  const dx0 = c.end.x - c.start.x
+  const dy0 = c.end.y - c.start.y
+  const chord = Math.sqrt(dx0 * dx0 + dy0 * dy0)
+  const dx1 = c.cp1.x - c.start.x
+  const dy1 = c.cp1.y - c.start.y
+  const dx2 = c.cp2.x - c.cp1.x
+  const dy2 = c.cp2.y - c.cp1.y
+  const dx3 = c.end.x - c.cp2.x
+  const dy3 = c.end.y - c.cp2.y
+  const controlNet =
+    Math.sqrt(dx1 * dx1 + dy1 * dy1) + Math.sqrt(dx2 * dx2 + dy2 * dy2) + Math.sqrt(dx3 * dx3 + dy3 * dy3)
+  const flatness = Math.max(0, controlNet - chord)
+  return Math.min(64, Math.max(8, Math.ceil(flatness * 2)))
+}
+
 /** Bogenlänge entlang des Kurvensegments von Parameter t0 bis t1 (beide in [0,1]). */
 export function curveSegmentArcLength(c: Curve, t0: number, t1: number): number {
   if (c.type === 'line') {
-    const len = Math.hypot(c.end.x - c.start.x, c.end.y - c.start.y)
-    return (t1 - t0) * len
+    const dx = c.end.x - c.start.x
+    const dy = c.end.y - c.start.y
+    return (t1 - t0) * Math.sqrt(dx * dx + dy * dy)
   }
-  const n = 24
+  const n = bezierArcLengthSampleCount(c)
   let sum = 0
   let prev = bezierAt(c, t0)
+  const dt = t1 - t0
   for (let i = 1; i <= n; i++) {
-    const t = t0 + (t1 - t0) * (i / n)
+    const t = t0 + dt * (i / n)
     const pt = bezierAt(c, t)
-    sum += Math.hypot(pt.x - prev.x, pt.y - prev.y)
+    const px = pt.x - prev.x
+    const py = pt.y - prev.y
+    sum += Math.sqrt(px * px + py * py)
     prev = pt
   }
   return sum
 }
+
+/** LUT: kumulative Bogenlänge von 0 bis i/steps für kubische Bézier. */
+function buildBezierCumulativeArcLength(b: BezierCurve, steps: number): number[] {
+  const cum: number[] = new Array(steps + 1)
+  cum[0] = 0
+  for (let i = 1; i <= steps; i++) {
+    const t0 = (i - 1) / steps
+    const t1 = i / steps
+    cum[i] = cum[i - 1] + curveSegmentArcLength(b, t0, t1)
+  }
+  return cum
+}
+
+/** Parameter t ∈ [0,1] mit Bogenlänge von 0 bis t ≈ targetLen (bei gegebener LUT). */
+function tForBezierArcLengthFromStart(
+  b: BezierCurve,
+  targetLen: number,
+  cum: number[],
+  steps: number
+): number {
+  const total = cum[steps]
+  if (targetLen <= 0) return 0
+  if (targetLen >= total) return 1
+  let lo = 0
+  let hi = steps
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (cum[mid] <= targetLen) lo = mid
+    else hi = mid
+  }
+  const k = lo
+  const t0 = k / steps
+  const tHi = (k + 1) / steps
+  let loT = t0
+  let hiT = tHi
+  for (let step = 0; step < 24; step++) {
+    const mid = (loT + hiT) / 2
+    const len = cum[k] + curveSegmentArcLength(b, t0, mid)
+    if (len < targetLen) loT = mid
+    else hiT = mid
+  }
+  return Math.max(0, Math.min(1, (loT + hiT) / 2))
+}
+
+const BEZIER_ARC_LUT_STEPS = 48
 
 /** Kubische Bézier bei Parameter t teilen (de Casteljau); liefert [Teil 1, Teil 2]. */
 export function splitBezierAt(b: BezierCurve, t: number): [BezierCurve, BezierCurve] {
@@ -120,19 +187,42 @@ export function joinBezierSegments(seg1: BezierCurve, seg2: BezierCurve): Bezier
   const E = seg2.cp1
   const F = seg2.cp2
   const G = seg2.end
-  const dDC = Math.hypot(D.x - C.x, D.y - C.y)
-  const dED = Math.hypot(E.x - D.x, E.y - D.y)
+  const dxDC = D.x - C.x
+  const dyDC = D.y - C.y
+  const dxED = E.x - D.x
+  const dyED = E.y - D.y
+  const dDC = Math.sqrt(dxDC * dxDC + dyDC * dyDC)
+  const dED = Math.sqrt(dxED * dxED + dyED * dyED)
   const eps = 1e-6
   if (dDC < eps || dED < eps) return null
-  const k = dED / dDC
-  if (k < eps || k > 1 / eps) return null
+  const kRaw = dED / dDC
+  if (!Number.isFinite(kRaw)) return null
+  const k = Math.min(1e6, Math.max(1e-6, kRaw))
   const k1 = 1 + k
   const P = { x: k1 * B.x - k * A.x, y: k1 * B.y - k * A.y }
   const Q = { x: (k1 / k) * F.x - (1 / k) * G.x, y: (k1 / k) * F.y - (1 / k) * G.y }
   return { type: 'bezier', start: { ...A }, end: { ...G }, cp1: P, cp2: Q }
 }
 
-export function curveToPathD(curves: Curve[]): string {
+export type CurveToPathDOptions = { closed?: boolean }
+
+/** SVG-Pfad `d` aus Kurven; mit `closed: true` ein geschlossener Ring (ein `M`, dann Kanten, `Z`). */
+export function curveToPathD(curves: Curve[], options?: CurveToPathDOptions): string {
+  if (curves.length === 0) return ''
+  if (options?.closed) {
+    const first = curves[0]
+    const start = first.start
+    let d = `M ${start.x} ${start.y}`
+    for (const c of curves) {
+      if (c.type === 'line') {
+        d += ` L ${c.end.x} ${c.end.y}`
+      } else {
+        d += ` C ${c.cp1.x} ${c.cp1.y} ${c.cp2.x} ${c.cp2.y} ${c.end.x} ${c.end.y}`
+      }
+    }
+    d += ' Z'
+    return d
+  }
   return curves.map((c) => (c.type === 'line' ? lineToD(c) : bezierToD(c))).join(' ')
 }
 
@@ -190,15 +280,8 @@ export function pointAtPathLength(
       if (c.type === 'line') {
         t = segLen > 0 ? local / segLen : 0
       } else {
-        let lo = 0
-        let hi = 1
-        for (let step = 0; step < 24; step++) {
-          const mid = (lo + hi) / 2
-          const len = curveSegmentArcLength(c, 0, mid)
-          if (len < local) lo = mid
-          else hi = mid
-        }
-        t = (lo + hi) / 2
+        const cum = buildBezierCumulativeArcLength(c, BEZIER_ARC_LUT_STEPS)
+        t = tForBezierArcLengthFromStart(c, local, cum, BEZIER_ARC_LUT_STEPS)
       }
       t = Math.max(0, Math.min(1, t))
       const point =
@@ -216,19 +299,7 @@ export function pointAtPathLength(
 
 /** Eine durchgehende geschlossene Kontur (ein Pfad) – Füllung gilt für das ganze Teil. */
 export function closedPathD(curves: Curve[]): string {
-  if (curves.length === 0) return ''
-  const first = curves[0]
-  const start = first.type === 'line' ? first.start : first.start
-  let d = `M ${start.x} ${start.y}`
-  for (const c of curves) {
-    if (c.type === 'line') {
-      d += ` L ${c.end.x} ${c.end.y}`
-    } else {
-      d += ` C ${c.cp1.x} ${c.cp1.y} ${c.cp2.x} ${c.cp2.y} ${c.end.x} ${c.end.y}`
-    }
-  }
-  d += ' Z'
-  return d
+  return curveToPathD(curves, { closed: true })
 }
 
 /** Nullstellen der Ableitung einer kubischen Bézier-Koordinate (t ∈ (0,1)). */
@@ -289,11 +360,26 @@ export function curvesBounds(curves: Curve[]): { minX: number; minY: number; max
   return { minX, minY, maxX, maxY }
 }
 
+const SIGNED_AREA_SAMPLES_PER_SEGMENT = 10
+
 /** Signed area (Shoelace) einer geschlossenen Kontur; positiv = CCW in Math-Koordinaten. */
 export function signedAreaCurves(curves: Curve[]): number {
   if (curves.length === 0) return 0
-  const pts: Point[] = [curves[0].start]
-  for (const c of curves) pts.push(c.end)
+  const pts: Point[] = []
+  const S = SIGNED_AREA_SAMPLES_PER_SEGMENT
+  for (const c of curves) {
+    for (let k = 0; k < S; k++) {
+      const t = k / S
+      if (c.type === 'line') {
+        pts.push({
+          x: c.start.x + t * (c.end.x - c.start.x),
+          y: c.start.y + t * (c.end.y - c.start.y),
+        })
+      } else {
+        pts.push(bezierAt(c, t))
+      }
+    }
+  }
   if (pts.length < 3) return 0
   let area = 0
   for (let i = 0; i < pts.length; i++) {
