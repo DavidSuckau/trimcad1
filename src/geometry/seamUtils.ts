@@ -132,11 +132,34 @@ export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   for (const vi of piece.softVerticesMaster ?? []) {
     if (vi >= 0 && vi < n) out.add(vi)
   }
-  const softCut = new Set(piece.softVertices ?? [])
-  for (let vi = 0; vi < n; vi++) {
-    if (out.has(vi)) continue
-    const cutVi = mapMasterVertexIndexToCutVertexIndex(piece, vi)
-    if (cutVi != null && softCut.has(cutVi)) out.add(vi)
+  const cut = piece.cutLine
+  const cutImpliedByMaster = new Set<number>()
+  for (const mvi of piece.softVerticesMaster ?? []) {
+    if (mvi < 0 || mvi >= n) continue
+    const c = mapMasterVertexIndexToCutVertexIndex(piece, mvi)
+    if (c != null) cutImpliedByMaster.add(c)
+  }
+  for (const cutVi of piece.softVertices ?? []) {
+    if (cutVi < 0 || cutVi >= cut.length) continue
+    if (cutImpliedByMaster.has(cutVi)) continue
+    const mapped = mapCutVertexIndexToMasterVertexIndex(piece, cutVi)
+    if (mapped != null) {
+      out.add(mapped)
+      continue
+    }
+    // Nach Offset o. Ä.: Cut-Ecke kann > EPS von der Naht liegen – dann nächster Master (ein Eintrag pro Cut-Index).
+    const cutPt = vertexPositionOnClosedCurves(cut, cutVi)
+    let bestMasterVi = -1
+    let bestD = Infinity
+    for (let mvi = 0; mvi < n; mvi++) {
+      const pt = vertexPositionOnClosedCurves(master, mvi)
+      const d = Math.hypot(pt.x - cutPt.x, pt.y - cutPt.y)
+      if (d < bestD) {
+        bestD = d
+        bestMasterVi = mvi
+      }
+    }
+    if (bestMasterVi >= 0) out.add(bestMasterVi)
   }
   return out
 }

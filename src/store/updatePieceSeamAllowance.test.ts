@@ -91,7 +91,8 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     })
     useStore.getState().updatePiece('p1', { seamAllowanceMm: 10 })
     const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p1')!
-    expect(p.softVertices?.length).toBeGreaterThan(0)
+    expect(p.softVerticesMaster?.includes(1)).toBe(true)
+    expect(masterSoftVertexIndexSet(p).has(1)).toBe(true)
     expect(p.cutLine.length).toBeGreaterThanOrEqual(3)
   })
 
@@ -129,7 +130,83 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     useStore.getState().applyOffset('p2', 8)
     const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p2')!
     expect(p.seamAllowanceMm).toBe(8)
-    expect(p.softVertices?.length).toBeGreaterThan(0)
+    expect(p.softVerticesMaster?.includes(2)).toBe(true)
     expect(masterSoftVertexIndexSet(p).size).toBeGreaterThan(0)
+  })
+
+  it('vermeidet Überschneidung: ein einzelner Cut-Soft-Index färbt nicht mehrere Master-Eckpunkte blau', () => {
+    const piece: Workspace['pieces'][0] = {
+      id: 'map-overlap',
+      number: '003',
+      name: 'MapOverlap',
+      cutLine: [
+        { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
+        { type: 'line', start: { x: 100, y: 0 }, end: { x: 0, y: 100 } },
+        { type: 'line', start: { x: 0, y: 100 }, end: { x: 0, y: 0 } },
+      ],
+      seamLine: [
+        { type: 'line', start: { x: 0, y: 0 }, end: { x: 1, y: 0 } },
+        { type: 'line', start: { x: 1, y: 0 }, end: { x: 1, y: 1 } },
+        { type: 'line', start: { x: 1, y: 1 }, end: { x: 0, y: 1 } },
+        { type: 'line', start: { x: 0, y: 1 }, end: { x: 0, y: 0 } },
+      ],
+      seamAllowanceMm: 10,
+      notches: [],
+      drills: [],
+      grainLine: null,
+      internalLines: [],
+      layer: 'CUT',
+      transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+      softVertices: [0],
+      softVerticesMaster: [],
+      fillInterior: true,
+      material: '',
+      bomQuantity: 1,
+    }
+    const mapped = masterSoftVertexIndexSet(piece)
+    expect([...mapped]).toEqual([0])
+  })
+
+  it('beim Hinzufügen der Nahtzugabe bleibt ein weicher Punkt am Winkel stabil (nicht rot)', () => {
+    const cutLine: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 120, y: 0 } },
+      { type: 'line', start: { x: 120, y: 0 }, end: { x: 40, y: 70 } },
+      { type: 'line', start: { x: 40, y: 70 }, end: { x: 0, y: 0 } },
+    ]
+    useStore.setState({
+      workspace: {
+        id: 'ws-angle',
+        name: 'Angle',
+        pieces: [
+          {
+            id: 'p-angle',
+            number: '004',
+            name: 'AnglePiece',
+            cutLine,
+            seamLine: [],
+            seamAllowanceMm: null,
+            notches: [],
+            drills: [],
+            grainLine: null,
+            internalLines: [],
+            layer: 'CUT',
+            transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+            softVertices: [1],
+            fillInterior: true,
+            material: '',
+            bomQuantity: 1,
+          },
+        ],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+      },
+      selectedPieceIds: ['p-angle'],
+    })
+
+    useStore.getState().updatePiece('p-angle', { seamAllowanceMm: 10 })
+    const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p-angle')!
+    expect(p.softVerticesMaster?.includes(1)).toBe(true)
+    const softOnMaster = masterSoftVertexIndexSet(p)
+    expect(softOnMaster.has(1)).toBe(true)
   })
 })

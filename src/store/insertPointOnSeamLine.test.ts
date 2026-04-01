@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
+import { masterSoftVertexIndexSet } from '../geometry/seamUtils'
 import type { Workspace, Curve } from '../types/model'
 
 function square(size: number): Curve[] {
@@ -55,6 +56,17 @@ describe('insertPointOnCutLine (seam master)', () => {
       const len = Math.hypot(first.end.x - first.start.x, first.end.y - first.start.y)
       expect(len).toBeGreaterThan(0)
     }
+  })
+
+  it('nach Einfügen ist nur der neue Eckpunkt weich (keine Massen-Umfärbung der Ecken)', () => {
+    const { insertPointOnCutLine } = useStore.getState()
+    insertPointOnCutLine('p1', 0, { x: 50, y: 0 }, 0.5)
+    const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p1')!
+    expect(p.seamLine.length).toBe(5)
+    const softOnMaster = masterSoftVertexIndexSet(p)
+    expect(softOnMaster.size).toBe(1)
+    expect(softOnMaster.has(1)).toBe(true)
+    expect(p.softVerticesMaster?.includes(1)).toBe(true)
   })
 
 })

@@ -1,4 +1,5 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
 import {
   closedPathD,
@@ -680,6 +681,29 @@ function getScreenPoint(
   return { x, y }
 }
 
+/** Weltkoordinaten (mm) → Browser-Client (px), invers zu getScreenPoint. */
+function worldToClientPoint(
+  world: Point,
+  container: HTMLElement,
+  view: { zoom: number; panX: number; panY: number },
+  svgEl: SVGElement | null
+): { x: number; y: number } {
+  const svgUserX = world.x * view.zoom + view.panX
+  const svgUserY = world.y * view.zoom + view.panY
+  if (svgEl) {
+    const svgRect = svgEl.getBoundingClientRect()
+    const scale = Math.min(svgRect.width / VIEWBOX_WIDTH, svgRect.height / VIEWBOX_HEIGHT)
+    const offsetX = (svgRect.width - VIEWBOX_WIDTH * scale) / 2
+    const offsetY = (svgRect.height - VIEWBOX_HEIGHT * scale) / 2
+    return {
+      x: svgRect.left + offsetX + svgUserX * scale,
+      y: svgRect.top + offsetY + svgUserY * scale,
+    }
+  }
+  const rect = container.getBoundingClientRect()
+  return { x: rect.left + svgUserX, y: rect.top + svgUserY }
+}
+
 function PieceGroup({
   piece,
   isSelected,
@@ -1144,6 +1168,7 @@ export function WorkspaceCanvas() {
     showInternalLines,
     showPieceNames,
     showContourMeasurements,
+    showWorkspaceNotes,
     rulerMode,
     rulerLine,
     setView,
@@ -1222,8 +1247,11 @@ export function WorkspaceCanvas() {
     clearBatchUiHighlight,
     batchSetVerticesSoft,
     batchDeleteFiltered,
+    addWorkspaceNote,
+    updateWorkspaceNote,
+    removeWorkspaceNote,
   } = useStore()
-  const { pieces, view } = workspace
+  const { pieces, view, notes: workspaceNotesList } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
   const [grainFlipHover, setGrainFlipHover] = useState<{
     pieceId: string
@@ -1278,13 +1306,20 @@ export function WorkspaceCanvas() {
         render0: number
       }
     | { kind: 'digitizeDrag' }
+    | { kind: 'workspaceNote'; noteId: string; startWorld: Point; startPos: Point }
     | null
   >(null)
+  const [workspaceNoteEditor, setWorkspaceNoteEditor] = useState<{
+    noteId: string
+    clientX: number
+    clientY: number
+  } | null>(null)
+  const workspaceNoteEditorRef = useRef<HTMLDivElement | null>(null)
   const [hoveredPieceId, setHoveredPieceId] = useState<string | null>(null)
   const [cutSeamSwappedSet, setCutSeamSwappedSet] = useState<Set<string>>(new Set())
   const filteredBatchTargets = useMemo(
-    () => filterBatchTargets(batchSelectionTargets, batchSelectionFilter),
-    [batchSelectionTargets, batchSelectionFilter]
+    () => filterBatchTargets(batchSelectionTargets, batchSelectionFilter, pieces),
+    [batchSelectionTargets, batchSelectionFilter, pieces]
   )
   const [hoveredDeletablePoint, setHoveredDeletablePoint] = useState<
     | { pieceId: string; kind: 'vertex'; vertexIndex: number }
@@ -1523,6 +1558,28 @@ export function WorkspaceCanvas() {
         }
         setPendingNahtzugabeClick(false)
         return
+      }
+
+      if (showWorkspaceNotes) {
+        const notes = workspace.notes ?? []
+        /** Pixel-Treffer (wie Icon-Größe auf dem Bildschirm), unabhängig vom Zoom. */
+        const NOTE_HIT_PX = 24
+        const containerEl = containerRef.current
+        for (let i = notes.length - 1; i >= 0; i--) {
+          const n = notes[i]
+          const c = worldToClientPoint(n.position, containerEl, view, svgRef.current)
+          if (Math.hypot(e.clientX - c.x, e.clientY - c.y) <= NOTE_HIT_PX) {
+            setWorkspaceNoteEditor({ noteId: n.id, clientX: e.clientX, clientY: e.clientY })
+            setDragging({
+              kind: 'workspaceNote',
+              noteId: n.id,
+              startWorld: { ...world },
+              startPos: { ...n.position },
+            })
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
+        }
       }
 
       const VERTEX_HIT = VERTEX_DRAG_HIT_MM
@@ -1984,6 +2041,21 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
+      if (tool === 'note') {
+        if (!showWorkspaceNotes) {
+          setTool('select')
+          return
+        }
+        for (const p of pieces) {
+          if (p.cutLine.length >= 3 && isPointInsidePiece(worldToPieceLocal(world, p), p)) {
+            return
+          }
+        }
+        const id = addWorkspaceNote(world)
+        setWorkspaceNoteEditor({ noteId: id, clientX: e.clientX, clientY: e.clientY })
+        setTool('select')
+        return
+      }
       if (tool === 'digitize' && digitizeState) {
         const CLOSE_HIT = 8
         const nodes = digitizeState.nodes
@@ -2047,6 +2119,10 @@ export function WorkspaceCanvas() {
       finishDigitize,
       setImagePosition,
       setMassstabDialog,
+      workspace,
+      view.zoom,
+      showWorkspaceNotes,
+      addWorkspaceNote,
     ]
   )
 
@@ -2057,6 +2133,16 @@ export function WorkspaceCanvas() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (dragging?.kind === 'workspaceNote') {
+        const world = toWorld(e.clientX, e.clientY)
+        const dx = world.x - dragging.startWorld.x
+        const dy = world.y - dragging.startWorld.y
+        updateWorkspaceNote(dragging.noteId, {
+          position: { x: dragging.startPos.x + dx, y: dragging.startPos.y + dy },
+        })
+        return
+      }
+
       if (dragging?.kind === 'image-move') {
         const world = toWorld(e.clientX, e.clientY)
         const dx = world.x - dragging.startWorld.x
@@ -2763,8 +2849,28 @@ export function WorkspaceCanvas() {
       setImageRenderMmPerPixel,
       imageDigitizeSession,
       setHoveredWorkspaceImage,
+      updateWorkspaceNote,
     ]
   )
+
+  useEffect(() => {
+    if (!workspaceNoteEditor) return
+    let cancelled = false
+    let onClose: ((ev: PointerEvent) => void) | null = null
+    const t = window.setTimeout(() => {
+      if (cancelled) return
+      onClose = (ev: PointerEvent) => {
+        if (workspaceNoteEditorRef.current?.contains(ev.target as Node)) return
+        setWorkspaceNoteEditor(null)
+      }
+      document.addEventListener('pointerdown', onClose, true)
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+      if (onClose) document.removeEventListener('pointerdown', onClose, true)
+    }
+  }, [workspaceNoteEditor])
 
   useEffect(() => {
     if (!grainContextMenu) return
@@ -2826,6 +2932,7 @@ export function WorkspaceCanvas() {
     setHoveredSeamAssignmentId(null)
     setHoveredCurvepointSegment(null)
     closeSegmentMenu()
+    setWorkspaceNoteEditor(null)
   }, [closeSegmentMenu])
 
   useEffect(() => {
@@ -2862,6 +2969,11 @@ export function WorkspaceCanvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (workspaceNoteEditor && e.key === 'Escape') {
+        e.preventDefault()
+        setWorkspaceNoteEditor(null)
+        return
+      }
       if (seamAssignmentMetaDialogId && e.key === 'Escape') {
         e.preventDefault()
         setSeamAssignmentMetaDialogId(null)
@@ -2948,6 +3060,11 @@ export function WorkspaceCanvas() {
         if (tool === 'digitize' && digitizeState) {
           e.preventDefault()
           cancelDigitize()
+          return
+        }
+        if (tool === 'note') {
+          e.preventDefault()
+          setTool('select')
           return
         }
         if (workspaceImageSelected) {
@@ -3246,6 +3363,7 @@ export function WorkspaceCanvas() {
     grainContextMenu,
     pieceContextMenu,
     setPieceContextMenu,
+    workspaceNoteEditor,
     digitizeState,
     cancelDigitize,
     startDigitize,
@@ -3578,7 +3696,21 @@ export function WorkspaceCanvas() {
       style={{
         touchAction: 'none',
         cursor:
-          rulerMode ? 'crosshair' : tool === 'pan' ? 'grab' : tool === 'rectangle' || tool === 'point' || tool === 'curvepoint' || tool === 'line' || tool === 'internalLine' || tool === 'internalCircle' || tool === 'digitize' || tool === 'massstab' ? 'crosshair' : 'default',
+          rulerMode
+            ? 'crosshair'
+            : tool === 'pan'
+              ? 'grab'
+              : tool === 'rectangle' ||
+                  tool === 'point' ||
+                  tool === 'curvepoint' ||
+                  tool === 'line' ||
+                  tool === 'internalLine' ||
+                  tool === 'internalCircle' ||
+                  tool === 'digitize' ||
+                  tool === 'massstab' ||
+                  tool === 'note'
+                ? 'crosshair'
+                : 'default',
       }}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>
@@ -3624,7 +3756,9 @@ export function WorkspaceCanvas() {
               style={{ fontSize: 13 }}
             >
               <option value="all">Alles</option>
-              <option value="vertices">Eckpunkte</option>
+              <option value="vertices">Eckpunkte (alle)</option>
+              <option value="softVertices">Weiche Punkte (blau)</option>
+              <option value="hardVertices">Feste Eckpunkte (rot)</option>
               <option value="notches">Kerben</option>
               <option value="curvePoints">Kurvenpunkte</option>
               <option value="internalLines">Interne Linien</option>
@@ -3682,6 +3816,94 @@ export function WorkspaceCanvas() {
           </span>
         </div>
       )}
+      {workspaceNoteEditor && (() => {
+        const edited = (workspaceNotesList ?? []).find((n) => n.id === workspaceNoteEditor.noteId)
+        if (!edited) return null
+        return createPortal(
+          <div
+            ref={workspaceNoteEditorRef}
+            className="workspace-note-editor"
+            style={{
+              position: 'fixed',
+              left: workspaceNoteEditor.clientX,
+              top: workspaceNoteEditor.clientY,
+              zIndex: 2500,
+              transform: 'translate(8px, 8px)',
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                background: '#fffde7',
+                border: '1px solid #f9a825',
+                borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+                padding: 10,
+                minWidth: 220,
+                maxWidth: 360,
+                fontSize: 13,
+                fontFamily: 'system-ui, sans-serif',
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 8, color: '#e65100' }}>Notiz</div>
+              <textarea
+                className="workspace-note-textarea"
+                value={edited.text}
+                onChange={(e) => updateWorkspaceNote(edited.id, { text: e.target.value })}
+                rows={5}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  resize: 'vertical',
+                  font: 'inherit',
+                  border: '1px solid #ccc',
+                  borderRadius: 4,
+                  padding: 8,
+                }}
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="workspace-note-delete-btn"
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    border: '1px solid #c62828',
+                    borderRadius: 4,
+                    background: '#fff',
+                    color: '#c62828',
+                  }}
+                  onClick={() => {
+                    removeWorkspaceNote(edited.id)
+                    setWorkspaceNoteEditor(null)
+                  }}
+                >
+                  Löschen
+                </button>
+                <button
+                  type="button"
+                  className="workspace-note-close-btn"
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    border: '1px solid #ccc',
+                    borderRadius: 4,
+                    background: '#fff',
+                  }}
+                  onClick={() => setWorkspaceNoteEditor(null)}
+                >
+                  Schließen
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      })()}
       {grainFlipHover && !grainContextMenu && !hoveredDeletablePoint && !hoveredDeletableNotch && (
         <div
           className="grain-flip-tooltip"
@@ -4181,6 +4403,23 @@ export function WorkspaceCanvas() {
             />
             )
           })}
+          {showWorkspaceNotes &&
+            (workspaceNotesList ?? []).map((wn) => {
+              const z = 1 / Math.max(view.zoom, 1e-6)
+              return (
+                <g key={wn.id} transform={`translate(${wn.position.x},${wn.position.y}) scale(${z})`} pointerEvents="none">
+                  <circle r={11} cx={0} cy={0} fill="#fff9c4" stroke="#f9a825" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                  <path
+                    d="M -4,-3 L 4,-3 L 4,5 L 0,2 L -4,5 Z"
+                    fill="none"
+                    stroke="#e65100"
+                    strokeWidth={1.2}
+                    strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </g>
+              )
+            })}
           {notchPreview && (() => {
             const piece = pieces.find((p) => p.id === notchPreview.pieceId)
             if (!piece) return null

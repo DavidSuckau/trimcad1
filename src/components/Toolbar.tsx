@@ -20,7 +20,16 @@ import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { StuecklisteModal } from './StuecklisteModal'
 
-type ToolId = 'select' | 'pan' | 'line' | 'bezier' | 'notch' | 'drill' | 'rectangle' | 'massstab'
+type ToolId =
+  | 'select'
+  | 'pan'
+  | 'line'
+  | 'bezier'
+  | 'notch'
+  | 'drill'
+  | 'rectangle'
+  | 'massstab'
+  | 'note'
 type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
 
 const NAHTZUGABE_MM = 5
@@ -39,6 +48,7 @@ const TOOL_DISPLAY: Record<string, { label: string; shortcut?: string }> = {
   line: { label: 'Linie' },
   internalLine: { label: 'Linie (intern)' },
   drill: { label: 'Bohrung' },
+  note: { label: 'Notiz' },
   internalCircle: { label: 'Kreis' },
   bezier: { label: 'Bézier' },
 }
@@ -73,6 +83,9 @@ export function Toolbar() {
     dxfExportScale,
     dxfImportExtraCutLayers,
     dxfImportScale,
+    dxfImportDetectVNotches,
+    dxfImportCreateSeamLine,
+    dxfImportSeamAllowanceMm,
     notchSettings,
     imageDigitizeSession,
     startDigitize,
@@ -154,6 +167,9 @@ export function Toolbar() {
       dxfExportScale,
       dxfImportExtraCutLayers,
       dxfImportScale,
+      dxfImportDetectVNotches,
+      dxfImportCreateSeamLine,
+      dxfImportSeamAllowanceMm,
       notchSettings,
       imageDigitizeSession,
     })
@@ -209,6 +225,9 @@ export function Toolbar() {
         const result = importDxfFromString(content, {
           extraCutLayers: parseExtraCutLayers(dxfImportExtraCutLayers),
           importScale: dxfImportScale,
+          detectVNotchesInPolyline: dxfImportDetectVNotches,
+          createSeamLineOnImport: dxfImportCreateSeamLine,
+          importSeamAllowanceMm: dxfImportSeamAllowanceMm,
         })
         if (result.error) {
           setToastMessage('error:' + result.error)
@@ -658,6 +677,15 @@ export function Toolbar() {
                   onClick={() => handleBearbeiten('drill')}
                 >
                   Bohrung
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className={`menubar-dropdown-btn ${tool === 'note' ? 'active' : ''}`}
+                  onClick={() => handleBearbeiten('note')}
+                >
+                  Notiz
                 </button>
               </li>
               <li>

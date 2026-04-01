@@ -7,6 +7,7 @@ import type { PatternPiece, Curve, Notch, Point, Drill, Line } from '../types/mo
 import { parseDxf, type DxfEntity, type DxfPoint } from './dxfParser'
 import { detectNotchesInPolyline } from './notchDetection'
 import { dist } from './dxfShared'
+import { deriveCutLineFromSeamWithValidation, offsetCurvesInwardForSeam } from '../geometry/offset'
 import {
   isCutLayer,
   isSeamLayer,
@@ -27,6 +28,15 @@ export type ImportDxfOptions = {
   extraCutLayers?: string[]
   /** Optionaler manueller Faktor auf den gesamten Import (nach DXF-Units), z. B. 10 bei 10x zu klein. */
   importScale?: number
+  /** V-Kerben in der Polyligne erkennen und zu Notches mit bereinigter Kontur (Standard: true). */
+  detectVNotchesInPolyline?: boolean
+  /**
+   * Wenn die DXF keine Naht-Polyline liefert: Nahtlinie per Offset nach innen erzeugen und Schnittkontur daraus ableiten.
+   * Erfordert `importSeamAllowanceMm` &gt; 0.
+   */
+  createSeamLineOnImport?: boolean
+  /** Nahtzugabe in mm für `createSeamLineOnImport` (z. B. 8). */
+  importSeamAllowanceMm?: number
 }
 
 export type ImportDxfResult = {
@@ -530,6 +540,39 @@ function isClosed(vertices: DxfPoint[]): boolean {
   return dist(first, last) < DUPLICATE_THRESHOLD
 }
 
+/** Max. Abstand importierter Eckpunkte zur abgeleiteten Schnittkontur (Clipper-Roundtrip). */
+function maxDeviationVerticesToCurves(vertices: DxfPoint[], curves: Curve[]): number {
+  let max = 0
+  for (const p of vertices) {
+    const nr = nearestCurveIndexAndPoint({ x: p.x, y: p.y }, curves)
+    if (nr) max = Math.max(max, nr.distance)
+  }
+  return max
+}
+
+const SEAM_ROUNDTRIP_WARN_MM = 2
+const NOTCH_SHORT_MAX_RELAXED_MM = 9
+const NOTCH_MIN_ANGLE_RELAXED_DEG = 30
+
+function detectNotchesWithToleranceFallback(
+  vertices: DxfPoint[],
+  closedRing: boolean
+): { cleanedVertices: DxfPoint[]; notches: ReturnType<typeof detectNotchesInPolyline>['notches']; usedRelaxed: boolean } {
+  const strict = detectNotchesInPolyline(vertices, { closedRing })
+  if (strict.notches.length > 0) {
+    return { ...strict, usedRelaxed: false }
+  }
+  const relaxed = detectNotchesInPolyline(vertices, {
+    closedRing,
+    shortSegmentMaxMm: NOTCH_SHORT_MAX_RELAXED_MM,
+    minAngleDeg: NOTCH_MIN_ANGLE_RELAXED_DEG,
+  })
+  if (relaxed.notches.length > 0) {
+    return { ...relaxed, usedRelaxed: true }
+  }
+  return { ...strict, usedRelaxed: false }
+}
+
 /**
  * Parst DXF-Text und erzeugt PatternPiece[].
  * Erkennt geometrische Kerben in Polylines und separate Notch-Entities (ASTM Layer 4, 80–83).
@@ -541,6 +584,14 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
     typeof options?.importScale === 'number' && Number.isFinite(options.importScale) && options.importScale > 0
       ? options.importScale
       : 1
+  const detectVNotches = options?.detectVNotchesInPolyline !== false
+  const createSeamOnImport = options?.createSeamLineOnImport === true
+  const importSeamMm =
+    typeof options?.importSeamAllowanceMm === 'number' &&
+    Number.isFinite(options.importSeamAllowanceMm) &&
+    options.importSeamAllowanceMm > 0
+      ? options.importSeamAllowanceMm
+      : null
 
   const text = content.replace(/^\uFEFF/, '')
 
@@ -594,12 +645,21 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       const closed = draft.closed
       if (vertices.length < 3) continue
 
-      const { cleanedVertices, notches: geomNotches } = detectNotchesInPolyline(vertices)
+      const contourClosed = closed || isClosed(vertices)
+      const detectRes = detectVNotches
+        ? detectNotchesWithToleranceFallback(vertices, contourClosed)
+        : { cleanedVertices: [...vertices], notches: [], usedRelaxed: false }
+      const { cleanedVertices, notches: geomNotches } = detectRes
+      if (detectRes.usedRelaxed) {
+        warnings.push(
+          `Teil ${String(pieces.length + 1).padStart(3, '0')}: V-Kerben wurden mit gelockerter Toleranz erkannt (${NOTCH_SHORT_MAX_RELAXED_MM} mm / ${NOTCH_MIN_ANGLE_RELAXED_DEG}°).`
+        )
+      }
 
       const isContourClosed = closed || isClosed(cleanedVertices)
       if (!isContourClosed) continue
 
-      const cutLine = verticesToCurves(cleanedVertices, isContourClosed)
+      let cutLine = verticesToCurves(cleanedVertices, isContourClosed)
       let minX = Infinity,
         minY = Infinity,
         maxX = -Infinity,
@@ -625,17 +685,42 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
 
       let seamLine: Curve[] = []
       let seamAllowanceMm: number | null = null
-      if (draft.seamVertices && draft.seamVertices.length >= 3) {
-        const sc = draft.seamClosed || isClosed(draft.seamVertices)
-        const sl = verticesToCurves(draft.seamVertices, sc)
-        const est = estimateSeamAllowanceMm(draft.seamVertices, cutLine)
+      const hasSeamFromDxf = draft.seamVertices && draft.seamVertices.length >= 3
+      let cutLineOldForNotchResync = cutLine
+
+      if (hasSeamFromDxf) {
+        const sc = draft.seamClosed || isClosed(draft.seamVertices!)
+        const sl = verticesToCurves(draft.seamVertices!, sc)
+        const est = estimateSeamAllowanceMm(draft.seamVertices!, cutLine)
         if (est != null && sl.length >= 3) {
           seamLine = sl
           seamAllowanceMm = est
         }
+      } else if (createSeamOnImport && importSeamMm != null && cutLine.length >= 3) {
+        const sl = offsetCurvesInwardForSeam(cutLine, importSeamMm)
+        if (sl.length >= 3) {
+          const derived = deriveCutLineFromSeamWithValidation(sl, importSeamMm)
+          if (derived.ok) {
+            const importedCut = cutLine
+            const dev = maxDeviationVerticesToCurves(cleanedVertices, derived.cutLine)
+            if (dev > SEAM_ROUNDTRIP_WARN_MM) {
+              warnings.push(
+                `Teil ${String(pieces.length + 1).padStart(3, '0')}: Schnittkontur weicht nach Naht-Offset-Roundtrip um bis zu ${dev.toFixed(1)} mm von der importierten Polylinie ab.`
+              )
+            }
+            cutLine = derived.cutLine
+            cutLineOldForNotchResync = importedCut
+            seamLine = sl
+            seamAllowanceMm = importSeamMm
+          } else {
+            warnings.push(
+              `Teil ${String(pieces.length + 1).padStart(3, '0')}: Nahtlinie konnte nicht aus der Schnittkontur abgeleitet werden (${derived.message}).`
+            )
+          }
+        }
       }
 
-      allNotches = resyncNotchesAfterCutLineRebuilt(allNotches, cutLine, cutLine)
+      allNotches = resyncNotchesAfterCutLineRebuilt(allNotches, cutLineOldForNotchResync, cutLine)
 
       const id = generateId()
       const number = String(pieces.length + 1).padStart(3, '0')

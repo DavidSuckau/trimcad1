@@ -79,6 +79,77 @@ SEQEND
 `
 }
 
+/** Rechteck 0..10 mm mit V-Kerbe an der unteren Kante (kurze Segmente, Spitze bei (5,2)). */
+function closedRectWithVNotchPolyline(layer: string): string {
+  return `0
+POLYLINE
+8
+${layer}
+66
+1
+70
+1
+0
+VERTEX
+8
+${layer}
+10
+0
+20
+0
+0
+VERTEX
+8
+${layer}
+10
+4
+20
+0
+0
+VERTEX
+8
+${layer}
+10
+5
+20
+2
+0
+VERTEX
+8
+${layer}
+10
+6
+20
+0
+0
+VERTEX
+8
+${layer}
+10
+10
+20
+0
+0
+VERTEX
+8
+${layer}
+10
+10
+20
+10
+0
+VERTEX
+8
+${layer}
+10
+0
+20
+10
+0
+SEQEND
+`
+}
+
 describe('importDxfFromString', () => {
   it('importiert test-minimal.dxf mit einer Kontur', () => {
     const content = readFileSync(join(_dir, '../../test-minimal.dxf'), 'utf-8')
@@ -299,5 +370,33 @@ EOF
     const r = importDxfFromString(dxf)
     expect(r.error).toBeUndefined()
     expect(r.pieces.length).toBe(1)
+  })
+
+  it('erkennt V-Kerbe in der Polyligne und erzeugt Notch-Objekte', () => {
+    const dxf = DXF_HEADER + closedRectWithVNotchPolyline('CUT') + DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].notches.length).toBeGreaterThanOrEqual(1)
+    expect(r.pieces[0].notches[0].type).toBe('v')
+  })
+
+  it('ohne V-Kerben-Erkennung bleiben Kerben nur als Polylinien-Vertices', () => {
+    const dxf = DXF_HEADER + closedRectWithVNotchPolyline('CUT') + DXF_FOOTER
+    const r = importDxfFromString(dxf, { detectVNotchesInPolyline: false })
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].notches.length).toBe(0)
+    expect(r.pieces[0].cutLine.length).toBeGreaterThan(4)
+  })
+
+  it('optional Nahtlinie aus Schnittkontur (Import-Einstellungen)', () => {
+    const dxf = DXF_HEADER + closedRectPolyline('CUT') + DXF_FOOTER
+    const r = importDxfFromString(dxf, {
+      createSeamLineOnImport: true,
+      importSeamAllowanceMm: 2,
+    })
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].seamAllowanceMm).toBe(2)
+    expect(r.pieces[0].seamLine.length).toBeGreaterThanOrEqual(3)
+    expect(r.pieces[0].cutLine.length).toBeGreaterThanOrEqual(3)
   })
 })

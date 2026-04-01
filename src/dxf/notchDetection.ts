@@ -1,20 +1,35 @@
 /**
  * Kerben-Erkennung aus POLYLINE-Vertices.
- * Basierend auf docs/DXF-MASTER-SPEZIFIKATION.txt Kap. 10.
+ * Basierend auf docs/DXF-MASTER-SPEZIFIKATION.txt Kap. 9–10.
  */
 
 import type { Point } from '../types/model'
 
 export type DxfPoint = { x: number; y: number }
 
-const SHORT_THRESH = 3.0 // mm – max. Segmentlänge für Notch-Erkennung
-const ANGLE_THRESH = 45 // Grad – min. Winkelaenderung
+const DEFAULT_SHORT_MAX_MM = 3.0
+const DEFAULT_MIN_ANGLE_DEG = 45
+/** Mindest-/Höchstgrenzen für importierte Messwerte (mm). */
+const DEPTH_MIN = 0.5
+const DEPTH_MAX = 50
+const WIDTH_MIN = 1
+const WIDTH_MAX = 80
+const CLOSE_EPS = 0.01
+
+export type NotchDetectOptions = {
+  /** Max. Länge der beiden Kerben-Segmente (mm), Standard 3. */
+  shortSegmentMaxMm?: number
+  /** Min. Knickwinkel an der Spitze (Grad), Standard 45. */
+  minAngleDeg?: number
+  /**
+   * Geschlossene Kontur ohne doppelten Schließpunkt (z. B. DXF 70=1): letzte Kante = letzter → erster.
+   * Wenn nicht gesetzt: nur bei fast gleichem erstem/letztem Punkt als Ring behandeln.
+   */
+  closedRing?: boolean
+}
 
 /** Berechnet den Winkel zwischen zwei Vektoren (Grad, 0..180). */
-function angleBetweenDeg(
-  ax: number, ay: number,
-  bx: number, by: number
-): number {
+function angleBetweenDeg(ax: number, ay: number, bx: number, by: number): number {
   const dot = ax * bx + ay * by
   const magA = Math.hypot(ax, ay)
   const magB = Math.hypot(bx, by)
@@ -27,35 +42,55 @@ function dist(a: DxfPoint, b: DxfPoint): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+function signedPolygonArea(vertices: DxfPoint[]): number {
+  if (vertices.length < 3) return 0
+  let a = 0
+  const n = vertices.length
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    a += vertices[i].x * vertices[j].y - vertices[j].x * vertices[i].y
+  }
+  return a / 2
+}
+
 /**
- * Prüft, ob der Mittelpunkt eine Einbuchtung nach außen ist.
- * Dazu: Flächeninhalt des Dreiecks (prev, tip, next) – negativ = Einbuchtung nach außen
- * bei mathematisch positivem Umlaufsinn (CCW) der Kontur.
+ * Geschlossene Kontur: doppelten Schließ-Vertex entfernen (letzter ≈ erster).
  */
-function isExternalIndentation(
+export function normalizeClosedPolylineVertices(vertices: DxfPoint[]): DxfPoint[] {
+  if (vertices.length < 2) return [...vertices]
+  const first = vertices[0]
+  const last = vertices[vertices.length - 1]
+  if (dist(first, last) < CLOSE_EPS) {
+    return vertices.length > 1 ? vertices.slice(0, -1) : [...vertices]
+  }
+  return [...vertices]
+}
+
+/**
+ * CCW: konvexe Ecke am Tip → Kreuzprodukt > 0; konkave Kerbe (V nach innen) → < 0.
+ */
+function isConcaveNotchAtTip(
   pPrev: DxfPoint,
   pTip: DxfPoint,
   pNext: DxfPoint,
-  vertices: DxfPoint[]
+  polygonAreaSigned: number
 ): boolean {
-  // Signed area of triangle
-  const cross = (pTip.x - pPrev.x) * (pNext.y - pPrev.y) - (pTip.y - pPrev.y) * (pNext.x - pPrev.x)
-  // Kontur-Umlaufsinn: signed area der gesamten Polygonfläche
-  let polygonArea = 0
-  for (let i = 0; i < vertices.length; i++) {
-    const a = vertices[i]
-    const b = vertices[(i + 1) % vertices.length]
-    polygonArea += (b.x - a.x) * (a.y + b.y)
+  const v0x = pTip.x - pPrev.x
+  const v0y = pTip.y - pPrev.y
+  const v1x = pNext.x - pTip.x
+  const v1y = pNext.y - pTip.y
+  const cross = v0x * v1y - v0y * v1x
+  const eps = 1e-4
+  if (Math.abs(polygonAreaSigned) < 1e-8) return false
+  if (polygonAreaSigned > 0) return cross < -eps
+  return cross > eps
+}
+
+function clampDepthWidth(depth: number, width: number): { depth: number; width: number } {
+  return {
+    depth: Math.min(DEPTH_MAX, Math.max(DEPTH_MIN, depth)),
+    width: Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, width)),
   }
-  // CCW (positiv) = Außenseite links. Einbuchtung nach außen: tip liegt "rechts" der Kante prev->next.
-  // Wenn Kontur CCW: Einbuchtung hat negatives Kreuzprodukt (tip "innen").
-  // Vereinfacht: Wir prüfen ob die drei Punkte eine spitze Ecke bilden, die nach innen zeigt.
-  // Nach DXF-Spez: "Einbuchtung nach außen" = die Kerbe geht vom Rand weg ins Material.
-  // Bei einer Schnittkontur ist "außen" = außerhalb der Kontur = wo geschnitten wird.
-  // Die V-Kerbe hat die Spitze (pTip) als den Punkt, der von der Konturlinie aus "eingebuchtet" ist.
-  // Für die Erkennung: seg1 und seg2 sind kurz, der Winkel ist groß.
-  // Wir akzeptieren sowohl links als auch rechts Einbuchtungen (verschiedene Umlaufrichtungen).
-  return Math.abs(cross) > 0.01
 }
 
 export type DetectedNotch = {
@@ -65,60 +100,126 @@ export type DetectedNotch = {
   width: number
 }
 
+function tryDetectNotchAtTip(
+  pPrev: DxfPoint,
+  pTip: DxfPoint,
+  pNext: DxfPoint,
+  shortMax: number,
+  minAng: number,
+  polygonAreaSigned: number | null
+): DetectedNotch | null {
+  const seg1 = dist(pPrev, pTip)
+  const seg2 = dist(pTip, pNext)
+  const v1x = pTip.x - pPrev.x
+  const v1y = pTip.y - pPrev.y
+  const v2x = pNext.x - pTip.x
+  const v2y = pNext.y - pTip.y
+  const ang = angleBetweenDeg(v1x, v1y, v2x, v2y)
+
+  if (seg1 > shortMax || seg2 > shortMax || ang <= minAng) return null
+
+  if (polygonAreaSigned != null) {
+    if (!isConcaveNotchAtTip(pPrev, pTip, pNext, polygonAreaSigned)) return null
+  }
+
+  const midX = (pPrev.x + pNext.x) / 2
+  const midY = (pPrev.y + pNext.y) / 2
+  const position: Point = { x: midX, y: midY }
+  const inwardAngle = Math.atan2(pTip.y - midY, pTip.x - midX)
+  const angle = (inwardAngle * 180) / Math.PI
+  const rawDepth = dist({ x: midX, y: midY }, pTip)
+  const rawWidth = dist(pPrev, pNext)
+  const { depth, width } = clampDepthWidth(rawDepth, rawWidth)
+
+  return { position, angle, depth, width }
+}
+
+function buildRingVertices(vertices: DxfPoint[], options?: NotchDetectOptions): DxfPoint[] {
+  if (vertices.length < 3) return [...vertices]
+  const explicitClosed = options?.closedRing
+  const dupClose =
+    vertices.length >= 2 && dist(vertices[0], vertices[vertices.length - 1]) < CLOSE_EPS
+  const treatAsRing = explicitClosed === true || (explicitClosed !== false && dupClose)
+  if (dupClose) return normalizeClosedPolylineVertices(vertices)
+  if (treatAsRing) return [...vertices]
+  return [...vertices]
+}
+
+function isRingMode(vertices: DxfPoint[], ring: DxfPoint[], options?: NotchDetectOptions): boolean {
+  const dupClose =
+    vertices.length >= 2 && dist(vertices[0], vertices[vertices.length - 1]) < CLOSE_EPS
+  if (dupClose) return ring.length >= 3
+  if (options?.closedRing === true) return ring.length >= 3
+  return false
+}
+
 /**
  * Erkennt geometrische Kerben (V-Einbuchtungen) in einer Vertex-Liste.
- * Gibt die bereinigte Vertex-Liste (ohne Notch-Punkte) und die erkannten Notches zurück.
+ * Nur die **Spitze** wird entfernt; die Schulterpunkte bleiben (Sehne).
  */
-export function detectNotchesInPolyline(vertices: DxfPoint[]): {
+export function detectNotchesInPolyline(
+  vertices: DxfPoint[],
+  options?: NotchDetectOptions
+): {
   cleanedVertices: DxfPoint[]
   notches: DetectedNotch[]
 } {
-  if (vertices.length < 5) return { cleanedVertices: [...vertices], notches: [] }
+  const shortMax = options?.shortSegmentMaxMm ?? DEFAULT_SHORT_MAX_MM
+  const minAng = options?.minAngleDeg ?? DEFAULT_MIN_ANGLE_DEG
+
+  const work = buildRingVertices(vertices, options)
+  const ringMode = isRingMode(vertices, work, options)
+
+  if (work.length < 5) return { cleanedVertices: [...vertices], notches: [] }
 
   const notches: DetectedNotch[] = []
-  const toRemove = new Set<number>()
+  const tipIndices = new Set<number>()
 
-  for (let i = 1; i < vertices.length - 1; i++) {
-    const pPrev = vertices[i - 1]
-    const pTip = vertices[i]
-    const pNext = vertices[i + 1]
+  if (ringMode && work.length >= 4) {
+    const polyArea = signedPolygonArea(work)
+    if (Math.abs(polyArea) < 1e-6) return { cleanedVertices: [...vertices], notches: [] }
 
-    const seg1 = dist(pPrev, pTip)
-    const seg2 = dist(pTip, pNext)
-    const v1x = pTip.x - pPrev.x
-    const v1y = pTip.y - pPrev.y
-    const v2x = pNext.x - pTip.x
-    const v2y = pNext.y - pTip.y
-    const ang = angleBetweenDeg(v1x, v1y, v2x, v2y)
-
-    if (seg1 < SHORT_THRESH && seg2 < SHORT_THRESH && ang > ANGLE_THRESH) {
-      if (isExternalIndentation(pPrev, pTip, pNext, vertices)) {
-        toRemove.add(i - 1)
-        toRemove.add(i)
-        toRemove.add(i + 1)
-
-        const midX = (pPrev.x + pNext.x) / 2
-        const midY = (pPrev.y + pNext.y) / 2
-        const position: Point = { x: midX, y: midY }
-
-        const inwardAngle = Math.atan2(pTip.y - midY, pTip.x - midX)
-        const angle = (inwardAngle * 180) / Math.PI
-
-        const depth = dist({ x: midX, y: midY }, pTip)
-        const width = dist(pPrev, pNext)
-
-        notches.push({
-          position,
-          angle,
-          depth: Math.max(1.5, Math.min(5, depth)),
-          width: Math.max(2, Math.min(6, width)),
-        })
-
+    const n = work.length
+    let i = 0
+    while (i < n) {
+      const iPrev = (i - 1 + n) % n
+      const iNext = (i + 1) % n
+      const detected = tryDetectNotchAtTip(work[iPrev], work[i], work[iNext], shortMax, minAng, polyArea)
+      if (detected) {
+        tipIndices.add(i)
+        notches.push(detected)
         i += 2
+      } else {
+        i++
       }
+    }
+
+    const cleanedRing = work.filter((_, idx) => !tipIndices.has(idx))
+    const cleanedVertices = restoreClosingVertex(vertices, cleanedRing)
+    return { cleanedVertices, notches }
+  }
+
+  let i = 1
+  while (i < work.length - 1) {
+    const detected = tryDetectNotchAtTip(work[i - 1], work[i], work[i + 1], shortMax, minAng, null)
+    if (detected) {
+      tipIndices.add(i)
+      notches.push(detected)
+      i += 2
+    } else {
+      i++
     }
   }
 
-  const cleanedVertices = vertices.filter((_, idx) => !toRemove.has(idx))
+  const cleanedVertices = work.filter((_, idx) => !tipIndices.has(idx))
   return { cleanedVertices, notches }
+}
+
+/** Wenn Original einen Schließpunkt hatte, denselben Stil am Ende wieder anfügen. */
+function restoreClosingVertex(original: DxfPoint[], cleanedRing: DxfPoint[]): DxfPoint[] {
+  if (original.length < 2) return cleanedRing
+  const hadDup =
+    dist(original[0], original[original.length - 1]) < CLOSE_EPS && original.length >= 4
+  if (!hadDup || cleanedRing.length === 0) return cleanedRing
+  return [...cleanedRing, { ...cleanedRing[0] }]
 }

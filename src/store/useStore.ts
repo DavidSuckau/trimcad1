@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type {
   Workspace,
+  WorkspaceNote,
   PatternPiece,
   ViewState,
   Point,
@@ -222,6 +223,7 @@ type Tool =
   | 'kante'
   | 'massstab'
   | 'digitize'
+  | 'note'
 
 /** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
 type ImageDigitizeSession = {
@@ -258,6 +260,8 @@ type Store = {
   showPieceNames: boolean
   /** Bogenlängen entlang der Schnittkontur (Ecke↔Ecke, Kerbe↔Kerbe, …) auf allen Teilen. */
   showContourMeasurements: boolean
+  /** Workspace-Notizzettel ein-/ausblenden (Daten bleiben erhalten). */
+  showWorkspaceNotes: boolean
   rulerMode: boolean
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
@@ -277,6 +281,12 @@ type Store = {
   dxfImportExtraCutLayers: string
   /** Globaler Faktor für DXF-Import nach Unit-Erkennung (z. B. 10 bei 10x zu klein). */
   dxfImportScale: number
+  /** V-Kerben in der importierten Polyligne erkennen (Standard: an). */
+  dxfImportDetectVNotches: boolean
+  /** Nahtlinie beim DXF-Import erzeugen, wenn die Datei keine Naht-Polyline enthält. */
+  dxfImportCreateSeamLine: boolean
+  /** Nahtzugabe (mm) für „Nahtlinie beim Import erzeugen“. */
+  dxfImportSeamAllowanceMm: number
   notchSettings: NotchSetting[]
   toastMessage: string | null
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
@@ -308,6 +318,7 @@ type Store = {
   setShowInternalLines: (v: boolean) => void
   setShowPieceNames: (v: boolean) => void
   setShowContourMeasurements: (v: boolean) => void
+  setShowWorkspaceNotes: (v: boolean) => void
   setRulerMode: (v: boolean) => void
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
@@ -331,6 +342,9 @@ type Store = {
   setDxfExportScale: (v: number) => void
   setDxfImportExtraCutLayers: (v: string) => void
   setDxfImportScale: (v: number) => void
+  setDxfImportDetectVNotches: (v: boolean) => void
+  setDxfImportCreateSeamLine: (v: boolean) => void
+  setDxfImportSeamAllowanceMm: (v: number) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
@@ -427,6 +441,11 @@ type Store = {
   /** Teilfelder der Arbeitsfläche (Metadaten, Name, …). */
   updateWorkspace: (patch: Partial<Workspace>) => void
 
+  /** Freie Notiz auf der Arbeitsfläche (mm); liefert die neue ID. */
+  addWorkspaceNote: (position: Point) => string
+  updateWorkspaceNote: (id: string, partial: Partial<Pick<WorkspaceNote, 'position' | 'text'>>) => void
+  removeWorkspaceNote: (id: string) => void
+
   /** Gespeicherte TrimTex-JSON-Projektdatei laden (ersetzt Arbeitsfläche, DXF-Einstellungen, Kerben-Voreinstellungen, ggf. Hintergrundbild). */
   loadProjectFromFile: (project: TrimTexProjectFileV1, opts?: { projectFileName?: string }) => void
 
@@ -512,6 +531,7 @@ export const useStore = create<Store>((set, get) => ({
     pieces: [createDefaultPiece('p1', '001')],
     view: defaultView,
     seamAssignments: [],
+    notes: [],
   },
   selectedPieceIds: ['p1'],
   selectedPoint: null,
@@ -524,6 +544,7 @@ export const useStore = create<Store>((set, get) => ({
   showInternalLines: true,
   showPieceNames: true,
   showContourMeasurements: false,
+  showWorkspaceNotes: true,
   rulerMode: false,
   rulerLine: null,
   pendingNahtzugabeClick: false,
@@ -538,6 +559,9 @@ export const useStore = create<Store>((set, get) => ({
   dxfExportScale: 1,
   dxfImportExtraCutLayers: '',
   dxfImportScale: 1,
+  dxfImportDetectVNotches: true,
+  dxfImportCreateSeamLine: false,
+  dxfImportSeamAllowanceMm: 8,
   toastMessage: null,
   seamAdjustmentDialog: null,
   seamAssignmentMetaDialogId: null,
@@ -608,11 +632,16 @@ export const useStore = create<Store>((set, get) => ({
             next.seamLine = seamLine
             next.cutLine = derived.cutLine
             next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
-            const newCut = derived.cutLine
-            const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, newCut, p.softVertices)
-            next.softVertices = mappedSoft
-            // Außenkontur hat oft spitze Winkel → applySharpCornerPromotion würde Remap wieder entfernen
-            return forceCutVerticesSoftAfterPromotion(next, mappedSoft)
+            const migratedSoftMaster = [...new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < seamLine.length))].sort((a, b) => a - b)
+            next.softVerticesMaster = migratedSoftMaster
+            // Beim Wechsel auf Seam-as-Master sind bisherige Soft-Vertices semantisch Master-Vertices.
+            // Cut-Soft wird geleert, um doppelte/mehrdeutige Mapping-Effekte (winkelabhängig) zu vermeiden.
+            next.softVertices = []
+            const preserveCut = migratedSoftMaster
+              .map((mvi) => mapMasterVertexIndexToCutVertexIndex(next, mvi))
+              .filter((x): x is number => x != null)
+            // Außenkontur hat oft spitze Winkel → applySharpCornerPromotion würde Softs sonst wieder entfernen.
+            return forceCutVerticesSoftAfterPromotion(next, preserveCut)
           }
         } else {
           next.seamLine = []
@@ -663,7 +692,7 @@ export const useStore = create<Store>((set, get) => ({
 
   setBatchUiHighlightForFiltered: (color) =>
     set((s) => {
-      const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter)
+      const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter, s.workspace.pieces)
       const next = { ...s.batchUiHighlightByTargetId }
       for (const t of filtered) {
         const k = batchTargetKey(t)
@@ -677,7 +706,7 @@ export const useStore = create<Store>((set, get) => ({
 
   batchSetVerticesSoft: (soft) => {
     const s = get()
-    const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter)
+    const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter, s.workspace.pieces)
     for (const t of filtered) {
       if (t.kind === 'vertex') get().setVertexSoft(t.pieceId, t.vertexIndex, soft)
     }
@@ -685,7 +714,7 @@ export const useStore = create<Store>((set, get) => ({
 
   batchDeleteFiltered: () => {
     const s = get()
-    const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter)
+    const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter, s.workspace.pieces)
     type G = {
       vertices: number[]
       notches: string[]
@@ -733,6 +762,7 @@ export const useStore = create<Store>((set, get) => ({
   setShowInternalLines: (v) => set({ showInternalLines: v }),
   setShowPieceNames: (v) => set({ showPieceNames: v }),
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
+  setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
@@ -832,6 +862,9 @@ export const useStore = create<Store>((set, get) => ({
   setDxfExportScale: (v) => set({ dxfExportScale: v }),
   setDxfImportExtraCutLayers: (v) => set({ dxfImportExtraCutLayers: v }),
   setDxfImportScale: (v) => set({ dxfImportScale: v }),
+  setDxfImportDetectVNotches: (v) => set({ dxfImportDetectVNotches: v }),
+  setDxfImportCreateSeamLine: (v) => set({ dxfImportCreateSeamLine: v }),
+  setDxfImportSeamAllowanceMm: (v) => set({ dxfImportSeamAllowanceMm: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
     set((s) => {
@@ -1559,6 +1592,7 @@ export const useStore = create<Store>((set, get) => ({
         if (p.id !== pieceId || p.cutLine.length < 3) return p
         const oldCut = p.cutLine
         const sourceInner = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
+        const migratingFromCutMaster = !(p.seamLine.length >= 3 && p.seamAllowanceMm != null)
         const seamLine = cloneCurvesArray(sourceInner)
         const derived = deriveCutLineFromSeamWithValidation(seamLine, deltaMm)
         if (!derived.ok) {
@@ -1568,6 +1602,22 @@ export const useStore = create<Store>((set, get) => ({
         const cutLine = derived.cutLine
         const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
         const notches = p.notches.map((n) => ({ ...n, vertexIndex: undefined }))
+        if (migratingFromCutMaster) {
+          const migratedSoftMaster = [...new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < seamLine.length))].sort((a, b) => a - b)
+          const nextPiece = {
+            ...p,
+            cutLine,
+            seamLine,
+            seamAllowanceMm: deltaMm,
+            notches,
+            softVertices: [],
+            softVerticesMaster: migratedSoftMaster,
+          }
+          const preserveCut = migratedSoftMaster
+            .map((mvi) => mapMasterVertexIndexToCutVertexIndex(nextPiece, mvi))
+            .filter((x): x is number => x != null)
+          return forceCutVerticesSoftAfterPromotion(nextPiece, preserveCut)
+        }
         return forceCutVerticesSoftAfterPromotion(
           { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches, softVertices: mappedSoft },
           mappedSoft
@@ -2374,6 +2424,33 @@ export const useStore = create<Store>((set, get) => ({
       workspace: { ...s.workspace, ...patch },
     })),
 
+  addWorkspaceNote: (position) => {
+    const id = generateId()
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        notes: [...(s.workspace.notes ?? []), { id, position: { ...position }, text: '' }],
+      },
+    }))
+    return id
+  },
+
+  updateWorkspaceNote: (id, partial) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        notes: (s.workspace.notes ?? []).map((n) => (n.id === id ? { ...n, ...partial } : n)),
+      },
+    })),
+
+  removeWorkspaceNote: (id) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        notes: (s.workspace.notes ?? []).filter((n) => n.id !== id),
+      },
+    })),
+
   loadProjectFromFile: (project, opts) => {
     const notchSettings = Array.from({ length: 10 }, (_, i) => {
       const n = project.notchSettings[i]
@@ -2387,10 +2464,13 @@ export const useStore = create<Store>((set, get) => ({
         ? { ...project.workspace, projectFileName: opts.projectFileName }
         : project.workspace
     set({
-      workspace: ws,
+      workspace: { ...ws, notes: ws.notes ?? [] },
       dxfExportScale: project.dxfExportScale,
       dxfImportExtraCutLayers: project.dxfImportExtraCutLayers,
       dxfImportScale: project.dxfImportScale,
+      dxfImportDetectVNotches: project.dxfImportDetectVNotches,
+      dxfImportCreateSeamLine: project.dxfImportCreateSeamLine,
+      dxfImportSeamAllowanceMm: project.dxfImportSeamAllowanceMm,
       notchSettings,
       imageDigitizeSession: project.imageDigitizeSession,
       workspaceImageSelected: Boolean(project.imageDigitizeSession?.imageDataUrl),

@@ -135,6 +135,13 @@ export type SeamAssignment = {
   seamKind?: SeamAssignmentKindId | null
 }
 
+/** Editor-Notiz auf der Arbeitsfläche (mm); kein DXF-Export. */
+export type WorkspaceNote = {
+  id: string
+  position: Point
+  text: string
+}
+
 export type Workspace = {
   id: string
   name: string
@@ -142,6 +149,8 @@ export type Workspace = {
   view: ViewState
   /** Nahtzuordnungen (welche Naht an welcher zusammennähen). Nur für die Ansicht, nicht DXF-Export. */
   seamAssignments: SeamAssignment[]
+  /** Freie Notizzettel (nur Editor, nicht DXF-Export). */
+  notes?: WorkspaceNote[]
   /** Zuletzt gespeicherter oder geladener Projektdateiname (Anzeige Stückliste). */
   projectFileName?: string
   /** Stückliste: Dokumentversion (frei). */
@@ -155,8 +164,18 @@ export type Workspace = {
 export const DXF_LAYERS = ['CUT', 'SEAM', 'NOTCH', 'DRILL', 'GRAIN', 'TEXT'] as const
 export type DxfLayer = (typeof DXF_LAYERS)[number]
 
-/** Fensterauswahl: Filter für Batch-Aktionen (nur UI, nicht exportiert). */
-export type BatchSelectionFilter = 'all' | 'vertices' | 'notches' | 'curvePoints' | 'internalLines'
+/**
+ * Fensterauswahl: Filter für Batch-Aktionen (nur UI, nicht exportiert).
+ * `softVertices` / `hardVertices`: nur weiche (blau) bzw. feste (rot) Konturpunkte.
+ */
+export type BatchSelectionFilter =
+  | 'all'
+  | 'vertices'
+  | 'softVertices'
+  | 'hardVertices'
+  | 'notches'
+  | 'curvePoints'
+  | 'internalLines'
 
 /** Einzelziel der Fensterauswahl (Teil + geometrische Referenz). */
 export type BatchSelectionTarget =

@@ -23,6 +23,12 @@ export function SettingsModal() {
     setDxfImportExtraCutLayers,
     dxfImportScale,
     setDxfImportScale,
+    dxfImportDetectVNotches,
+    setDxfImportDetectVNotches,
+    dxfImportCreateSeamLine,
+    setDxfImportCreateSeamLine,
+    dxfImportSeamAllowanceMm,
+    setDxfImportSeamAllowanceMm,
   } = useStore()
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
 
@@ -155,6 +161,41 @@ export function SettingsModal() {
                 <p style={{ fontSize: '11px', color: '#999', margin: '0' }}>
                   Wenn die Schnittkontur in der DXF-Datei auf einem anderen Layer liegt als die Standard-Layer (CUT),
                   hier die exakten Namen eintragen. Siehe auch docs/DXF-IMPORT-FREMDSYSTEME.md.
+                </p>
+                <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+                  <input
+                    type="checkbox"
+                    checked={dxfImportDetectVNotches}
+                    onChange={(e) => setDxfImportDetectVNotches(e.target.checked)}
+                  />
+                  V-Kerben aus Kontur erkennen
+                </label>
+                <label style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={dxfImportCreateSeamLine}
+                    onChange={(e) => setDxfImportCreateSeamLine(e.target.checked)}
+                  />
+                  Nahtlinie beim Import erzeugen (wenn die DXF keine Naht-Polyline enthält)
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '6px' }}>
+                  <span style={{ fontSize: '13px' }}>Nahtzugabe (mm)</span>
+                  <input
+                    type="number"
+                    style={{ width: '100px', padding: '4px 6px', fontSize: '13px' }}
+                    min={0.1}
+                    step={0.5}
+                    disabled={!dxfImportCreateSeamLine}
+                    value={dxfImportSeamAllowanceMm}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      if (v > 0) setDxfImportSeamAllowanceMm(v)
+                    }}
+                  />
+                </div>
+                <p style={{ fontSize: '11px', color: '#999', margin: '4px 0 0' }}>
+                  Nahtlinie: Offset nach innen aus der Schnittkontur; die Schnittkontur wird für die Seam-as-Master-Logik
+                  aus der Naht neu abgeleitet (Clipper kann geringfügig von der importierten Polylinie abweichen).
                 </p>
               </div>
             </div>

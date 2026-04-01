@@ -1,4 +1,13 @@
-import type { Point, Workspace, PatternPiece, Curve, ViewState, SeamAssignment, SeamAssignmentKindId } from '../types/model'
+import type {
+  Point,
+  Workspace,
+  WorkspaceNote,
+  PatternPiece,
+  Curve,
+  ViewState,
+  SeamAssignment,
+  SeamAssignmentKindId,
+} from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 
@@ -29,6 +38,9 @@ export type TrimTexProjectFileV1 = {
   dxfExportScale: number
   dxfImportExtraCutLayers: string
   dxfImportScale: number
+  dxfImportDetectVNotches: boolean
+  dxfImportCreateSeamLine: boolean
+  dxfImportSeamAllowanceMm: number
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
 }
@@ -160,6 +172,25 @@ function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
   return out
 }
 
+function normalizeWorkspaceNotes(raw: unknown): WorkspaceNote[] {
+  if (!Array.isArray(raw)) return []
+  const out: WorkspaceNote[] = []
+  for (const n of raw) {
+    if (typeof n !== 'object' || n === null) continue
+    const o = n as Record<string, unknown>
+    if (typeof o.id !== 'string') continue
+    const pos = o.position
+    if (!isPoint(pos)) continue
+    const text = typeof o.text === 'string' ? o.text : ''
+    out.push({
+      id: o.id,
+      position: { x: pos.x, y: pos.y },
+      text,
+    })
+  }
+  return out
+}
+
 export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
   const pieces = Array.isArray(w.pieces) ? w.pieces.map((p) => normalizePiece(p as PatternPiece)) : []
   const view = isViewState(w.view) ? w.view : { zoom: 1, panX: 0, panY: 0 }
@@ -169,6 +200,7 @@ export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
     pieces,
     view,
     seamAssignments: normalizeSeamAssignments(w.seamAssignments),
+    notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes),
     ...(typeof w.projectFileName === 'string' ? { projectFileName: w.projectFileName } : {}),
     ...(typeof w.bomDocumentVersion === 'string' ? { bomDocumentVersion: w.bomDocumentVersion } : {}),
     ...(typeof w.bomDeveloperName === 'string' ? { bomDeveloperName: w.bomDeveloperName } : {}),
@@ -181,6 +213,9 @@ export function buildTrimTexProjectFile(args: {
   dxfExportScale: number
   dxfImportExtraCutLayers: string
   dxfImportScale: number
+  dxfImportDetectVNotches: boolean
+  dxfImportCreateSeamLine: boolean
+  dxfImportSeamAllowanceMm: number
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
 }): TrimTexProjectFileV1 {
@@ -193,6 +228,9 @@ export function buildTrimTexProjectFile(args: {
     dxfExportScale: args.dxfExportScale,
     dxfImportExtraCutLayers: args.dxfImportExtraCutLayers,
     dxfImportScale: args.dxfImportScale,
+    dxfImportDetectVNotches: args.dxfImportDetectVNotches,
+    dxfImportCreateSeamLine: args.dxfImportCreateSeamLine,
+    dxfImportSeamAllowanceMm: args.dxfImportSeamAllowanceMm,
     notchSettings: args.notchSettings.map((n) => ({ ...n })),
     imageDigitizeSession: args.imageDigitizeSession
       ? { ...args.imageDigitizeSession, imageSizePx: args.imageDigitizeSession.imageSizePx ? { ...args.imageDigitizeSession.imageSizePx } : null }
@@ -250,6 +288,14 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
   const dxfImportExtraCutLayers = typeof o.dxfImportExtraCutLayers === 'string' ? o.dxfImportExtraCutLayers : ''
   const dxfImportScale =
     typeof o.dxfImportScale === 'number' && Number.isFinite(o.dxfImportScale) && o.dxfImportScale > 0 ? o.dxfImportScale : 1
+  const dxfImportDetectVNotches = o.dxfImportDetectVNotches === false ? false : true
+  const dxfImportCreateSeamLine = Boolean(o.dxfImportCreateSeamLine)
+  const dxfImportSeamAllowanceMm =
+    typeof o.dxfImportSeamAllowanceMm === 'number' &&
+    Number.isFinite(o.dxfImportSeamAllowanceMm) &&
+    o.dxfImportSeamAllowanceMm > 0
+      ? o.dxfImportSeamAllowanceMm
+      : 8
 
   let imageDigitizeSession: TrimTexProjectImageSession | null = null
   if (o.imageDigitizeSession !== undefined && o.imageDigitizeSession !== null) {
@@ -287,6 +333,9 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     dxfExportScale,
     dxfImportExtraCutLayers,
     dxfImportScale,
+    dxfImportDetectVNotches,
+    dxfImportCreateSeamLine,
+    dxfImportSeamAllowanceMm,
     notchSettings: notchSettings.length >= 10 ? notchSettings : Array.from({ length: 10 }, (_, i) => notchSettings[i] ?? { type: 'strich', widthMm: 6, depthMm: 4 }),
     imageDigitizeSession,
   }

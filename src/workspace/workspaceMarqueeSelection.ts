@@ -4,6 +4,7 @@ import { bezierAt } from '../geometry/curveToPath'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
 import { seamVertexNearProjectedNotch } from '../geometry/notchResyncCutLine'
 import { pieceLocalToWorld } from '../geometry/pieceTransform'
+import { masterSoftVertexIndexSet } from '../geometry/seamUtils'
 import { useSeamLineForPointCurveEditing, useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 
 export type WorldRect = { minX: number; minY: number; maxX: number; maxY: number }
@@ -23,16 +24,32 @@ export function batchTargetKey(t: BatchSelectionTarget): string {
 
 export function filterBatchTargets(
   targets: BatchSelectionTarget[],
-  filter: BatchSelectionFilter
+  filter: BatchSelectionFilter,
+  pieces?: PatternPiece[]
 ): BatchSelectionTarget[] {
   if (filter === 'all') return targets
-  const map: Record<Exclude<BatchSelectionFilter, 'all'>, BatchSelectionTarget['kind']> = {
+
+  if (filter === 'softVertices' || filter === 'hardVertices') {
+    if (!pieces?.length) return []
+    const byId = new Map(pieces.map((p) => [p.id, p]))
+    const wantSoft = filter === 'softVertices'
+    return targets.filter((t) => {
+      if (t.kind !== 'vertex') return false
+      const piece = byId.get(t.pieceId)
+      if (!piece) return false
+      const soft = masterSoftVertexIndexSet(piece).has(t.vertexIndex)
+      return wantSoft ? soft : !soft
+    })
+  }
+
+  const kindByFilter: Partial<Record<BatchSelectionFilter, BatchSelectionTarget['kind']>> = {
     vertices: 'vertex',
     notches: 'notch',
     curvePoints: 'curvePoint',
     internalLines: 'internalLine',
   }
-  const want = map[filter]
+  const want = kindByFilter[filter]
+  if (want == null) return targets
   return targets.filter((t) => t.kind === want)
 }
 
