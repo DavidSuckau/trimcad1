@@ -17,6 +17,51 @@ function square(size: number): Curve[] {
   ]
 }
 
+function roundedSquareBezier(size: number): Curve[] {
+  // 4 Cubic Beziers (CCW), bewusst gekrümmt, damit der Offset beim Nahtzugabe-Apply typischerweise
+  // die Segmentanzahl ändert (vereinfachen/flatten), was genau den Edge-Case triggert.
+  const bulge = size * 0.2
+  const x0 = 0
+  const y0 = 0
+  const x1 = size
+  const y1 = size
+
+  return [
+    // bottom: (x0,y0) -> (x1,y0)
+    {
+      type: 'bezier',
+      start: { x: x0, y: y0 },
+      end: { x: x1, y: y0 },
+      cp1: { x: x0 + 0.33 * size, y: y0 - bulge },
+      cp2: { x: x0 + 0.66 * size, y: y0 - bulge },
+    },
+    // right: (x1,y0) -> (x1,y1)
+    {
+      type: 'bezier',
+      start: { x: x1, y: y0 },
+      end: { x: x1, y: y1 },
+      cp1: { x: x1 + bulge, y: y0 + 0.33 * size },
+      cp2: { x: x1 + bulge, y: y0 + 0.66 * size },
+    },
+    // top: (x1,y1) -> (x0,y1)
+    {
+      type: 'bezier',
+      start: { x: x1, y: y1 },
+      end: { x: x0, y: y1 },
+      cp1: { x: x1 - 0.33 * size, y: y1 + bulge },
+      cp2: { x: x1 - 0.66 * size, y: y1 + bulge },
+    },
+    // left: (x0,y1) -> (x0,y0)
+    {
+      type: 'bezier',
+      start: { x: x0, y: y1 },
+      end: { x: x0, y: y0 },
+      cp1: { x: x0 - bulge, y: y1 - 0.33 * size },
+      cp2: { x: x0 - bulge, y: y1 - 0.66 * size },
+    },
+  ]
+}
+
 describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
   beforeEach(() => {
     const cutLine = square(100)
@@ -61,6 +106,112 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     if (outer.type === 'line') {
       expect(Math.hypot(outer.end.x - outer.start.x, outer.end.y - outer.start.y)).toBeGreaterThan(100)
     }
+  })
+
+  it('verankerte Kerbe bleibt verankert bei erster Nahtzugabe (kein extra roter Punkt)', () => {
+    const cutLine = square(120)
+    useStore.setState({
+      workspace: {
+        id: 'ws-notch-seam',
+        name: 'Test',
+        pieces: [
+          {
+            id: 'p1',
+            number: '001',
+            name: 'Teil 001',
+            cutLine,
+            seamLine: [],
+            seamAllowanceMm: null,
+            notches: [
+              {
+                id: 'n1',
+                // Ecke vi=2 (= square[size,size]) - wir setzen bewusst vertexIndex als "verankert".
+                position: { x: 120, y: 120 },
+                angle: 0,
+                type: 'single',
+                depth: 4,
+                vertexIndex: 2,
+              },
+            ],
+            drills: [],
+            grainLine: null,
+            internalLines: [],
+            layer: 'CUT',
+            transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+            softVertices: [],
+            fillInterior: true,
+            material: '',
+            bomQuantity: 1,
+          },
+        ],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+      },
+      selectedPieceIds: ['p1'],
+    })
+
+    useStore.getState().updatePiece('p1', { seamAllowanceMm: 10 })
+    const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p1')!
+
+    expect(p.notches).toHaveLength(1)
+    expect(p.notches[0].vertexIndex).toBe(2)
+    // Wenn das klappt, wird diese Ecke in der UI nicht mehr als "zusätzlicher" harter roter Punkt gezeichnet.
+    expect(masterNotchVertexIndexSet(p).has(2)).toBe(true)
+  })
+
+  it('verankerte Kerbe bleibt verankert auch wenn Offset die Segmentanzahl ändert', () => {
+    const size = 120
+    const cutLine = roundedSquareBezier(size)
+    useStore.setState({
+      workspace: {
+        id: 'ws-notch-seam-curve',
+        name: 'Test',
+        pieces: [
+          {
+            id: 'p1',
+            number: '001',
+            name: 'Teil 001',
+            cutLine,
+            seamLine: [],
+            seamAllowanceMm: null,
+            notches: [
+              {
+                id: 'n1',
+                // vertexIndex 1 => Startpunkt von Segment 1 (= Ecke bei (size,0))
+                position: { x: size, y: 0 },
+                angle: 0,
+                type: 'single',
+                depth: 4,
+                vertexIndex: 1,
+              },
+            ],
+            drills: [],
+            grainLine: null,
+            internalLines: [],
+            layer: 'CUT',
+            transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+            softVertices: [],
+            fillInterior: true,
+            material: '',
+            bomQuantity: 1,
+          },
+        ],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+      },
+      selectedPieceIds: ['p1'],
+    })
+
+    useStore.getState().updatePiece('p1', { seamAllowanceMm: 10 })
+    const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p1')!
+    expect(p.notches).toHaveLength(1)
+
+    const notch = p.notches[0]
+    expect(notch.vertexIndex).not.toBeUndefined()
+
+    const vi = notch.vertexIndex!
+    const expectedPos = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
+    expect(Math.hypot(notch.position.x - expectedPos.x, notch.position.y - expectedPos.y)).toBeLessThan(1e-6)
   })
 
   it('behält weiche Punkte auf der Außenkontur nach erster Nahtzugabe (nicht rot durch Sharp-Corner-Promotion)', () => {

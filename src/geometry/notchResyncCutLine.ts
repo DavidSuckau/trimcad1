@@ -26,8 +26,30 @@ export function resyncNotchesAfterCutLineRebuilt(
   newCutLine: Curve[]
 ): Notch[] {
   if (newCutLine.length === 0) return notches
+  const oldLen = oldCutLine.length
+  const newLen = newCutLine.length
   return notches.map((notch) => {
+    const hadVertexIndex = notch.vertexIndex != null
     const oldPos = getNotchPositionAndAngle(notch, oldCutLine).position
+
+    /**
+     * Wichtiger Spezialfall:
+     * Wenn die Vertex-Anzahl erhalten bleibt (Offset/Nahtzugabe mit gleicher Topologie),
+     * dann soll eine zuvor verankerte Kerbe auch nach dem Rebuild wieder als verankert gelten,
+     * damit die UI-Eckpunkt-Ausblendung zuverlässig funktioniert (masterNotchVertexIndexSet).
+     *
+     * Ansonsten wird die Kerbe ggf. "frei" (vertexIndex = undefined), weil die geometrische Distanz
+     * Cut→(neu)Cut durch den Offset größer als `VERTEX_ANCHOR_DIST_MM` ist.
+     * Die (topologische) Korrektheit ist hier wichtiger als das strikte t≈0/1 Kriterium.
+     */
+    if (hadVertexIndex && oldLen === newLen && notch.vertexIndex != null) {
+      // Bei erhaltener Topologie (gleiche Vertex-Anzahl) ist die Indexbasis stabil genug,
+      // um die verankerte Kerbe auch nach dem Rebuild wieder als verankert zu behandeln.
+      const vi = ((notch.vertexIndex % newLen) + newLen) % newLen
+      const pos = vi === 0 ? { ...newCutLine[0].start } : { ...newCutLine[vi - 1].end }
+      return { ...notch, vertexIndex: vi, position: pos, angle: notch.angle }
+    }
+
     const nr = nearestCurveIndexAndPoint(oldPos, newCutLine)
     if (!nr) {
       return { ...notch, vertexIndex: undefined }
@@ -38,13 +60,20 @@ export function resyncNotchesAfterCutLineRebuilt(
     if (t <= VERTEX_ANCHOR_T_EPS) {
       const vi = nr.curveIndex
       const vPt = newCutLine[vi].start
-      if (Math.hypot(nr.point.x - vPt.x, nr.point.y - vPt.y) <= VERTEX_ANCHOR_DIST_MM) {
+      // Wenn die Kerbe vorher explizit an einer Ecke verankert war, soll sie
+      // bei Nahtzugabe (Offset) nicht "unanchor'ed" werden, nur weil die Euclid-Distanz
+      // alt->neu groß ist. Dann reicht die parametrische Ecke-Nähe (t) als Kriterium.
+      if (hadVertexIndex) {
+        vertexIndex = vi
+      } else if (Math.hypot(nr.point.x - vPt.x, nr.point.y - vPt.y) <= VERTEX_ANCHOR_DIST_MM) {
         vertexIndex = vi
       }
     } else if (t >= 1 - VERTEX_ANCHOR_T_EPS) {
       const vi = (nr.curveIndex + 1) % newCutLine.length
       const vPt = vi === 0 ? newCutLine[0].start : newCutLine[vi - 1].end
-      if (Math.hypot(nr.point.x - vPt.x, nr.point.y - vPt.y) <= VERTEX_ANCHOR_DIST_MM) {
+      if (hadVertexIndex) {
+        vertexIndex = vi
+      } else if (Math.hypot(nr.point.x - vPt.x, nr.point.y - vPt.y) <= VERTEX_ANCHOR_DIST_MM) {
         vertexIndex = vi
       }
     }
@@ -53,6 +82,24 @@ export function resyncNotchesAfterCutLineRebuilt(
       const pos =
         vertexIndex === 0 ? { ...newCutLine[0].start } : { ...newCutLine[vertexIndex - 1].end }
       return { ...notch, vertexIndex, position: pos, angle: notch.angle }
+    }
+
+    // Fallback: Wenn die Kerbe vorher explizit an einer Ecke verankert war, aber unsere
+    // Parametrik-Kriteri(en) für (t nahe 0/1) bei starken Offset/Segment-Änderungen nicht triggern,
+    // wähle trotzdem die nächstgelegene Ecke (Endpoint) der neuen cutLine als vertexIndex.
+    if (hadVertexIndex) {
+      let bestVi = 0
+      let bestD = Infinity
+      for (let vi = 0; vi < newCutLine.length; vi++) {
+        const vPt = vi === 0 ? newCutLine[0].start : newCutLine[vi - 1].end
+        const d = Math.hypot(oldPos.x - vPt.x, oldPos.y - vPt.y)
+        if (d < bestD) {
+          bestD = d
+          bestVi = vi
+        }
+      }
+      const pos = bestVi === 0 ? { ...newCutLine[0].start } : { ...newCutLine[bestVi - 1].end }
+      return { ...notch, vertexIndex: bestVi, position: pos, angle: notch.angle }
     }
 
     const angle = outwardNormalAngleAt(newCutLine, nr.curveIndex, t) + 180
