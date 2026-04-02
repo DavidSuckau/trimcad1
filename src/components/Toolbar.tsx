@@ -96,6 +96,8 @@ export function Toolbar() {
     createConfiguratorInstance,
     setShowConfiguratorModal,
     setShowRockGeneratorModal,
+    batchSelectionTargets,
+    batchDeleteMarqueeCompletePieces,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
@@ -707,6 +709,30 @@ export function Toolbar() {
                 </button>
               </li>
               <li className="menubar-separator" />
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    const n = batchSelectionTargets.filter((t) => t.kind === 'piece').length
+                    if (n === 0) {
+                      batchDeleteMarqueeCompletePieces()
+                      closeMenu()
+                      return
+                    }
+                    const msg =
+                      n === 1
+                        ? 'Ein komplett erfasstes Teil aus der Fensterauswahl wirklich löschen?'
+                        : `${n} komplett erfasste Teile aus der Fensterauswahl wirklich löschen?`
+                    if (window.confirm(msg)) {
+                      batchDeleteMarqueeCompletePieces()
+                    }
+                    closeMenu()
+                  }}
+                >
+                  Komplette Teile löschen (Fensterauswahl)
+                </button>
+              </li>
               <li>
                 <button
                   type="button"

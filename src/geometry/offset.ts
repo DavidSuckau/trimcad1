@@ -207,8 +207,14 @@ function reverseCurves(curves: Curve[]): Curve[] {
  */
 /** Douglas-Peucker nach Clipper-Offset: zu klein → sehr viele fast kollineare Punkte (viele rote Eckpunkte in der UI); zu groß → echte Ecken können mitziehen. */
 const SEAM_FROM_CUT_SIMPLIFY_MM = 0.22
+/** Stärkere Vereinfachung z. B. für DXF-Import: stabilere Naht für deriveCutLineFromSeam. */
+export const SEAM_FROM_CUT_SIMPLIFY_IMPORT_MM = 0.42
 
-export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: number): Curve[] {
+export function offsetCurvesInwardForSeam(
+  cutLine: Curve[],
+  seamAllowanceMm: number,
+  simplifyToleranceMm: number = SEAM_FROM_CUT_SIMPLIFY_MM
+): Curve[] {
   if (cutLine.length === 0 || seamAllowanceMm <= 0) return []
   // Keine Vereinfachung (0), damit Ecken beim Vertex-Ziehen nicht wegfallen und das Teil nicht „verzieht“
   // Leichte Vereinfachung: reduziert künstliche „Eckpunkte“ auf glatten Naht-Verläufen
@@ -216,7 +222,7 @@ export function offsetCurvesInwardForSeam(cutLine: Curve[], seamAllowanceMm: num
   const raw = offsetCurves(cutLine, -seamAllowanceMm, {
     joinType: 'miter',
     miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
-    simplifyTolerance: SEAM_FROM_CUT_SIMPLIFY_MM,
+    simplifyTolerance: simplifyToleranceMm,
   })
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)

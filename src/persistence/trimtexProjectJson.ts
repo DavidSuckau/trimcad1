@@ -10,6 +10,8 @@ import type {
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
+import { worldToPieceLocal } from '../geometry/pieceTransform'
+import { isPointInClosedCurves } from '../geometry/pointInPolygon'
 
 export const TRIMTEX_PROJECT_FORMAT = 'trimtex-project' as const
 export const TRIMTEX_PROJECT_VERSION = 1 as const
@@ -172,9 +174,10 @@ function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
   return out
 }
 
-function normalizeWorkspaceNotes(raw: unknown): WorkspaceNote[] {
+function normalizeWorkspaceNotes(raw: unknown, pieces: PatternPiece[]): WorkspaceNote[] {
   if (!Array.isArray(raw)) return []
   const out: WorkspaceNote[] = []
+  const pieceById = new Map(pieces.map((p) => [p.id, p]))
   for (const n of raw) {
     if (typeof n !== 'object' || n === null) continue
     const o = n as Record<string, unknown>
@@ -182,11 +185,32 @@ function normalizeWorkspaceNotes(raw: unknown): WorkspaceNote[] {
     const pos = o.position
     if (!isPoint(pos)) continue
     const text = typeof o.text === 'string' ? o.text : ''
-    out.push({
-      id: o.id,
-      position: { x: pos.x, y: pos.y },
-      text,
-    })
+    const world = { x: pos.x, y: pos.y }
+
+    if (typeof o.pieceId === 'string' && pieceById.has(o.pieceId)) {
+      out.push({
+        id: o.id,
+        pieceId: o.pieceId,
+        position: { x: pos.x, y: pos.y },
+        text,
+      })
+      continue
+    }
+
+    /** Alte Projekte: position war Welt-mm, pieceId fehlte — in Teilkoordinaten übernehmen, wenn möglich. */
+    let migrated: WorkspaceNote | null = null
+    for (const p of pieces) {
+      const local = worldToPieceLocal(world, p.transform)
+      if (p.seamLine.length >= 3 && isPointInClosedCurves(local, p.seamLine)) {
+        migrated = { id: o.id, pieceId: p.id, position: local, text }
+        break
+      }
+      if (p.cutLine.length >= 3 && isPointInClosedCurves(local, p.cutLine)) {
+        migrated = { id: o.id, pieceId: p.id, position: local, text }
+        break
+      }
+    }
+    if (migrated) out.push(migrated)
   }
   return out
 }
@@ -200,7 +224,7 @@ export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
     pieces,
     view,
     seamAssignments: normalizeSeamAssignments(w.seamAssignments),
-    notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes),
+    notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes, pieces),
     ...(typeof w.projectFileName === 'string' ? { projectFileName: w.projectFileName } : {}),
     ...(typeof w.bomDocumentVersion === 'string' ? { bomDocumentVersion: w.bomDocumentVersion } : {}),
     ...(typeof w.bomDeveloperName === 'string' ? { bomDeveloperName: w.bomDeveloperName } : {}),

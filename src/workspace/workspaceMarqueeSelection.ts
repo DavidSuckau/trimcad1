@@ -2,10 +2,10 @@ import type { Curve, PatternPiece, Point } from '../types/model'
 import type { BatchSelectionFilter, BatchSelectionTarget } from '../types/model'
 import { bezierAt } from '../geometry/curveToPath'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
-import { seamVertexNearProjectedNotch } from '../geometry/notchResyncCutLine'
 import { pieceLocalToWorld } from '../geometry/pieceTransform'
-import { masterSoftVertexIndexSet } from '../geometry/seamUtils'
+import { masterNotchVertexIndexSet, masterSoftVertexIndexSet } from '../geometry/seamUtils'
 import { useSeamLineForPointCurveEditing, useSeamLineForVertexEditing } from '../geometry/vertexMaster'
+import { boundsForPieceCutLineWorld } from './workspaceOverviewBounds'
 
 export type WorldRect = { minX: number; minY: number; maxX: number; maxY: number }
 
@@ -19,6 +19,8 @@ export function batchTargetKey(t: BatchSelectionTarget): string {
       return `n:${t.pieceId}:${t.notchId}`
     case 'internalLine':
       return `il:${t.pieceId}:${t.curveIndex}`
+    case 'piece':
+      return `piece:${t.pieceId}`
   }
 }
 
@@ -47,6 +49,7 @@ export function filterBatchTargets(
     notches: 'notch',
     curvePoints: 'curvePoint',
     internalLines: 'internalLine',
+    pieces: 'piece',
   }
   const want = kindByFilter[filter]
   if (want == null) return targets
@@ -55,6 +58,14 @@ export function filterBatchTargets(
 
 function pointInWorldRect(p: Point, r: WorldRect): boolean {
   return p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY
+}
+
+/** Liegt die achsparallele Bounding-Box vollständig im Fenster (inkl. Rand)? */
+function worldRectFullyContainsBounds(
+  r: WorldRect,
+  b: { minX: number; minY: number; maxX: number; maxY: number }
+): boolean {
+  return r.minX <= b.minX && r.maxX >= b.maxX && r.minY <= b.minY && r.maxY >= b.maxY
 }
 
 function pointOnCurveSample(c: Curve, t: number): Point {
@@ -98,15 +109,21 @@ export function collectMarqueeTargets(pieces: PatternPiece[], rect: WorldRect): 
   }
 
   for (const piece of pieces) {
-    // Eckpunkte
+    const pieceBounds = boundsForPieceCutLineWorld(piece)
+    if (pieceBounds && worldRectFullyContainsBounds(rect, pieceBounds)) {
+      add({ kind: 'piece', pieceId: piece.id })
+      continue
+    }
+
+    const notchOccludedMaster = masterNotchVertexIndexSet(piece)
+
+    // Eckpunkte (Skip wie in der Darstellung: nur echte Kerben-Ecken, nicht „Kerbe in der Nähe“)
     const useSeamMaster = useSeamLineForVertexEditing(piece)
     const curvesForVertices = useSeamMaster ? piece.seamLine : piece.cutLine
     if (curvesForVertices.length > 0) {
       const n = curvesForVertices.length
       for (let vi = 0; vi < n; vi++) {
-        if (useSeamMaster && seamVertexNearProjectedNotch(piece, vi)) continue
-        /** Notch.vertexIndex ist cutLine-Ecke; vi ist bei Seam-Master ein seam-Index — nicht vergleichen (sonst werden u. a. weiche/blaue Punkte fälschlich übersprungen). */
-        if (!useSeamMaster && piece.notches.some((no) => no.vertexIndex === vi)) continue
+        if (notchOccludedMaster.has(vi)) continue
         const w = vertexWorldPosition(piece, vi, curvesForVertices)
         if (pointInWorldRect(w, rect)) {
           add({ kind: 'vertex', pieceId: piece.id, vertexIndex: vi })

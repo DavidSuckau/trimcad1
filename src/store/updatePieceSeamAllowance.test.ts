@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
-import { masterSoftVertexIndexSet } from '../geometry/seamUtils'
+import {
+  masterSoftVertexIndexSet,
+  masterNotchVertexIndexSet,
+  mapCutVertexIndexToMasterVertexIndexForVertexDrag,
+} from '../geometry/seamUtils'
+import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import type { Workspace, Curve } from '../types/model'
 
 function square(size: number): Curve[] {
@@ -134,6 +139,111 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     expect(masterSoftVertexIndexSet(p).size).toBeGreaterThan(0)
   })
 
+  it('masterNotchVertexIndexSet: verankerte Kerbe mit Nahtzugabe blendet die zugehörige Naht-Ecke (kein extra roter Punkt)', () => {
+    const inner = square(100)
+    const outer = square(130)
+    const piece: Workspace['pieces'][0] = {
+      id: 'notch-master-hide',
+      number: '098',
+      name: 'N',
+      cutLine: outer,
+      seamLine: inner,
+      seamAllowanceMm: 15,
+      notches: [
+        {
+          id: 'n1',
+          position: { x: 0, y: 0 },
+          angle: 0,
+          type: 'single',
+          depth: 4,
+          vertexIndex: 2,
+        },
+      ],
+      drills: [],
+      grainLine: null,
+      internalLines: [],
+      layer: 'CUT',
+      transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+      softVertices: [],
+      fillInterior: true,
+      material: '',
+      bomQuantity: 1,
+    }
+    expect(masterNotchVertexIndexSet(piece).has(2)).toBe(true)
+  })
+
+  it('mapCutVertexIndexToMasterVertexIndexForVertexDrag: bei Nahtzugabe gleiche Segmentzahl → 1:1 (trotz großem Abstand Cut↔Naht)', () => {
+    const inner = square(100)
+    const outer = square(130)
+    const piece: Workspace['pieces'][0] = {
+      id: 'map-drag',
+      number: '099',
+      name: 'Map',
+      cutLine: outer,
+      seamLine: inner,
+      seamAllowanceMm: 15,
+      notches: [],
+      drills: [],
+      grainLine: null,
+      internalLines: [],
+      layer: 'CUT',
+      transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+      softVertices: [],
+      fillInterior: true,
+      material: '',
+      bomQuantity: 1,
+    }
+    expect(inner.length).toBe(outer.length)
+    expect(mapCutVertexIndexToMasterVertexIndexForVertexDrag(piece, 2)).toBe(2)
+  })
+
+  it('applyOffset: Kerben werden auf die neue Schnittkontur projiziert (wie updatePiece), keine veralteten Koordinaten', () => {
+    const cutLine = square(100)
+    useStore.setState({
+      workspace: {
+        id: 'ws-notch',
+        name: 'Test',
+        pieces: [
+          {
+            id: 'p-notch',
+            number: '003',
+            name: 'Mit',
+            cutLine,
+            seamLine: [],
+            seamAllowanceMm: null,
+            notches: [
+              {
+                id: 'n1',
+                position: { x: 50, y: 0 },
+                angle: 90,
+                type: 'single',
+                depth: 4,
+              },
+            ],
+            drills: [],
+            grainLine: null,
+            internalLines: [],
+            layer: 'CUT',
+            transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+            softVertices: [],
+            fillInterior: true,
+            material: '',
+            bomQuantity: 1,
+          },
+        ],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+      },
+      selectedPieceIds: ['p-notch'],
+    })
+    useStore.getState().applyOffset('p-notch', 10)
+    const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p-notch')!
+    expect(p.notches).toHaveLength(1)
+    const nr = nearestCurveIndexAndPoint(p.notches[0].position, p.cutLine)
+    expect(nr).not.toBeNull()
+    expect(nr!.distance).toBeLessThan(0.15)
+  })
+
   it('vermeidet Überschneidung: ein einzelner Cut-Soft-Index färbt nicht mehrere Master-Eckpunkte blau', () => {
     const piece: Workspace['pieces'][0] = {
       id: 'map-overlap',
@@ -208,5 +318,55 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     expect(p.softVerticesMaster?.includes(1)).toBe(true)
     const softOnMaster = masterSoftVertexIndexSet(p)
     expect(softOnMaster.has(1)).toBe(true)
+  })
+})
+
+describe('updateNotch bei Nahtzugabe', () => {
+  it('Positionsänderung ohne vertexIndex-Feld: Kontur (cut/seam) unverändert, Verankerung wird gelöst', () => {
+    useStore.setState({
+      workspace: {
+        id: 'ws-un',
+        name: 'T',
+        pieces: [
+          {
+            id: 'p-un',
+            number: '1',
+            name: 'T',
+            cutLine: square(120),
+            seamLine: square(100),
+            seamAllowanceMm: 10,
+            notches: [
+              {
+                id: 'n1',
+                position: { x: 50, y: 0 },
+                angle: 0,
+                type: 'single',
+                depth: 4,
+                vertexIndex: 1,
+              },
+            ],
+            drills: [],
+            grainLine: null,
+            internalLines: [],
+            layer: 'CUT',
+            transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+            softVertices: [],
+            fillInterior: true,
+            material: '',
+            bomQuantity: 1,
+          },
+        ],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+      },
+    })
+    const before = useStore.getState().workspace.pieces.find((p) => p.id === 'p-un')!
+    const cl = before.cutLine.length
+    const sl = before.seamLine.length
+    useStore.getState().updateNotch('p-un', 'n1', { position: { x: 40, y: 0 }, angle: 180 })
+    const after = useStore.getState().workspace.pieces.find((p) => p.id === 'p-un')!
+    expect(after.cutLine.length).toBe(cl)
+    expect(after.seamLine.length).toBe(sl)
+    expect(after.notches[0].vertexIndex).toBeUndefined()
   })
 })

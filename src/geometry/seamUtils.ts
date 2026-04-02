@@ -47,8 +47,9 @@ export function mapMasterVertexIndexToCutVertexIndex(piece: PatternPiece, master
 
 /**
  * Cut→Master mit Distanzdeckel (z. B. Kerben/Notches): nur wenn nahe genug, sonst keine Zuordnung.
+ * Öffentlich für UI (z. B. verankerte Kerbe → gleichen Master-Eckpunkt wie Nahtlinie ziehen).
  */
-function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number): number | null {
+export function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number): number | null {
   const master = getCurvesForSeamEdge(piece)
   const cut = piece.cutLine
   if (cutVi < 0 || cutVi >= cut.length) return null
@@ -67,6 +68,36 @@ function mapCutVertexIndexToMasterVertexIndex(piece: PatternPiece, cutVi: number
     }
   }
   return best >= 0 && bestD <= MAP_CUT_TO_MASTER_EPS_MM ? best : null
+}
+
+/**
+ * Cut-Eck → Naht-Eck für **Vertex-Ziehen** (z. B. verankerte Kerbe): dieselbe logische Ecke muss trotz
+ * Nahtzugabe (großer Abstand zwischen Innen- und Außenkontur) zuordenbar sein.
+ * Bei gleicher Segmentzahl (typisch nach Offset) 1:1 per Index; sonst nächstgelegener Master-Eckpunkt.
+ */
+export function mapCutVertexIndexToMasterVertexIndexForVertexDrag(
+  piece: PatternPiece,
+  cutVi: number
+): number | null {
+  const master = getCurvesForSeamEdge(piece)
+  const cut = piece.cutLine
+  if (cutVi < 0 || cutVi >= cut.length) return null
+  if (master === cut) return cutVi < master.length ? cutVi : null
+  if (master.length === cut.length) {
+    return cutVi < master.length ? cutVi : null
+  }
+  const cutPt = vertexPositionOnClosedCurves(cut, cutVi)
+  let best = -1
+  let bestD = Infinity
+  for (let i = 0; i < master.length; i++) {
+    const p = vertexPositionOnClosedCurves(master, i)
+    const d = Math.hypot(p.x - cutPt.x, p.y - cutPt.y)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  }
+  return best >= 0 ? best : null
 }
 
 /** Alle weichen Eckpunkte auf der Schnittkontur (Cut-Indizes): eingefügte Punkte + per Master gemappte weiche Naht-Ecken. */
@@ -174,7 +205,7 @@ export function masterNotchVertexIndexSet(piece: PatternPiece): Set<number> {
     if (master === cut) {
       if (cutVi >= 0 && cutVi < master.length) out.add(cutVi)
     } else {
-      const m = mapCutVertexIndexToMasterVertexIndex(piece, cutVi)
+      const m = mapCutVertexIndexToMasterVertexIndexForVertexDrag(piece, cutVi)
       if (m != null) out.add(m)
     }
   }

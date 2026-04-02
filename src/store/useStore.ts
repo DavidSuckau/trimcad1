@@ -39,7 +39,7 @@ import {
   getEffectiveSoftVerticesCut,
   syncSoftAfterSharpCornerPromotion,
 } from '../geometry/seamUtils'
-import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
@@ -441,8 +441,8 @@ type Store = {
   /** Teilfelder der Arbeitsfläche (Metadaten, Name, …). */
   updateWorkspace: (patch: Partial<Workspace>) => void
 
-  /** Freie Notiz auf der Arbeitsfläche (mm); liefert die neue ID. */
-  addWorkspaceNote: (position: Point) => string
+  /** Notiz am Teil (lokale mm); liefert die neue ID. */
+  addWorkspaceNote: (pieceId: string, positionLocal: Point) => string
   updateWorkspaceNote: (id: string, partial: Partial<Pick<WorkspaceNote, 'position' | 'text'>>) => void
   removeWorkspaceNote: (id: string) => void
 
@@ -461,6 +461,8 @@ type Store = {
   clearBatchUiHighlight: () => void
   batchSetVerticesSoft: (soft: boolean) => void
   batchDeleteFiltered: () => void
+  /** Nur Ziele `kind: 'piece'` aus der Fensterauswahl löschen (Rahmen hat ganzes Teil erfasst). */
+  batchDeleteMarqueeCompletePieces: () => void
 }
 
 function generateId(): string {
@@ -657,7 +659,11 @@ export const useStore = create<Store>((set, get) => ({
 
   deletePiece: (id) =>
     set((s) => ({
-      workspace: { ...s.workspace, pieces: s.workspace.pieces.filter((p) => p.id !== id) },
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.filter((p) => p.id !== id),
+        notes: (s.workspace.notes ?? []).filter((n) => n.pieceId !== id),
+      },
       selectedPieceIds: s.selectedPieceIds.filter((x) => x !== id),
       piecePropertiesDialogPieceId: s.piecePropertiesDialogPieceId === id ? null : s.piecePropertiesDialogPieceId,
       nahtzugabeDialogPieceId: s.nahtzugabeDialogPieceId === id ? null : s.nahtzugabeDialogPieceId,
@@ -715,6 +721,13 @@ export const useStore = create<Store>((set, get) => ({
   batchDeleteFiltered: () => {
     const s = get()
     const filtered = filterBatchTargets(s.batchSelectionTargets, s.batchSelectionFilter, s.workspace.pieces)
+    const pieceIdsToDelete = new Set<string>()
+    for (const t of filtered) {
+      if (t.kind === 'piece') pieceIdsToDelete.add(t.pieceId)
+    }
+    for (const id of pieceIdsToDelete) {
+      get().deletePiece(id)
+    }
     type G = {
       vertices: number[]
       notches: string[]
@@ -723,6 +736,8 @@ export const useStore = create<Store>((set, get) => ({
     }
     const byPiece = new Map<string, G>()
     for (const t of filtered) {
+      if (t.kind === 'piece') continue
+      if (pieceIdsToDelete.has(t.pieceId)) continue
       if (!byPiece.has(t.pieceId)) {
         byPiece.set(t.pieceId, { vertices: [], notches: [], internalLines: [], curvePoints: [] })
       }
@@ -745,6 +760,32 @@ export const useStore = create<Store>((set, get) => ({
       for (const vi of [...new Set(g.vertices)].sort((a, b) => b - a)) {
         get().removeVertex(pieceId, vi)
       }
+    }
+    set({
+      batchSelectionTargets: [],
+      batchUiHighlightByTargetId: {},
+      batchSelectionFilter: 'all',
+    })
+  },
+
+  batchDeleteMarqueeCompletePieces: () => {
+    const s = get()
+    const ids = [
+      ...new Set(
+        s.batchSelectionTargets
+          .filter((t): t is { kind: 'piece'; pieceId: string } => t.kind === 'piece')
+          .map((t) => t.pieceId)
+      ),
+    ]
+    if (ids.length === 0) {
+      set({
+        toastMessage:
+          'warn:Keine kompletten Teile in der Fensterauswahl. Auswahlrahmen muss jedes Teil vollständig umschließen.',
+      })
+      return
+    }
+    for (const id of ids) {
+      get().deletePiece(id)
     }
     set({
       batchSelectionTargets: [],
@@ -1351,7 +1392,8 @@ export const useStore = create<Store>((set, get) => ({
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       const notch = piece?.notches.find((n) => n.id === notchId)
       const vi = notch?.vertexIndex
-      if (!piece || vi == null || piece.cutLine.length <= 3) return s
+      if (!piece || !notch || vi == null || piece.cutLine.length <= 3) return s
+      const canonicalBeforeMerge = getNotchPositionAndAngle(notch, piece.cutLine).position
       const oldN = piece.cutLine.length
       const prevIdx = (vi - 1 + oldN) % oldN
       const nextIdx = vi
@@ -1362,17 +1404,31 @@ export const useStore = create<Store>((set, get) => ({
         piece.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm) : piece.seamLine
       const notches = piece.notches.map((n) =>
         n.id === notchId
-          ? (() => { const { vertexIndex: _v, ...rest } = n; return rest })()
+          ? (() => {
+              const { vertexIndex: _v, ...rest } = n
+              const nr = nearestCurveIndexAndPoint(canonicalBeforeMerge, cutLine)
+              return nr ? { ...rest, position: { ...nr.point } } : rest
+            })()
           : n.vertexIndex != null && n.vertexIndex > vi
             ? { ...n, vertexIndex: n.vertexIndex - 1 }
             : n
       )
+      const oldCut = piece.cutLine
+      const oldSeam = piece.seamLine
+      const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, piece.softVertices)
+      const useSeamM = useSeamLineForVertexEditing(piece)
+      const softVerticesMaster =
+        useSeamM && oldSeam.length >= 3 && seamLine.length >= 3
+          ? remapSoftVerticesToNewCutLine(oldSeam, seamLine, piece.softVerticesMaster)
+          : (piece.softVerticesMaster ?? [])
       return {
         workspace: {
           ...s.workspace,
           seamAssignments: adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vi, oldN),
           pieces: s.workspace.pieces.map((p) =>
-            p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches }) : p
+            p.id === pieceId
+              ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster })
+              : p
           ),
         },
       }
@@ -1388,6 +1444,7 @@ export const useStore = create<Store>((set, get) => ({
         // Verankert → Frei: Vertex entfernen, Notch bleibt
         const vi = notch.vertexIndex
         if (piece.cutLine.length <= 3) return s
+        const canonicalBeforeMerge = getNotchPositionAndAngle(notch, piece.cutLine).position
         const oldN = piece.cutLine.length
         const prevIdx = (vi - 1 + oldN) % oldN
         const nextIdx = vi
@@ -1399,22 +1456,29 @@ export const useStore = create<Store>((set, get) => ({
         const notches = piece.notches.map((n) => {
           if (n.id === notchId) {
             const { vertexIndex: _v, ...rest } = n
-            const nr = nearestCurveIndexAndPoint(rest.position, cutLine)
+            const nr = nearestCurveIndexAndPoint(canonicalBeforeMerge, cutLine)
             return nr ? { ...rest, position: { ...nr.point } } : rest
           }
           return n.vertexIndex != null && n.vertexIndex > vi
             ? { ...n, vertexIndex: n.vertexIndex - 1 }
             : n
         })
-        const softVertices = (piece.softVertices ?? [])
-          .filter((svi) => svi !== vi)
-          .map((svi) => svi > vi ? svi - 1 : svi)
+        const oldCut = piece.cutLine
+        const oldSeam = piece.seamLine
+        const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, piece.softVertices)
+        const useSeamM = useSeamLineForVertexEditing(piece)
+        const softVerticesMaster =
+          useSeamM && oldSeam.length >= 3 && seamLine.length >= 3
+            ? remapSoftVerticesToNewCutLine(oldSeam, seamLine, piece.softVerticesMaster)
+            : (piece.softVerticesMaster ?? [])
         return {
           workspace: {
             ...s.workspace,
             seamAssignments: adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vi, oldN),
             pieces: s.workspace.pieces.map((p) =>
-              p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices }) : p
+              p.id === pieceId
+                ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster })
+                : p
             ),
           },
         }
@@ -1445,14 +1509,22 @@ export const useStore = create<Store>((set, get) => ({
             if (n.vertexIndex != null && n.vertexIndex > curveIndex) return { ...n, vertexIndex: n.vertexIndex + 1 }
             return n
           })
-          const softVertices = (piece.softVertices ?? [])
-            .map((svi) => svi > curveIndex ? svi + 1 : svi)
+          const oldCut = piece.cutLine
+          const oldSeam = piece.seamLine
+          const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, piece.softVertices)
+          const useSeamM = useSeamLineForVertexEditing(piece)
+          const softVerticesMaster =
+            useSeamM && oldSeam.length >= 3 && seamLine.length >= 3
+              ? remapSoftVerticesToNewCutLine(oldSeam, seamLine, piece.softVerticesMaster)
+              : (piece.softVerticesMaster ?? [])
           return {
             workspace: {
               ...s.workspace,
               seamAssignments: adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
               pieces: s.workspace.pieces.map((p) =>
-                p.id === pieceId ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices }) : p
+                p.id === pieceId
+                  ? applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster })
+                  : p
               ),
             },
           }
@@ -1480,6 +1552,12 @@ export const useStore = create<Store>((set, get) => ({
       const isPositionUpdate = upd.position != null
       if (piece && notch && isPositionUpdate) {
         const candidate = { ...notch, ...upd }
+        if (
+          notch.vertexIndex != null &&
+          !Object.prototype.hasOwnProperty.call(upd, 'vertexIndex')
+        ) {
+          candidate.vertexIndex = undefined
+        }
         if (!isNotchSpacingValidForCandidate(piece, candidate, notchId)) {
           return {
             ...s,
@@ -1488,17 +1566,22 @@ export const useStore = create<Store>((set, get) => ({
           }
         }
       }
-      // Kerbe entlang Kontur verschieben (notchMove): liefert position + vertexIndex: undefined.
-      // Dann nur Notch-Daten ändern — niemals cutLine mergen/splitten, sonst verzieht sich die Kurve.
+      // Kerbe entlang Kontur verschieben (notchMove): position + ggf. vertexIndex: undefined.
+      // Nur reine Notch-Daten — niemals cutLine mergen/splitten (sonst verzieht sich die Kurve / bei Nahtzugabe würde die Naht aus dem Cut neu berechnet und alle Ecken springen).
       const unanchorOnly =
-        isPositionUpdate && 'vertexIndex' in upd && upd.vertexIndex === undefined
+        isPositionUpdate &&
+        (Object.prototype.hasOwnProperty.call(upd, 'vertexIndex')
+          ? upd.vertexIndex === undefined
+          : notch?.vertexIndex != null)
+      const seamIsMaster = piece != null && useSeamLineForVertexEditing(piece)
       if (
         piece &&
         notch &&
         notch.vertexIndex != null &&
         isPositionUpdate &&
         piece.cutLine.length > 3 &&
-        !unanchorOnly
+        !unanchorOnly &&
+        !seamIsMaster
       ) {
         const vi = notch.vertexIndex
         const oldN = piece.cutLine.length
@@ -1551,12 +1634,28 @@ export const useStore = create<Store>((set, get) => ({
           },
         }
       }
+      const implicitClearAnchor =
+        isPositionUpdate &&
+        notch != null &&
+        notch.vertexIndex != null &&
+        !Object.prototype.hasOwnProperty.call(upd, 'vertexIndex')
       return {
         workspace: {
           ...s.workspace,
           pieces: s.workspace.pieces.map((p) =>
             p.id === pieceId
-              ? { ...p, notches: p.notches.map((n) => (n.id === notchId ? { ...n, ...upd } : n)) }
+              ? {
+                  ...p,
+                  notches: p.notches.map((n) =>
+                    n.id === notchId
+                      ? {
+                          ...n,
+                          ...upd,
+                          ...(implicitClearAnchor ? { vertexIndex: undefined } : {}),
+                        }
+                      : n
+                  ),
+                }
               : p
           ),
         },
@@ -1601,7 +1700,8 @@ export const useStore = create<Store>((set, get) => ({
         }
         const cutLine = derived.cutLine
         const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
-        const notches = p.notches.map((n) => ({ ...n, vertexIndex: undefined }))
+        // Wie updatePiece: Kerben auf neuer Außenkontur geometrisch neu einhängen (nicht nur vertexIndex löschen).
+        const notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, cutLine)
         if (migratingFromCutMaster) {
           const migratedSoftMaster = [...new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < seamLine.length))].sort((a, b) => a - b)
           const nextPiece = {
@@ -2424,12 +2524,15 @@ export const useStore = create<Store>((set, get) => ({
       workspace: { ...s.workspace, ...patch },
     })),
 
-  addWorkspaceNote: (position) => {
+  addWorkspaceNote: (pieceId, positionLocal) => {
     const id = generateId()
     set((s) => ({
       workspace: {
         ...s.workspace,
-        notes: [...(s.workspace.notes ?? []), { id, position: { ...position }, text: '' }],
+        notes: [
+          ...(s.workspace.notes ?? []),
+          { id, pieceId, position: { ...positionLocal }, text: '' },
+        ],
       },
     }))
     return id

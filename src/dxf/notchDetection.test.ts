@@ -69,4 +69,26 @@ describe('detectNotchesInPolyline', () => {
     const { notches } = detectNotchesInPolyline(withDup, { shortSegmentMaxMm: 3 })
     expect(notches).toHaveLength(0)
   })
+
+  it('legLengthMode asymmetric: ein deutlich längerer Schenkel (kurzer + langer Schenkel)', () => {
+    // Kürzeres Bein ~4.1 mm, längeres ~9.9 mm — bei shortMax=9 scheitert Modus both, asymmetric erlaubt bis ~16.6 mm auf der langen Seite.
+    const withDup = [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 5, y: 4 },
+      { x: 14, y: 0 },
+      { x: 15, y: 0 },
+      { x: 15, y: 10 },
+      { x: 0, y: 10 },
+      { x: 0, y: 0 },
+    ]
+    const bothMode = detectNotchesInPolyline(withDup, { shortSegmentMaxMm: 9, minAngleDeg: 35 })
+    const asym = detectNotchesInPolyline(withDup, {
+      shortSegmentMaxMm: 9,
+      minAngleDeg: 35,
+      legLengthMode: 'asymmetric',
+    })
+    expect(bothMode.notches.length).toBe(0)
+    expect(asym.notches.length).toBe(1)
+  })
 })

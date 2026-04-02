@@ -135,9 +135,11 @@ export type SeamAssignment = {
   seamKind?: SeamAssignmentKindId | null
 }
 
-/** Editor-Notiz auf der Arbeitsfläche (mm); kein DXF-Export. */
+/** Editor-Notiz am Schnittteil (Teilkoordinaten, mm); bewegt sich mit dem Teil; kein DXF-Export. */
 export type WorkspaceNote = {
   id: string
+  pieceId: string
+  /** Position in Teilkoordinaten (wie cutLine), nicht Welt-mm. */
   position: Point
   text: string
 }
@@ -176,6 +178,7 @@ export type BatchSelectionFilter =
   | 'notches'
   | 'curvePoints'
   | 'internalLines'
+  | 'pieces'
 
 /** Einzelziel der Fensterauswahl (Teil + geometrische Referenz). */
 export type BatchSelectionTarget =
@@ -183,6 +186,7 @@ export type BatchSelectionTarget =
   | { kind: 'curvePoint'; pieceId: string; curveIndex: number }
   | { kind: 'notch'; pieceId: string; notchId: string }
   | { kind: 'internalLine'; pieceId: string; curveIndex: number }
+  | { kind: 'piece'; pieceId: string }
 
 /** Einzelner Knoten beim Digitalisieren (Pen-Tool). */
 export type DigitizeNode = {

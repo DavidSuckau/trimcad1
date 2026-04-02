@@ -22,6 +22,11 @@ export type NotchDetectOptions = {
   /** Min. Knickwinkel an der Spitze (Grad), Standard 45. */
   minAngleDeg?: number
   /**
+   * `both`: beide Schenkel ≤ shortMax (Standard).
+   * `asymmetric`: kürzerer Schenkel ≤ shortMax, längerer ≤ shortMax × 1.85 (z. B. tessellierte/unruhige DXF).
+   */
+  legLengthMode?: 'both' | 'asymmetric'
+  /**
    * Geschlossene Kontur ohne doppelten Schließpunkt (z. B. DXF 70=1): letzte Kante = letzter → erster.
    * Wenn nicht gesetzt: nur bei fast gleichem erstem/letztem Punkt als Ring behandeln.
    */
@@ -106,7 +111,8 @@ function tryDetectNotchAtTip(
   pNext: DxfPoint,
   shortMax: number,
   minAng: number,
-  polygonAreaSigned: number | null
+  polygonAreaSigned: number | null,
+  legLengthMode: 'both' | 'asymmetric' = 'both'
 ): DetectedNotch | null {
   const seg1 = dist(pPrev, pTip)
   const seg2 = dist(pTip, pNext)
@@ -116,7 +122,12 @@ function tryDetectNotchAtTip(
   const v2y = pNext.y - pTip.y
   const ang = angleBetweenDeg(v1x, v1y, v2x, v2y)
 
-  if (seg1 > shortMax || seg2 > shortMax || ang <= minAng) return null
+  const ASYMMETRIC_LONG_LEG = 1.85
+  const legTooLong =
+    legLengthMode === 'asymmetric'
+      ? Math.min(seg1, seg2) > shortMax || Math.max(seg1, seg2) > shortMax * ASYMMETRIC_LONG_LEG
+      : seg1 > shortMax || seg2 > shortMax
+  if (legTooLong || ang <= minAng) return null
 
   if (polygonAreaSigned != null) {
     if (!isConcaveNotchAtTip(pPrev, pTip, pNext, polygonAreaSigned)) return null
@@ -166,6 +177,7 @@ export function detectNotchesInPolyline(
 } {
   const shortMax = options?.shortSegmentMaxMm ?? DEFAULT_SHORT_MAX_MM
   const minAng = options?.minAngleDeg ?? DEFAULT_MIN_ANGLE_DEG
+  const legLengthMode = options?.legLengthMode ?? 'both'
 
   const work = buildRingVertices(vertices, options)
   const ringMode = isRingMode(vertices, work, options)
@@ -184,7 +196,15 @@ export function detectNotchesInPolyline(
     while (i < n) {
       const iPrev = (i - 1 + n) % n
       const iNext = (i + 1) % n
-      const detected = tryDetectNotchAtTip(work[iPrev], work[i], work[iNext], shortMax, minAng, polyArea)
+      const detected = tryDetectNotchAtTip(
+        work[iPrev],
+        work[i],
+        work[iNext],
+        shortMax,
+        minAng,
+        polyArea,
+        legLengthMode
+      )
       if (detected) {
         tipIndices.add(i)
         notches.push(detected)
@@ -201,7 +221,15 @@ export function detectNotchesInPolyline(
 
   let i = 1
   while (i < work.length - 1) {
-    const detected = tryDetectNotchAtTip(work[i - 1], work[i], work[i + 1], shortMax, minAng, null)
+    const detected = tryDetectNotchAtTip(
+      work[i - 1],
+      work[i],
+      work[i + 1],
+      shortMax,
+      minAng,
+      null,
+      legLengthMode
+    )
     if (detected) {
       tipIndices.add(i)
       notches.push(detected)

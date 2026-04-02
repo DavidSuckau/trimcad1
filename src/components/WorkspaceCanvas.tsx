@@ -28,11 +28,13 @@ import {
   bestSeamSubSegmentPairing,
   masterSoftVertexIndexSet,
   masterNotchVertexIndexSet,
+  mapCutVertexIndexToMasterVertexIndexForVertexDrag,
 } from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
+import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
@@ -67,6 +69,45 @@ function cloneVertexDragCutLine(curves: Curve[]): Curve[] {
 
 function cloneVertexDragNotches(notches: PatternPiece['notches']): PatternPiece['notches'] {
   return notches.map((n) => ({ ...n, position: { ...n.position } }))
+}
+
+/**
+ * Verankerte Kerbe (F): Ziehen = Eckpunkt der Master-Kontur verschieben (alle Richtungen), nicht nur entlang der Linie.
+ * Ohne gültigen vertexIndex oder wenn Cut→Naht-Zuordnung fehlt → null (dann klassisches notchMove).
+ */
+function vertexDragStateForAnchoredNotch(
+  piece: PatternPiece,
+  notch: PatternPiece['notches'][number]
+):
+  | {
+      kind: 'vertex'
+      pieceId: string
+      vertexIndex: number
+      startLocal: Point
+      notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[] }
+    }
+  | null {
+  const vi = notch.vertexIndex
+  if (vi == null) return null
+  const cut = piece.cutLine
+  if (vi < 0 || vi >= cut.length) return null
+  const useSeamMaster = useSeamLineForVertexEditing(piece)
+  const masterVi = useSeamMaster ? mapCutVertexIndexToMasterVertexIndexForVertexDrag(piece, vi) : vi
+  if (masterVi == null) return null
+  const curves = useSeamMaster ? piece.seamLine : piece.cutLine
+  if (masterVi < 0 || masterVi >= curves.length) return null
+  const startLocal = masterVi === 0 ? { ...curves[0].start } : { ...curves[masterVi - 1].end }
+  const notchStabilize =
+    piece.seamAllowanceMm != null && useSeamMaster
+      ? { notches: cloneVertexDragNotches(piece.notches), cutLine: cloneVertexDragCutLine(piece.cutLine) }
+      : undefined
+  return {
+    kind: 'vertex',
+    pieceId: piece.id,
+    vertexIndex: masterVi,
+    startLocal,
+    ...(notchStabilize ? { notchStabilize } : {}),
+  }
 }
 
 function workspaceImageLayout(session: {
@@ -1306,7 +1347,7 @@ export function WorkspaceCanvas() {
         render0: number
       }
     | { kind: 'digitizeDrag' }
-    | { kind: 'workspaceNote'; noteId: string; startWorld: Point; startPos: Point }
+    | { kind: 'workspaceNote'; noteId: string; pieceId: string }
     | null
   >(null)
   const [workspaceNoteEditor, setWorkspaceNoteEditor] = useState<{
@@ -1567,14 +1608,16 @@ export function WorkspaceCanvas() {
         const containerEl = containerRef.current
         for (let i = notes.length - 1; i >= 0; i--) {
           const n = notes[i]
-          const c = worldToClientPoint(n.position, containerEl, view, svgRef.current)
+          const piece = pieces.find((p) => p.id === n.pieceId)
+          if (!piece) continue
+          const worldPos = pieceLocalToWorld(n.position, piece)
+          const c = worldToClientPoint(worldPos, containerEl, view, svgRef.current)
           if (Math.hypot(e.clientX - c.x, e.clientY - c.y) <= NOTE_HIT_PX) {
             setWorkspaceNoteEditor({ noteId: n.id, clientX: e.clientX, clientY: e.clientY })
             setDragging({
               kind: 'workspaceNote',
               noteId: n.id,
-              startWorld: { ...world },
-              startPos: { ...n.position },
+              pieceId: n.pieceId,
             })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
@@ -1684,11 +1727,18 @@ export function WorkspaceCanvas() {
           minNotchDist < minVertexDist &&
           minNotchDist < minPointOnCurveDist
         if (useNotch && bestNotchClick && tool === 'select') {
-          setDragging({
-            kind: 'notchMove',
-            pieceId: bestNotchClick.pieceId,
-            notchId: bestNotchClick.notchId,
-          })
+          const pc = pieces.find((x) => x.id === bestNotchClick.pieceId)
+          const nc = pc?.notches.find((nn) => nn.id === bestNotchClick.notchId)
+          const vDrag = pc && nc ? vertexDragStateForAnchoredNotch(pc, nc) : null
+          if (vDrag) {
+            setDragging(vDrag)
+          } else {
+            setDragging({
+              kind: 'notchMove',
+              pieceId: bestNotchClick.pieceId,
+              notchId: bestNotchClick.notchId,
+            })
+          }
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
@@ -1795,11 +1845,18 @@ export function WorkspaceCanvas() {
       }
       if (tool === 'select') {
         if (hoveredDeletableNotch) {
-          setDragging({
-            kind: 'notchMove',
-            pieceId: hoveredDeletableNotch.pieceId,
-            notchId: hoveredDeletableNotch.notchId,
-          })
+          const pc = pieces.find((x) => x.id === hoveredDeletableNotch.pieceId)
+          const nc = pc?.notches.find((nn) => nn.id === hoveredDeletableNotch.notchId)
+          const vDrag = pc && nc ? vertexDragStateForAnchoredNotch(pc, nc) : null
+          if (vDrag) {
+            setDragging(vDrag)
+          } else {
+            setDragging({
+              kind: 'notchMove',
+              pieceId: hoveredDeletableNotch.pieceId,
+              notchId: hoveredDeletableNotch.notchId,
+            })
+          }
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
@@ -2046,12 +2103,21 @@ export function WorkspaceCanvas() {
           setTool('select')
           return
         }
-        for (const p of pieces) {
-          if (p.cutLine.length >= 3 && isPointInsidePiece(worldToPieceLocal(world, p), p)) {
-            return
+        let placed: { pieceId: string; local: Point } | null = null
+        for (let pi = pieces.length - 1; pi >= 0; pi--) {
+          const p = pieces[pi]
+          if (p.cutLine.length < 3) continue
+          const local = worldToPieceLocal(world, p)
+          if (isPointInsidePiece(local, p)) {
+            placed = { pieceId: p.id, local }
+            break
           }
         }
-        const id = addWorkspaceNote(world)
+        if (!placed) {
+          setToastMessage('error:Notiz ins Innere eines Schnittteils setzen.')
+          return
+        }
+        const id = addWorkspaceNote(placed.pieceId, placed.local)
         setWorkspaceNoteEditor({ noteId: id, clientX: e.clientX, clientY: e.clientY })
         setTool('select')
         return
@@ -2123,6 +2189,7 @@ export function WorkspaceCanvas() {
       view.zoom,
       showWorkspaceNotes,
       addWorkspaceNote,
+      setToastMessage,
     ]
   )
 
@@ -2135,11 +2202,10 @@ export function WorkspaceCanvas() {
     (e: React.PointerEvent) => {
       if (dragging?.kind === 'workspaceNote') {
         const world = toWorld(e.clientX, e.clientY)
-        const dx = world.x - dragging.startWorld.x
-        const dy = world.y - dragging.startWorld.y
-        updateWorkspaceNote(dragging.noteId, {
-          position: { x: dragging.startPos.x + dx, y: dragging.startPos.y + dy },
-        })
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece) return
+        const local = worldToPieceLocal(world, piece)
+        updateWorkspaceNote(dragging.noteId, { position: local })
         return
       }
 
@@ -3762,6 +3828,7 @@ export function WorkspaceCanvas() {
               <option value="notches">Kerben</option>
               <option value="curvePoints">Kurvenpunkte</option>
               <option value="internalLines">Interne Linien</option>
+              <option value="pieces">Komplette Teile (Rahmen umschließt Teil)</option>
             </select>
           </label>
           <span style={{ color: '#999' }}>|</span>
@@ -3812,7 +3879,8 @@ export function WorkspaceCanvas() {
             Auswahl aufheben
           </button>
           <span style={{ fontSize: 11, color: '#888', width: '100%', marginTop: 2 }}>
-            Shift+Fensterauswahl: zur bestehenden Auswahl hinzufügen · Entf: gefilterte löschen · Esc: Auswahl aufheben
+            Shift+Fensterauswahl: zur bestehenden Auswahl hinzufügen · Entf: gefilterte löschen (inkl. komplette Teile) · Esc:
+            Auswahl aufheben
           </span>
         </div>
       )}
@@ -4405,9 +4473,12 @@ export function WorkspaceCanvas() {
           })}
           {showWorkspaceNotes &&
             (workspaceNotesList ?? []).map((wn) => {
+              const piece = pieces.find((p) => p.id === wn.pieceId)
+              if (!piece) return null
+              const worldPos = pieceLocalToWorld(wn.position, piece)
               const z = 1 / Math.max(view.zoom, 1e-6)
               return (
-                <g key={wn.id} transform={`translate(${wn.position.x},${wn.position.y}) scale(${z})`} pointerEvents="none">
+                <g key={wn.id} transform={`translate(${worldPos.x},${worldPos.y}) scale(${z})`} pointerEvents="none">
                   <circle r={11} cx={0} cy={0} fill="#fff9c4" stroke="#f9a825" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                   <path
                     d="M -4,-3 L 4,-3 L 4,5 L 0,2 L -4,5 Z"
@@ -4753,6 +4824,25 @@ export function WorkspaceCanvas() {
                       opacity={0.95}
                     />
                   </g>
+                )
+              }
+              if (t.kind === 'piece') {
+                const b = boundsForPieceCutLineWorld(piece)
+                if (!b) return null
+                const pad = 2 * ps
+                return (
+                  <rect
+                    key={key}
+                    x={b.minX - pad}
+                    y={b.minY - pad}
+                    width={b.maxX - b.minX + 2 * pad}
+                    height={b.maxY - b.minY + 2 * pad}
+                    fill={ringFill}
+                    stroke={ringStroke}
+                    strokeWidth={1.4 * ps}
+                    strokeDasharray="6 3"
+                    pointerEvents="none"
+                  />
                 )
               }
               return null

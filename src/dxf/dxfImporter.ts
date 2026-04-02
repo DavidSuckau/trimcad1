@@ -7,7 +7,11 @@ import type { PatternPiece, Curve, Notch, Point, Drill, Line } from '../types/mo
 import { parseDxf, type DxfEntity, type DxfPoint } from './dxfParser'
 import { detectNotchesInPolyline } from './notchDetection'
 import { dist } from './dxfShared'
-import { deriveCutLineFromSeamWithValidation, offsetCurvesInwardForSeam } from '../geometry/offset'
+import {
+  deriveCutLineFromSeamWithValidation,
+  offsetCurvesInwardForSeam,
+  SEAM_FROM_CUT_SIMPLIFY_IMPORT_MM,
+} from '../geometry/offset'
 import {
   isCutLayer,
   isSeamLayer,
@@ -553,14 +557,23 @@ function maxDeviationVerticesToCurves(vertices: DxfPoint[], curves: Curve[]): nu
 const SEAM_ROUNDTRIP_WARN_MM = 2
 const NOTCH_SHORT_MAX_RELAXED_MM = 9
 const NOTCH_MIN_ANGLE_RELAXED_DEG = 30
+/** Dritte Stufe: längere Schenkel, flachere Winkel, max-Längen-Modus. */
+const NOTCH_SHORT_MAX_VERY_RELAXED_MM = 16
+const NOTCH_MIN_ANGLE_VERY_RELAXED_DEG = 20
+
+export type NotchImportDetectTier = 'strict' | 'relaxed' | 'veryRelaxed' | null
 
 function detectNotchesWithToleranceFallback(
   vertices: DxfPoint[],
   closedRing: boolean
-): { cleanedVertices: DxfPoint[]; notches: ReturnType<typeof detectNotchesInPolyline>['notches']; usedRelaxed: boolean } {
+): {
+  cleanedVertices: DxfPoint[]
+  notches: ReturnType<typeof detectNotchesInPolyline>['notches']
+  notchTier: NotchImportDetectTier
+} {
   const strict = detectNotchesInPolyline(vertices, { closedRing })
   if (strict.notches.length > 0) {
-    return { ...strict, usedRelaxed: false }
+    return { ...strict, notchTier: 'strict' }
   }
   const relaxed = detectNotchesInPolyline(vertices, {
     closedRing,
@@ -568,9 +581,18 @@ function detectNotchesWithToleranceFallback(
     minAngleDeg: NOTCH_MIN_ANGLE_RELAXED_DEG,
   })
   if (relaxed.notches.length > 0) {
-    return { ...relaxed, usedRelaxed: true }
+    return { ...relaxed, notchTier: 'relaxed' }
   }
-  return { ...strict, usedRelaxed: false }
+  const veryRelaxed = detectNotchesInPolyline(vertices, {
+    closedRing,
+    shortSegmentMaxMm: NOTCH_SHORT_MAX_VERY_RELAXED_MM,
+    minAngleDeg: NOTCH_MIN_ANGLE_VERY_RELAXED_DEG,
+    legLengthMode: 'asymmetric',
+  })
+  if (veryRelaxed.notches.length > 0) {
+    return { ...veryRelaxed, notchTier: 'veryRelaxed' }
+  }
+  return { ...strict, notchTier: null }
 }
 
 /**
@@ -648,11 +670,16 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       const contourClosed = closed || isClosed(vertices)
       const detectRes = detectVNotches
         ? detectNotchesWithToleranceFallback(vertices, contourClosed)
-        : { cleanedVertices: [...vertices], notches: [], usedRelaxed: false }
+        : { cleanedVertices: [...vertices], notches: [], notchTier: null as NotchImportDetectTier }
       const { cleanedVertices, notches: geomNotches } = detectRes
-      if (detectRes.usedRelaxed) {
+      const pieceNum = String(pieces.length + 1).padStart(3, '0')
+      if (detectRes.notchTier === 'relaxed') {
         warnings.push(
-          `Teil ${String(pieces.length + 1).padStart(3, '0')}: V-Kerben wurden mit gelockerter Toleranz erkannt (${NOTCH_SHORT_MAX_RELAXED_MM} mm / ${NOTCH_MIN_ANGLE_RELAXED_DEG}°).`
+          `Teil ${pieceNum}: V-Kerben mit mittlerer Toleranz erkannt (${NOTCH_SHORT_MAX_RELAXED_MM} mm / ${NOTCH_MIN_ANGLE_RELAXED_DEG}°).`
+        )
+      } else if (detectRes.notchTier === 'veryRelaxed') {
+        warnings.push(
+          `Teil ${pieceNum}: V-Kerben mit großzügiger Toleranz erkannt (${NOTCH_SHORT_MAX_VERY_RELAXED_MM} mm / ${NOTCH_MIN_ANGLE_VERY_RELAXED_DEG}°, asymmetrische Schenkel erlaubt).`
         )
       }
 
@@ -697,26 +724,46 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
           seamAllowanceMm = est
         }
       } else if (createSeamOnImport && importSeamMm != null && cutLine.length >= 3) {
-        const sl = offsetCurvesInwardForSeam(cutLine, importSeamMm)
-        if (sl.length >= 3) {
-          const derived = deriveCutLineFromSeamWithValidation(sl, importSeamMm)
-          if (derived.ok) {
-            const importedCut = cutLine
-            const dev = maxDeviationVerticesToCurves(cleanedVertices, derived.cutLine)
-            if (dev > SEAM_ROUNDTRIP_WARN_MM) {
+        const importedCut = cutLine
+        let sl = offsetCurvesInwardForSeam(cutLine, importSeamMm)
+        let derived = sl.length >= 3 ? deriveCutLineFromSeamWithValidation(sl, importSeamMm) : { ok: false as const, message: 'Keine Nahtlinie' }
+
+        if (!derived.ok && sl.length >= 3) {
+          const slAlt = offsetCurvesInwardForSeam(cutLine, importSeamMm, SEAM_FROM_CUT_SIMPLIFY_IMPORT_MM)
+          if (slAlt.length >= 3) {
+            const d2 = deriveCutLineFromSeamWithValidation(slAlt, importSeamMm)
+            if (d2.ok) {
+              sl = slAlt
+              derived = d2
               warnings.push(
-                `Teil ${String(pieces.length + 1).padStart(3, '0')}: Schnittkontur weicht nach Naht-Offset-Roundtrip um bis zu ${dev.toFixed(1)} mm von der importierten Polylinie ab.`
+                `Teil ${pieceNum}: Nahtlinie mit stärkerer Kantenvereinfachung erzeugt (Import-Stabilität).`
               )
             }
-            cutLine = derived.cutLine
-            cutLineOldForNotchResync = importedCut
-            seamLine = sl
-            seamAllowanceMm = importSeamMm
-          } else {
+          }
+        }
+
+        if (derived.ok) {
+          const dev = maxDeviationVerticesToCurves(cleanedVertices, derived.cutLine)
+          if (dev > SEAM_ROUNDTRIP_WARN_MM) {
             warnings.push(
-              `Teil ${String(pieces.length + 1).padStart(3, '0')}: Nahtlinie konnte nicht aus der Schnittkontur abgeleitet werden (${derived.message}).`
+              `Teil ${pieceNum}: Schnittkontur weicht nach Naht-Offset-Roundtrip um bis zu ${dev.toFixed(1)} mm von der importierten Polylinie ab.`
             )
           }
+          cutLine = derived.cutLine
+          cutLineOldForNotchResync = importedCut
+          seamLine = sl
+          seamAllowanceMm = importSeamMm
+        } else if (sl.length >= 3) {
+          seamLine = sl
+          seamAllowanceMm = importSeamMm
+          cutLineOldForNotchResync = importedCut
+          warnings.push(
+            `Teil ${pieceNum}: Nahtlinie und Nahtzugabe gesetzt; Schnittkontur bleibt wie importiert (kein Roundtrip: ${derived.message}). Beim Bearbeiten der Naht wird die Schnittkontur ggf. angeglichen.`
+          )
+        } else {
+          warnings.push(
+            `Teil ${pieceNum}: Innere Naht konnte nicht erzeugt werden (Offset leer oder zu klein).`
+          )
         }
       }
 

@@ -11,8 +11,9 @@
     Seam-as-Master vs. cutLine).
   • LOP-020–041: Produkt, UX, Import/Export-Roadmap, Vision.
   Neue Funktionen, Erweiterungen und größere Refactorings: immer als **neuer**
-  LOP-Punkt mit der **nächsten freien ID** (nach 041 fortführen) eintragen; bei
-  Überschneidung mit technischen LOP-Punkten **„Siehe auch LOP-xxx“** setzen.
+  LOP-Punkt mit der **nächsten freien ID** (nach 041 fortführen; technische
+  Ergänzungen ab LOP-042) eintragen; bei Überschneidung mit technischen LOP-Punkten
+  **„Siehe auch LOP-xxx“** setzen.
 
   Legende
   -------
@@ -23,7 +24,7 @@
 
 
 ================================================================================
-  LOP-PUNKTE – Übersicht Technik / Code-Review (LOP-001–016)
+  LOP-PUNKTE – Übersicht Technik / Code-Review (LOP-001–016, LOP-042–045)
 ================================================================================
 
   ID        Kurztitel                                    Status
@@ -44,6 +45,10 @@
   LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [ ]
   LOP-015   piece.layer (Zweck im Export)                [ ]
   LOP-016   removeNotch/toggleNotch/addCurve, flipGrain  [ ] [!]
+  LOP-042   API-/Testnamen vs. Master-Kontur (CutLine)   [ ]
+  LOP-043   recomputeSeamLine: Store ohne Seam-Master-Guard [ ]
+  LOP-044   Vertex-Drag-Ende: seamIsMaster vs. vertexMaster [ ]
+  LOP-045   updateCurvePoint: zwei Offset-Strategien       [ ]
 
 
 ================================================================================
@@ -159,6 +164,7 @@
   Priorität A (Seam-as-Master: weiterhin cutLine-zentriert, inkonsistent)
   -----------------------------------------------------------------------
   LOP-016 (u. a. flipPieceAlongGrain, Notch-Hooks, addCurveToCutLine)
+  LOP-042 (Namen Öffentliche API / Tests), LOP-043–044 (recompute / seamIsMaster)
   (Übergeordnete Einordnung: LOP-033)
 
   Priorität B (Modell/DXF/Doku)
@@ -173,7 +179,8 @@
 
 
 ================================================================================
-  OFFEN – Detail je technischem LOP-Punkt (LOP-009 … LOP-016; LOP-001–008 bearbeitet)
+  OFFEN – Detail je technischem LOP-Punkt (LOP-009 … LOP-016, LOP-042 … LOP-045;
+  LOP-001–008 bearbeitet)
 ================================================================================
 
 --- LOP-009 [ ] NotchType: zwei Typ-Systeme -------------------------------
@@ -240,8 +247,64 @@
 
   Aus Code-Verifizierung (noch nicht auf Seam-as-Master umgestellt):
   - removeNotchAnchor, toggleNotchAnchor, addCurveToCutLine → cutLine
-  - flipPieceAlongGrain: spiegelt cutLine, leitet seamLine aus cutLine ab
+  -   flipPieceAlongGrain: spiegelt cutLine, leitet seamLine aus cutLine ab
     → bei Seam-as-Master: seamLine spiegeln, cutLine ableiten
+
+
+--- LOP-042 [ ] API- und Testnamen vs. Master-Kontur („CutLine“) ------------
+
+  Problem:
+  Öffentliche Store-Methoden heißen weiterhin `insertPointOnCutLine` und
+  `addCurveToCutLine`, obwohl bei Nahtzugabe die Master-Kontur die Nahtlinie ist
+  (Verhalten teils in LOP-004/016 beschrieben; Namen bleiben irreführend).
+  Testdatei `insertPointOnSeamLine.test.ts` beschreibt dieselbe Funktion wie der
+  Name `insertPointOnCutLine` — für Leser nicht auf einen Blick konsistent.
+
+  Empfehlung:
+  Kurz in Modul-/Store-Doku festhalten oder mittelfristig Alias-Namen; siehe
+  LOP-016, LOP-004.
+
+
+--- LOP-043 [ ] recomputeSeamLine: Implementierung nur „Naht aus Schnitt“ -----
+
+  Problem:
+  `useStore.recomputeSeamLine` setzt `seamLine` immer per
+  `offsetCurvesInwardForSeam(p.cutLine, …)` ohne Prüfung auf
+  `useSeamLineForVertexEditing`. Der Aufrufer `WorkspaceCanvas` beim
+  Vertex-Drag-Ende überspringt das bei Seam-as-Master (Kommentar dort), aber
+  ein anderer künftiger Aufrufer könnte die Nahtlinie fälschlich überschreiben.
+
+  Empfehlung:
+  Guard im Store (oder klare „nur Cut-Master“-Dokumentation an der API) und
+  ggf. dieselbe Bedingung wie LOP-044.
+
+
+--- LOP-044 [ ] Vertex-Drag-Ende: seamIsMaster vs. vertexMaster ---------------
+
+  Problem:
+  Am Ende eines Vertex-Drags prüft `WorkspaceCanvas` `seamIsMaster` mit
+  Nahtzugabe + `seamLine.length >= 3`. `useSeamLineForVertexEditing` verlangt
+  zusätzlich `cutLine.length >= 3`. Sehr seltene Abweichung: unterschiedliche
+  Entscheidung, ob `recomputeSeamLine` läuft vs. was die Regeln als Master
+  definieren.
+
+  Empfehlung:
+  Hilfsfunktion aus `vertexMaster.ts` wiederverwenden oder Bedingungen angleichen.
+
+
+--- LOP-045 [ ] updateCurvePoint: zwei Strategien für Naht ↔ Schnitt ----------
+
+  Problem:
+  Im Seam-Master-Zweig: `deriveCutLineFromSeamWithValidation` + Notch-Resync.
+  Im Cut-Master-Zweig (weiterhin `cutLine` bearbeiten): `seamLine` wird mit
+  `offsetCurvesInwardForSeam(cutLine, …)` gesetzt — nicht derselbe Validierungs-
+  und Ableitungspfad wie oben und ohne Notch-Resync. Für Reviewer wirkt das wie
+  parallele Wahrheiten, auch wenn der zweite Fall „Cut ist Master“ ist.
+
+  Empfehlung:
+  Kurzkommentar am else-Zweig (Legacy/Cut-Master); bei Refactor prüfen, ob
+  bewusste Abweichung von `deriveCutLineFromSeam` dokumentiert sein soll.
+  Siehe LOP-033.
 
 
 ================================================================================
@@ -340,7 +403,7 @@
 
   Entscheidung und Umsetzung: Seam-as-Master bei Nahtzugabe (Projektregel) vs.
   verbleibende cutLine-zentrierte Pfade. Konkrete offene Arbeit: LOP-009–010,
-  LOP-016; erledigt: LOP-001–008.
+  LOP-016, LOP-042–045; erledigt: LOP-001–008.
   Empfehlung: keine parallele „zweite Wahrheit“ in UI und Store; Master-Kontur
   überall dieselbe wie bei Hit-Tests.
 
@@ -405,6 +468,10 @@
 
   Noch cutLine-zentriert: LOP-016 (u. a. flipGrain, addCurveToCutLine, Notch-Anchors)
 
+  Namens-/API-Klarheit und Ablauf: LOP-042 (insertPointOnCutLine / Testdateiname),
+  LOP-043 (recomputeSeamLine ohne Guard), LOP-044 (seamIsMaster vs. vertexMaster),
+  LOP-045 (updateCurvePoint: derive vs. offsetCurvesInwardForSeam)
+
 
 ================================================================================
   ANHANG B: Empfohlene Maßnahmen (Technik, konsolidiert)
@@ -420,6 +487,8 @@
 
   Nächste sinnvolle Schritte (offen):
   8. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
+  8b. LOP-042–045 Namen/Guards/Konsistenz (recomputeSeamLine, seamIsMaster,
+      updateCurvePoint-Zweige)
   9. LOP-010 / LOP-009 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
   10. LOP-014 / LOP-015 DXF-Doku und piece.layer (mit LOP-020/030)
   11. LOP-011 / LOP-012 / LOP-013 Wartbarkeit; LOP-041 UX-Feintuning
@@ -432,7 +501,7 @@
   Blocker / kritisch
   ------------------
   • LOP-020 DXF-Export produktionsreif
-  • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016)
+  • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016, LOP-042–045)
   • LOP-022 Digitalisierung stabil (inkl. LOP-013 wo relevant)
 
   Wichtig
@@ -452,21 +521,22 @@
   ANHANG D: Fortschritt in Prozent (aus Übersichtstabellen)
 ================================================================================
 
-  Grundlage: alle LOP-Einträge in den Übersichten oben (LOP-001–016 und
-  LOP-020–041) = **38 Punkte**. Legende: [x] abgeschlossen, [~] begonnen/teilweise,
-  [ ] offen. Bei Statusänderungen in den Tabellen diese Zahlen manuell anpassen.
+  Grundlage: alle LOP-Einträge in den Übersichten oben (LOP-001–016,
+  LOP-042–045 und LOP-020–041) = **42 Punkte**. Legende: [x] abgeschlossen,
+  [~] begonnen/teilweise, [ ] offen. Bei Statusänderungen in den Tabellen diese
+  Zahlen manuell anpassen.
 
-  Gesamt (38 Punkte)
+  Gesamt (42 Punkte)
   ------------------
-  • Abgeschlossen [x]:     8  →  **21,1 %**
-  • In Bearbeitung [~]:    7  →  **18,4 %**
-  • Offen [ ]:            23  →  **60,5 %**
+  • Abgeschlossen [x]:     8  →  **19,0 %**
+  • In Bearbeitung [~]:    7  →  **16,7 %**
+  • Offen [ ]:            27  →  **64,3 %**
   (Rundung: Summe der Prozentwerte kann von 100 % um weniger als 0,1 abweichen.)
 
-  Nur Technik / Code-Review (LOP-001–016, 16 Punkte)
-  --------------------------------------------------
-  • [x]: 8  → **50,0 %** abgeschlossen
-  • [ ]: 8  → **50,0 %** noch offen
+  Nur Technik / Code-Review (LOP-001–016 und LOP-042–045, 20 Punkte)
+  ------------------------------------------------------------------
+  • [x]: 8  → **40,0 %** abgeschlossen
+  • [ ]: 12 → **60,0 %** noch offen
 
   Nur Produkt & Roadmap (LOP-020–041, 22 Punkte)
   ----------------------------------------------
@@ -474,7 +544,7 @@
   • [~]: 7  → **31,8 %** begonnen
   • [ ]: 15 → **68,2 %** offen
 
-  Hinweis: „Wie viel abgearbeitet?“ ist am klarsten über **[x] = 21,1 %** der
+  Hinweis: „Wie viel abgearbeitet?“ ist am klarsten über **[x] = 19,0 %** der
   Liste beantwortet; **[~]** zählt als Fortschritt, aber noch nicht als erledigt.
 
 

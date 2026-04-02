@@ -36,7 +36,7 @@ describe('normalizeWorkspaceForLoad', () => {
     expect(out.notes).toEqual([])
   })
 
-  it('normalisiert gültige Workspace-Notizen und verwirft ungültige Einträge', () => {
+  it('normalisiert Notizen mit pieceId und lokaler position', () => {
     const w: Workspace = {
       id: 'ws1',
       name: 'A',
@@ -44,12 +44,35 @@ describe('normalizeWorkspaceForLoad', () => {
       view: { zoom: 1, panX: 0, panY: 0 },
       seamAssignments: [],
       notes: [
-        { id: 'n1', position: { x: 10, y: 20 }, text: 'Hallo' },
-        { id: 'bad', position: { x: NaN, y: 0 }, text: 'x' },
+        { id: 'n1', pieceId: 'p1', position: { x: 50, y: 20 }, text: 'Hallo' },
+        { id: 'bad', pieceId: 'p1', position: { x: NaN, y: 0 }, text: 'x' },
       ],
     }
     const out = normalizeWorkspaceForLoad(w)
     expect(out.notes).toHaveLength(1)
-    expect(out.notes![0]).toEqual({ id: 'n1', position: { x: 10, y: 20 }, text: 'Hallo' })
+    expect(out.notes![0]).toEqual({
+      id: 'n1',
+      pieceId: 'p1',
+      position: { x: 50, y: 20 },
+      text: 'Hallo',
+    })
+  })
+
+  it('wandelt alte Welt-Notizen ohne pieceId in Teilkoordinaten um', () => {
+    const w = {
+      id: 'ws1',
+      name: 'A',
+      pieces: [minimalPiece],
+      view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [],
+      /** V1 ohne pieceId (position = Welt-mm) */
+      notes: [{ id: 'legacy', position: { x: 50, y: 20 }, text: 'Alt' }],
+    } as unknown as Workspace
+    const out = normalizeWorkspaceForLoad(w)
+    expect(out.notes).toHaveLength(1)
+    expect(out.notes![0].pieceId).toBe('p1')
+    expect(out.notes![0].position.x).toBeCloseTo(50, 5)
+    expect(out.notes![0].position.y).toBeCloseTo(20, 5)
+    expect(out.notes![0].text).toBe('Alt')
   })
 })
