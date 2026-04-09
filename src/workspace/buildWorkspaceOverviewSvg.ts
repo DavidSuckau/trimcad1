@@ -152,7 +152,7 @@ export function buildWorkspaceOverviewSvgDocument(
         const ly = midY + ny
         const ang = (Math.atan2(edgeDy, edgeDx) * 180) / Math.PI
         parts.push(
-          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="#7b1fa2" font-size="5" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
+          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="#7b1fa2" font-size="9" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
         )
       }
     }
