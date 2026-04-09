@@ -1,7 +1,7 @@
 import type { PatternPiece, Point, Curve } from '../types/model'
 import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
-import { getNotchCurveIndexAndT, extractCurvePortion } from './notchOnCurve'
+import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion } from './notchOnCurve'
 import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
 
@@ -273,6 +273,26 @@ export function getCornerRange(piece: PatternPiece, curveIndex: number): number[
   return result.length > 0 ? result : [curveIndex]
 }
 
+/**
+ * Löst die Notch-Position auf den Master-Kurven korrekt auf.
+ * Wenn master = cutLine → direkt resolven.
+ * Wenn master = seamLine (Nahtzugabe) → erst auf cutLine resolven, dann per
+ * Euclidean-Nearest auf seamLine projizieren (konsistent mit contourMeasurements).
+ * Vermeidet den Fehler, sNormalized (cutLine-relativ) auf seamLine zu interpretieren.
+ */
+function resolveNotchOnMasterCurves(
+  notch: PatternPiece['notches'][number],
+  piece: PatternPiece,
+  masterCurves: Curve[]
+): { curveIndex: number; t: number } | null {
+  if (masterCurves === piece.cutLine || piece.seamLine.length === 0) {
+    return getNotchCurveIndexAndT(notch, masterCurves)
+  }
+  const { position } = getNotchPositionAndAngle(notch, piece.cutLine)
+  const nearest = nearestCurveIndexAndPoint(position, masterCurves)
+  return nearest ? { curveIndex: nearest.curveIndex, t: nearest.t ?? 0 } : null
+}
+
 /** Zählt Notches die auf einer Eckpunkt→Eckpunkt-Kante liegen (nicht an den Eck-Eckpunkten selbst). */
 export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): number {
   if (curveIndices.length === 0) return 0
@@ -280,8 +300,8 @@ export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], 
   const ciSet = new Set(curveIndices)
   let count = 0
   for (const n of piece.notches) {
-    const nr = nearestCurveIndexAndPoint(n.position, curvs)
-    if (nr && ciSet.has(nr.curveIndex)) count++
+    const ct = resolveNotchOnMasterCurves(n, piece, curvs)
+    if (ct && ciSet.has(ct.curveIndex)) count++
   }
   return count
 }
@@ -357,7 +377,7 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[], curv
   const notchPositions: number[] = []
 
   for (const n of piece.notches) {
-    const ct = getNotchCurveIndexAndT(n, curvs)
+    const ct = resolveNotchOnMasterCurves(n, piece, curvs)
     if (ct && ciSet.has(ct.curveIndex)) {
       const idx = ciToIdx.get(ct.curveIndex)
       if (idx != null) {
@@ -425,7 +445,7 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
   const result: { notchId: string; arcLength: number }[] = []
 
   for (const n of piece.notches) {
-    const ct = getNotchCurveIndexAndT(n, curvs)
+    const ct = resolveNotchOnMasterCurves(n, piece, curvs)
     if (ct && ciSet.has(ct.curveIndex)) {
       const idx = ciToIdx.get(ct.curveIndex)
       if (idx != null) {
