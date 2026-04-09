@@ -9,6 +9,7 @@ import type {
   SeamAssignmentKindId,
   Notch,
   NotchType,
+  EdgeSeamAllowance,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
@@ -134,6 +135,21 @@ function normalizeNotchesArray(raw: unknown, cutLine: Curve[]): Notch[] {
   return out
 }
 
+function normalizeEdgeSeamAllowances(raw: unknown): EdgeSeamAllowance[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const out: EdgeSeamAllowance[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue
+    const o = item as Record<string, unknown>
+    const edgeIndex = Number(o.edgeIndex)
+    const allowanceMm = Number(o.allowanceMm)
+    if (!Number.isFinite(edgeIndex) || edgeIndex < 0) continue
+    if (!Number.isFinite(allowanceMm) || allowanceMm < 0) continue
+    out.push({ edgeIndex: Math.floor(edgeIndex), allowanceMm })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 function normalizePiece(raw: PatternPiece): PatternPiece {
   const cutLine = Array.isArray(raw.cutLine) ? raw.cutLine.filter(isCurve) : []
   const seamLine = Array.isArray(raw.seamLine) ? raw.seamLine.filter(isCurve) : []
@@ -176,6 +192,7 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       if (!Number.isFinite(q)) return 1
       return Math.max(1, Math.floor(q))
     })(),
+    edgeSeamAllowances: normalizeEdgeSeamAllowances((raw as { edgeSeamAllowances?: unknown }).edgeSeamAllowances),
   }
   return applySharpCornerPromotion(base)
 }

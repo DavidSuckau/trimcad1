@@ -42,6 +42,7 @@ import {
 } from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
+import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
@@ -1150,6 +1151,53 @@ function PieceGroup({
           </g>
         )
       })()}
+      {showContourMeasurements !== false && piece.edgeSeamAllowances && piece.edgeSeamAllowances.length > 0 && piece.seamLine.length >= 3 && (() => {
+        const edges = enumerateEdges(piece)
+        const masterCurves = piece.seamLine
+        const overrideMap = new Map<number, number>()
+        for (const o of piece.edgeSeamAllowances) overrideMap.set(o.edgeIndex, o.allowanceMm)
+        return (
+          <g pointerEvents="none" style={{ pointerEvents: 'none' }}>
+            {edges.map((edge) => {
+              const mm = overrideMap.get(edge.edgeIndex)
+              if (mm == null) return null
+              const cis = edge.curveIndices
+              if (cis.length === 0) return null
+              const midIdx = cis[Math.floor(cis.length / 2)]
+              const seg = masterCurves[midIdx]
+              if (!seg) return null
+              const mx = (seg.start.x + seg.end.x) / 2
+              const my = (seg.start.y + seg.end.y) / 2
+              const dx = seg.end.x - seg.start.x
+              const dy = seg.end.y - seg.start.y
+              const len = Math.hypot(dx, dy) || 1
+              const offMm = 7
+              const nx = -dy / len * offMm
+              const ny = dx / len * offMm
+              return (
+                <text
+                  key={`esa-${piece.id}-${edge.edgeIndex}`}
+                  x={mx + nx}
+                  y={my + ny}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={3}
+                  fontFamily="sans-serif"
+                  fontWeight={700}
+                  fill="#1a6fb5"
+                  stroke="#fff"
+                  strokeWidth={0.2}
+                  paintOrder="stroke fill"
+                  pointerEvents="none"
+                  style={{ pointerEvents: 'none' }}
+                >
+                  {mm} mm
+                </text>
+              )
+            })}
+          </g>
+        )
+      })()}
       {isSelected && (
         <rect
           x={-2}
@@ -1251,6 +1299,8 @@ export function WorkspaceCanvas() {
     pendingNahtzugabeClick,
     setPendingNahtzugabeClick,
     setNahtzugabeDialogPieceId,
+    edgeSeamPickingActive,
+    setEdgeSeamPickingActive,
     nahtzuordnungMode,
     setNahtzuordnungMode,
     pendingNahtzuordnungFirst,
@@ -1307,6 +1357,7 @@ export function WorkspaceCanvas() {
     setShowHelpModal,
     deletePiece,
     setPiecePropertiesDialogPieceId,
+    setEdgeSeamAllowance,
     setWorkspaceImageLocked,
     exitAllModes,
     notchSettings,
@@ -1434,6 +1485,18 @@ export function WorkspaceCanvas() {
     curveIndices: number[]
   } | null>(null)
   const [hoveredSeamAssignmentId, setHoveredSeamAssignmentId] = useState<string | null>(null)
+  const [hoveredEdgePicking, setHoveredEdgePicking] = useState<{
+    pieceId: string
+    edgeIndex: number
+    curveIndices: number[]
+  } | null>(null)
+  const [edgeAllowancePopover, setEdgeAllowancePopover] = useState<{
+    pieceId: string
+    edgeIndex: number
+    currentMm: number
+    clientX: number
+    clientY: number
+  } | null>(null)
   const [hoveredCurvepointSegment, setHoveredCurvepointSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [hoveredInternalLine, setHoveredInternalLine] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [digitizeMouseWorld, setDigitizeMouseWorld] = useState<Point | null>(null)
@@ -1629,6 +1692,23 @@ export function WorkspaceCanvas() {
           }
           return
         }
+      }
+      if (edgeSeamPickingActive && !edgeAllowancePopover && hoveredEdgePicking) {
+        const piece = pieces.find((p) => p.id === hoveredEdgePicking.pieceId)
+        if (piece) {
+          const currentMm = getAllowanceForCurveIndex(piece, hoveredEdgePicking.curveIndices[0])
+          setEdgeAllowancePopover({
+            pieceId: piece.id,
+            edgeIndex: hoveredEdgePicking.edgeIndex,
+            currentMm,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          })
+        }
+        return
+      }
+      if (edgeSeamPickingActive && edgeAllowancePopover) {
+        return
       }
       if (pendingNahtzugabeClick) {
         for (let i = pieces.length - 1; i >= 0; i--) {
@@ -2321,6 +2401,28 @@ export function WorkspaceCanvas() {
           }
         } else {
           setHoveredSeamForNahtzuordnung(null)
+        }
+        if (edgeSeamPickingActive && !edgeAllowancePopover) {
+          const world = toWorld(e.clientX, e.clientY)
+          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+          for (const p of pieces) {
+            if (p.seamAllowanceMm == null || p.seamLine.length < 3) continue
+            const local = worldToPieceLocal(world, p)
+            const nearest = nearestCurveIndexAndPoint(local, p.seamLine)
+            if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+            const edges = enumerateEdges(p)
+            for (const edge of edges) {
+              if (edge.curveIndices.includes(nearest.curveIndex)) {
+                if (!bestEdge || nearest.distance < bestEdge.distance) {
+                  bestEdge = { pieceId: p.id, edgeIndex: edge.edgeIndex, curveIndices: edge.curveIndices, distance: nearest.distance }
+                }
+                break
+              }
+            }
+          }
+          setHoveredEdgePicking(bestEdge)
+        } else if (!edgeSeamPickingActive) {
+          setHoveredEdgePicking(null)
         }
         if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
           const world = toWorld(e.clientX, e.clientY)
@@ -3094,6 +3196,13 @@ export function WorkspaceCanvas() {
         setWorkspaceImageQuickMenu(null)
         return
       }
+      if (!inInput && e.key === 'Escape' && (edgeSeamPickingActive || edgeAllowancePopover)) {
+        e.preventDefault()
+        setEdgeAllowancePopover(null)
+        setHoveredEdgePicking(null)
+        setEdgeSeamPickingActive(false)
+        return
+      }
       if (!inInput && e.key === 'Escape') {
         if (notchEditTarget) {
           e.preventDefault()
@@ -3143,6 +3252,11 @@ export function WorkspaceCanvas() {
       if (grainFlipHover && !grainContextMenu && !inInput && e.key === ' ') {
         e.preventDefault()
         setGrainContextMenu({ pieceId: grainFlipHover.pieceId, clientX: grainFlipHover.clientX, clientY: grainFlipHover.clientY })
+        return
+      }
+      if (grainFlipHover && !grainContextMenu && !inInput && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault()
+        setEdgeSeamPickingActive(true)
         return
       }
       if (
@@ -3327,6 +3441,11 @@ export function WorkspaceCanvas() {
           setPendingNahtzugabeClick(true)
           e.preventDefault()
         }
+        return
+      }
+      if ((e.key === 'l' || e.key === 'L') && !inInput && !grainFlipHover) {
+        e.preventDefault()
+        setEdgeSeamPickingActive(true)
         return
       }
       if ((e.key === 'r' || e.key === 'R') && !inInput && selectedPieceIds.length > 0) {
@@ -4117,7 +4236,7 @@ export function WorkspaceCanvas() {
             zIndex: 1000,
           }}
         >
-          Leertaste: Menü
+          Leertaste: Menü · L: Nahtzugabe/Kante
         </div>
       )}
       {grainContextMenu && (
@@ -5295,6 +5414,36 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
+          {edgeSeamPickingActive && hoveredEdgePicking && (() => {
+            const piece = pieces.find((p) => p.id === hoveredEdgePicking.pieceId)
+            if (!piece) return null
+            const curves = hoveredEdgePicking.curveIndices.map((ci) => piece.seamLine[ci]).filter(Boolean)
+            let d = ''
+            for (const seg of curves) {
+              if (!seg) continue
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              if (seg.type === 'line') {
+                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+              } else {
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+              }
+            }
+            if (!d) return null
+            return (
+              <path
+                key="edge-picking-hover"
+                d={d}
+                fill="none"
+                stroke="#e65100"
+                strokeWidth={3.5}
+                strokeOpacity={0.9}
+                pointerEvents="none"
+              />
+            )
+          })()}
           {seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
               const pieceA = pieces.find((p) => p.id === a.pieceIdA)
@@ -5743,6 +5892,147 @@ export function WorkspaceCanvas() {
                 : toastMessage}
         </div>
       )}
+      {edgeSeamPickingActive && !edgeAllowancePopover && (
+        <div style={{
+          position: 'fixed',
+          top: 48,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#e65100',
+          color: '#fff',
+          padding: '6px 18px',
+          borderRadius: 6,
+          fontSize: 13,
+          fontFamily: 'sans-serif',
+          zIndex: 3000,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+        }}>
+          <span>Kante anklicken, um Nahtzugabe festzulegen</span>
+          <button
+            type="button"
+            onClick={() => {
+              setEdgeSeamPickingActive(false)
+              setHoveredEdgePicking(null)
+            }}
+            style={{
+              background: 'rgba(255,255,255,0.25)',
+              border: 'none',
+              color: '#fff',
+              padding: '2px 10px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >
+            Abbrechen
+          </button>
+        </div>
+      )}
+      {edgeAllowancePopover && <EdgeAllowancePopover
+        popover={edgeAllowancePopover}
+        onConfirm={(mm) => {
+          setEdgeSeamAllowance(edgeAllowancePopover.pieceId, edgeAllowancePopover.edgeIndex, mm)
+          setEdgeAllowancePopover(null)
+        }}
+        onCancel={() => setEdgeAllowancePopover(null)}
+      />}
+    </div>
+  )
+}
+
+function EdgeAllowancePopover({
+  popover,
+  onConfirm,
+  onCancel,
+}: {
+  popover: { currentMm: number; clientX: number; clientY: number }
+  onConfirm: (mm: number) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState(String(popover.currentMm))
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select() }, [])
+  const confirm = () => {
+    const mm = parseFloat(value)
+    if (Number.isFinite(mm) && mm >= 0) onConfirm(mm)
+    else onCancel()
+  }
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: popover.clientX,
+        top: popover.clientY,
+        transform: 'translate(-50%, 12px)',
+        background: '#fff',
+        border: '1px solid #ccc',
+        borderRadius: 8,
+        boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+        padding: '10px 14px',
+        zIndex: 3000,
+        fontFamily: 'sans-serif',
+        fontSize: 13,
+        minWidth: 160,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ marginBottom: 6, fontWeight: 600, color: '#333' }}>Nahtzugabe (mm)</div>
+      <input
+        ref={inputRef}
+        type="number"
+        min={0}
+        step={0.5}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); confirm() }
+          if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+          e.stopPropagation()
+        }}
+        style={{
+          width: '100%',
+          padding: '4px 8px',
+          fontSize: 14,
+          border: '1px solid #bbb',
+          borderRadius: 4,
+          boxSizing: 'border-box',
+        }}
+      />
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            padding: '3px 10px',
+            fontSize: 12,
+            border: '1px solid #ccc',
+            borderRadius: 4,
+            background: '#f5f5f5',
+            cursor: 'pointer',
+          }}
+        >
+          Abbrechen
+        </button>
+        <button
+          type="button"
+          onClick={confirm}
+          style={{
+            padding: '3px 10px',
+            fontSize: 12,
+            border: 'none',
+            borderRadius: 4,
+            background: '#e65100',
+            color: '#fff',
+            cursor: 'pointer',
+          }}
+        >
+          OK
+        </button>
+      </div>
     </div>
   )
 }

@@ -495,6 +495,95 @@ export function deriveCutLineFromSeamWithValidation(
 }
 
 /**
+ * Schnittlinie aus Nahtlinie mit variablen Nahtzugaben pro Kante.
+ * `allowancePerCurveIndex` ordnet jedem curveIndex der seamLine seine Nahtzugabe zu.
+ * Gleiche Validierungsschritte wie `deriveCutLineFromSeamWithValidation`.
+ */
+export function deriveCutLineFromSeamWithVariableAllowance(
+  seamLine: Curve[],
+  allowancePerCurveIndex: Map<number, number>,
+  maxAllowanceMm: number
+): DeriveCutLineFromSeamResult {
+  if (seamLine.length < 3) {
+    return { ok: false, message: 'Nahtlinie ungültig.' }
+  }
+
+  if (maxAllowanceMm > 0) {
+    const allowanceCheck = validateSeamAllowance(seamLine, maxAllowanceMm)
+    if (!allowanceCheck.valid) {
+      return {
+        ok: false,
+        message: allowanceCheck.warning ?? 'Nahtzugabe passt nicht zur Nahtlinie.',
+      }
+    }
+  }
+
+  const minChord = minChordLengthMm(seamLine)
+  if (minChord < MIN_SEAM_SEGMENT_LEN_MM) {
+    return {
+      ok: false,
+      message: `Nahtlinie hat sehr kurze Segmente (< ${MIN_SEAM_SEGMENT_LEN_MM} mm); Offset wird nicht angewendet.`,
+    }
+  }
+
+  const seamFlat = curvesToPoints(seamLine)
+  if (seamFlat.length >= 4) {
+    const ring = [...seamFlat]
+    if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
+    if (ring.length >= 4 && closedPolylineSelfIntersects(ring)) {
+      return {
+        ok: false,
+        message: 'Nahtlinie überschneidet sich; Offset wird nicht angewendet.',
+      }
+    }
+  }
+
+  const { lineCurves: raw, success } = offsetClosedPolygonVariable(seamLine, allowancePerCurveIndex, {
+    joinType: 'miter',
+    miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
+    simplifyTolerance: 0.06,
+  })
+
+  if (!success || raw.length < 3) {
+    return {
+      ok: false,
+      message: 'Variabler Nahtzugabe-Offset ergab keine gültige Schnittkontur. Änderung verworfen.',
+    }
+  }
+
+  let cutLine = raw
+  const seamArea = signedAreaCurves(seamLine)
+  const cutAreaSigned = signedAreaCurves(cutLine)
+  if (seamArea * cutAreaSigned < 0) {
+    cutLine = reverseCurves(cutLine)
+  }
+  cutLine = alignClosedCurveStart(cutLine, seamLine[0].start)
+
+  const cutArea = Math.abs(signedAreaCurves(cutLine))
+  const seamAreaAbs = Math.abs(seamArea)
+  if (seamAreaAbs >= 1 && cutArea < seamAreaAbs * 0.5) {
+    return {
+      ok: false,
+      message: 'Schnittkontur nach variablem Offset zu klein (Kollaps). Änderung verworfen.',
+    }
+  }
+
+  const cutPts = curvesToPoints(cutLine)
+  if (cutPts.length >= 4) {
+    const ring = [...cutPts]
+    if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
+    if (ring.length >= 4 && closedPolylineSelfIntersects(ring)) {
+      return {
+        ok: false,
+        message: 'Schnittkontur nach variablem Offset ist selbstüberschneidend. Änderung verworfen.',
+      }
+    }
+  }
+
+  return { ok: true, cutLine }
+}
+
+/**
  * Einzelnes Segment um deltaMm in Außenrichtung verschieben.
  * Für Linien: einheitliche Verschiebung entlang Mittennormale.
  * Für Bézier: Start/cp1 entlang Startnormale, cp2/Ende entlang Endnormale (paralleler Offset).
@@ -534,6 +623,203 @@ export function offsetSegmentPoints(
     cp1: { x: c.cp1.x + deltaMm * Math.cos(radCp1), y: c.cp1.y + deltaMm * Math.sin(radCp1) },
     cp2: { x: c.cp2.x + deltaMm * Math.cos(radCp2), y: c.cp2.y + deltaMm * Math.sin(radCp2) },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Variable offset: per-segment allowance with miter intersection at corners
+// ---------------------------------------------------------------------------
+
+/**
+ * Outward normal vector for a line segment (respects winding).
+ * Returns a unit vector pointing outward.
+ */
+function outwardNormalForSegment(
+  p1: Point,
+  p2: Point,
+  areaSign: number
+): { nx: number; ny: number } {
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
+  const len = Math.hypot(dx, dy) || 1
+  const lnx = -dy / len
+  const lny = dx / len
+  const nx = areaSign >= 0 ? -lnx : lnx
+  const ny = areaSign >= 0 ? -lny : lny
+  return { nx, ny }
+}
+
+/**
+ * Schnitt zweier Geraden (p1→p2) und (p3→p4). Liefert den Schnittpunkt oder null bei Parallelität.
+ */
+function lineLineIntersection(
+  p1: Point, p2: Point,
+  p3: Point, p4: Point
+): Point | null {
+  const d1x = p2.x - p1.x
+  const d1y = p2.y - p1.y
+  const d2x = p4.x - p3.x
+  const d2y = p4.y - p3.y
+  const den = d1x * d2y - d1y * d2x
+  if (Math.abs(den) < 1e-12) return null
+  const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / den
+  return { x: p1.x + t * d1x, y: p1.y + t * d1y }
+}
+
+export type VariableOffsetResult = {
+  lineCurves: Curve[]
+  success: boolean
+}
+
+/**
+ * Offsettet ein geschlossenes Polygon (als Curve[]) mit unterschiedlichen Abständen pro Segment.
+ * `allowancePerCurveIndex` ordnet jedem curveIndex seine Nahtzugabe zu (mm, 0 = kein Offset).
+ *
+ * Algorithmus:
+ * 1. Flatten zu Polyline (Bézier → fein abgetastet)
+ * 2. Jedes Polyline-Segment erhält den Offset seines Quell-curveIndex
+ * 3. Offset entlang der Auswärts-Normalen
+ * 4. Miter-Intersection zwischen aufeinanderfolgenden Offset-Segmenten
+ * 5. Miter-Limit (schneidet extreme Spitzen ab)
+ * 6. Douglas-Peucker + Schließen
+ */
+export function offsetClosedPolygonVariable(
+  curves: Curve[],
+  allowancePerCurveIndex: Map<number, number>,
+  options?: OffsetOptions
+): VariableOffsetResult {
+  if (curves.length === 0) return { lineCurves: [], success: false }
+
+  const area = signedAreaCurves(curves)
+  const areaSign = area
+
+  // Flatten to polyline, tracking which curveIndex each segment belongs to
+  const polyPts: Point[] = []
+  const polySegCurveIdx: number[] = [] // polySegCurveIdx[i] = curveIndex for segment polyPts[i]→polyPts[i+1]
+  const BS = 64
+
+  for (let ci = 0; ci < curves.length; ci++) {
+    const c = curves[ci]
+    if (c.type === 'line') {
+      if (polyPts.length === 0 || !ptEq(polyPts[polyPts.length - 1], c.start)) {
+        polyPts.push({ ...c.start })
+      }
+      polyPts.push({ ...c.end })
+      polySegCurveIdx.push(ci)
+    } else {
+      if (polyPts.length === 0 || !ptEq(polyPts[polyPts.length - 1], c.start)) {
+        polyPts.push({ ...c.start })
+      }
+      for (let k = 1; k < BS; k++) {
+        polyPts.push(bezierAt(c, k / BS))
+        polySegCurveIdx.push(ci)
+      }
+      polyPts.push({ ...c.end })
+      polySegCurveIdx.push(ci)
+    }
+  }
+
+  // Remove duplicate closing point
+  if (polyPts.length > 1 && ptEq(polyPts[0], polyPts[polyPts.length - 1])) {
+    polyPts.pop()
+  }
+
+  const n = polyPts.length
+  if (n < 3) return { lineCurves: [], success: false }
+
+  // Ensure polySegCurveIdx covers all n segments (closed ring: segment i = pt[i]→pt[(i+1)%n])
+  while (polySegCurveIdx.length < n) {
+    polySegCurveIdx.push(polySegCurveIdx.length > 0 ? polySegCurveIdx[polySegCurveIdx.length - 1] : 0)
+  }
+
+  // Build offset segments: each segment i = polyPts[i]→polyPts[(i+1)%n] offset by its allowance
+  const offsetSegs: Array<{ s: Point; e: Point }> = []
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    const p1 = polyPts[i]
+    const p2 = polyPts[j]
+    const ci = polySegCurveIdx[i]
+    const mm = allowancePerCurveIndex.get(ci) ?? 0
+    const { nx, ny } = outwardNormalForSegment(p1, p2, areaSign)
+    offsetSegs.push({
+      s: { x: p1.x + nx * mm, y: p1.y + ny * mm },
+      e: { x: p2.x + nx * mm, y: p2.y + ny * mm },
+    })
+  }
+
+  // Compute miter intersections between consecutive offset segments.
+  // At each vertex i, offset-segments (prev) and (i) meet.
+  // For convex corners the miter point is outward; for concave corners
+  // the intersection can flip to the wrong side → bevel fallback.
+  const miterLimit = options?.miterLimit ?? CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET
+  const resultPts: Point[] = []
+
+  for (let i = 0; i < n; i++) {
+    const prev = (i - 1 + n) % n
+    const segA = offsetSegs[prev]
+    const segB = offsetSegs[i]
+
+    const inter = lineLineIntersection(segA.s, segA.e, segB.s, segB.e)
+    if (inter) {
+      const origPt = polyPts[i]
+      const ciA = polySegCurveIdx[prev]
+      const ciB = polySegCurveIdx[i]
+      const maxAllowance = Math.max(allowancePerCurveIndex.get(ciA) ?? 0, allowancePerCurveIndex.get(ciB) ?? 0)
+      const miterDist = Math.hypot(inter.x - origPt.x, inter.y - origPt.y)
+
+      // Concave-corner check: the miter point must be on the outward side of the
+      // original vertex.  Direction from origPt to inter should align (positive dot)
+      // with the average outward normal of the two meeting edges.
+      const avgNx = (outwardNormalForSegment(polyPts[prev], polyPts[i], areaSign).nx +
+                      outwardNormalForSegment(polyPts[i], polyPts[(i + 1) % n], areaSign).nx) / 2
+      const avgNy = (outwardNormalForSegment(polyPts[prev], polyPts[i], areaSign).ny +
+                      outwardNormalForSegment(polyPts[i], polyPts[(i + 1) % n], areaSign).ny) / 2
+      const toInterX = inter.x - origPt.x
+      const toInterY = inter.y - origPt.y
+      const dotOutward = toInterX * avgNx + toInterY * avgNy
+      const isConcave = dotOutward < 0
+
+      if (isConcave || (maxAllowance > 0 && miterDist > maxAllowance * miterLimit)) {
+        // Bevel: use the endpoints of both offset segments instead of the miter point
+        resultPts.push({ ...segA.e })
+        resultPts.push({ ...segB.s })
+      } else {
+        resultPts.push(inter)
+      }
+    } else {
+      // Parallel segments: midpoint of the two offset endpoints
+      resultPts.push({ x: (segA.e.x + segB.s.x) / 2, y: (segA.e.y + segB.s.y) / 2 })
+    }
+  }
+
+  if (resultPts.length < 3) return { lineCurves: [], success: false }
+
+  // Simplify
+  const tol = options?.simplifyTolerance ?? 0.06
+  let outPts = tol > 0 ? simplifyClosedPolygon(resultPts, tol) : resultPts
+  if (outPts.length < 3) outPts = resultPts
+
+  // Remove degenerate (near-zero-length) segments
+  const DEGEN_EPS = 0.001
+  const filtered: Point[] = []
+  for (let i = 0; i < outPts.length; i++) {
+    const next = outPts[(i + 1) % outPts.length]
+    if (Math.hypot(next.x - outPts[i].x, next.y - outPts[i].y) > DEGEN_EPS) {
+      filtered.push(outPts[i])
+    }
+  }
+  if (filtered.length >= 3) outPts = filtered
+
+  // Convert to Curve[] (line segments, closed)
+  const segs = pointsToLineCurves(outPts)
+  if (outPts.length >= 3) {
+    segs.push({ type: 'line', start: outPts[outPts.length - 1], end: outPts[0] })
+  }
+
+  return { lineCurves: segs, success: true }
+}
+
+function ptEq(a: Point, b: Point, eps = 1e-6): boolean {
+  return Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps
 }
 
 /** Prüft ob Nahtzugabe für die Kontur gültig ist. */

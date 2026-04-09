@@ -52,6 +52,14 @@ export type Drill = {
   radius: number
 }
 
+/** Nahtzugaben-Override pro Kante (Ecke-zu-Ecke auf Master-Kontur). */
+export type EdgeSeamAllowance = {
+  /** 0-basierte Kantennummer (Ordnungsposition unter den harten Ecken der Master-Kontur). */
+  edgeIndex: number
+  /** Nahtzugabe in mm; 0 = keine Nahtzugabe für diese Kante. */
+  allowanceMm: number
+}
+
 export type PatternPieceTransform = {
   x: number
   y: number
@@ -69,6 +77,12 @@ export type PatternPiece = {
   seamLine: Curve[]
   /** Nahtzugabe in mm; wenn gesetzt, wird seamLine bei Konturänderung neu berechnet */
   seamAllowanceMm?: number | null
+  /**
+   * Kantenweise Overrides der Nahtzugabe. Sparse: nur Kanten die vom globalen `seamAllowanceMm` abweichen.
+   * `edgeIndex` = Ordnungsposition der Kante (0-basiert, Ecke-zu-Ecke auf der Master-Kontur).
+   * Fehlende Kanten erben `seamAllowanceMm`. Leer/undefiniert = einheitliche Nahtzugabe (Clipper).
+   */
+  edgeSeamAllowances?: EdgeSeamAllowance[]
   notches: Notch[]
   drills: Drill[]
   grainLine: Line | null

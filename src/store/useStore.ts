@@ -20,9 +20,12 @@ import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import {
   offsetCurvesInwardForSeam,
   deriveCutLineFromSeamWithValidation,
+  deriveCutLineFromSeamWithVariableAllowance,
   offsetSegmentPoints,
   validateContourAfterVertexMove,
 } from '../geometry/offset'
+import type { DeriveCutLineFromSeamResult } from '../geometry/offset'
+import { hasVariableAllowance, buildCurveIndexAllowanceMap, adjustEdgeAllowancesAfterRemove } from '../geometry/edgeEnumeration'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import {
   getSubSegments,
@@ -53,6 +56,25 @@ import type { ConfiguratorInstance, ConfiguratorKindId, ConfiguratorPartParams }
 import { generateConfiguratorPartGeometry } from '../configurators/generators'
 import { getDefaultConfiguratorParts } from '../configurators/registry'
 import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../workspace/workspaceMarqueeSelection'
+
+/**
+ * Wählt automatisch den richtigen Offset-Pfad: uniformer Clipper oder variabler per-Edge Offset.
+ * Wenn das Teil `edgeSeamAllowances` hat die vom Default abweichen, wird der variable Algorithmus genutzt.
+ */
+function deriveCutLineForPiece(
+  piece: PatternPiece,
+  seamLine: Curve[],
+  seamAllowanceMm: number
+): DeriveCutLineFromSeamResult {
+  if (hasVariableAllowance(piece)) {
+    const allowanceMap = buildCurveIndexAllowanceMap(piece)
+    let maxMm = 0
+    for (const v of allowanceMap.values()) maxMm = Math.max(maxMm, v)
+    maxMm = Math.max(maxMm, seamAllowanceMm)
+    return deriveCutLineFromSeamWithVariableAllowance(seamLine, allowanceMap, maxMm)
+  }
+  return deriveCutLineFromSeamWithValidation(seamLine, seamAllowanceMm)
+}
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -272,6 +294,8 @@ type Store = {
   nahtzugabeDialogPieceId: string | null
   /** Dialog „Teil-Eigenschaften“ (Name, Flächenfüllung). */
   piecePropertiesDialogPieceId: string | null
+  /** Interaktiver Modus: Kante auf dem Canvas anklicken, um Nahtzugabe pro Kante festzulegen. */
+  edgeSeamPickingActive: boolean
   /** Nahtzuordnung: 'first' = erste Naht anklicken, 'second' = zweite Naht (anderes Teil) anklicken */
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
@@ -330,6 +354,7 @@ type Store = {
   setPendingNahtzugabeClick: (v: boolean) => void
   setNahtzugabeDialogPieceId: (v: string | null) => void
   setPiecePropertiesDialogPieceId: (v: string | null) => void
+  setEdgeSeamPickingActive: (v: boolean) => void
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
@@ -398,6 +423,7 @@ type Store = {
   setSelectedPoint: (v: Store['selectedPoint']) => void
   applyOffset: (pieceId: string, deltaMm: number) => void
   removeSeamAllowance: (pieceId: string) => void
+  setEdgeSeamAllowance: (pieceId: string, edgeIndex: number, allowanceMm: number) => void
   /** Legacy-Name: split auf der Master-Kontur (bei Nahtzugabe seamLine), danach Ableitung/Resync. */
   insertPointOnCutLine: (pieceId: string, curveIndex: number, point: Point, t?: number) => boolean
   updateVertex: (
@@ -622,6 +648,7 @@ export const useStore = create<Store>((set, get) => ({
   pendingNahtzugabeClick: false,
   nahtzugabeDialogPieceId: null,
   piecePropertiesDialogPieceId: null,
+  edgeSeamPickingActive: false,
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   showSettingsModal: false,
@@ -681,7 +708,7 @@ export const useStore = create<Store>((set, get) => ({
         const next = { ...p, ...upd }
         if (next.seamAllowanceMm != null) {
           if (next.seamLine.length >= 3) {
-            const derived = deriveCutLineFromSeamWithValidation(next.seamLine, next.seamAllowanceMm)
+            const derived = deriveCutLineForPiece(next, next.seamLine, next.seamAllowanceMm)
             if (!derived.ok) {
               toastMessage = `warn:${derived.message}`
               return p
@@ -697,7 +724,7 @@ export const useStore = create<Store>((set, get) => ({
             // Nicht: seam = Inset(cut) bei unveränderter cutLine — das verliert die editierbare Topologie und bricht Punkt-/Vertex-Werkzeuge.
             const oldCut = p.cutLine
             const seamLine = cloneCurvesArray(next.cutLine)
-            const derived = deriveCutLineFromSeamWithValidation(seamLine, next.seamAllowanceMm)
+            const derived = deriveCutLineForPiece(next, seamLine, next.seamAllowanceMm)
             if (!derived.ok) {
               toastMessage = `warn:${derived.message}`
               return p
@@ -887,6 +914,7 @@ export const useStore = create<Store>((set, get) => ({
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
   setNahtzugabeDialogPieceId: (v) => set({ nahtzugabeDialogPieceId: v }),
   setPiecePropertiesDialogPieceId: (v) => set({ piecePropertiesDialogPieceId: v }),
+  setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
   setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
@@ -1386,7 +1414,7 @@ export const useStore = create<Store>((set, get) => ({
         next[curveIndex] = updated
         if (seamPc && piece.seamAllowanceMm != null) {
           const seamLine = next
-          const derived = deriveCutLineFromSeamWithValidation(seamLine, piece.seamAllowanceMm)
+          const derived = deriveCutLineForPiece(piece, seamLine, piece.seamAllowanceMm)
           if (!derived.ok) {
             toastMessage = `warn:${derived.message}`
             return piece
@@ -1545,7 +1573,7 @@ export const useStore = create<Store>((set, get) => ({
         const sourceInner = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
         const migratingFromCutMaster = !(p.seamLine.length >= 3 && p.seamAllowanceMm != null)
         const seamLine = cloneCurvesArray(sourceInner)
-        const derived = deriveCutLineFromSeamWithValidation(seamLine, deltaMm)
+        const derived = deriveCutLineForPiece({ ...p, seamAllowanceMm: deltaMm }, seamLine, deltaMm)
         if (!derived.ok) {
           toastMessage = `warn:${derived.message}`
           return p
@@ -1598,6 +1626,7 @@ export const useStore = create<Store>((set, get) => ({
             cutLine: newCut,
             seamLine: [],
             seamAllowanceMm: null,
+            edgeSeamAllowances: undefined,
             notches,
             softVertices,
             softVerticesMaster: [],
@@ -1605,6 +1634,44 @@ export const useStore = create<Store>((set, get) => ({
         }),
       },
     })),
+
+  setEdgeSeamAllowance: (pieceId, edgeIndex, allowanceMm) =>
+    set((s) => {
+      let toastMessage: string | null = null
+      const pieces = s.workspace.pieces.map((p) => {
+        if (p.id !== pieceId) return p
+        if (p.seamAllowanceMm == null || p.seamLine.length < 3) return p
+
+        const overrides = [...(p.edgeSeamAllowances ?? [])]
+        const existingIdx = overrides.findIndex((o) => o.edgeIndex === edgeIndex)
+        if (existingIdx >= 0) {
+          if (allowanceMm === (p.seamAllowanceMm ?? 0)) {
+            overrides.splice(existingIdx, 1)
+          } else {
+            overrides[existingIdx] = { edgeIndex, allowanceMm }
+          }
+        } else if (allowanceMm !== (p.seamAllowanceMm ?? 0)) {
+          overrides.push({ edgeIndex, allowanceMm })
+        }
+
+        const next: PatternPiece = { ...p, edgeSeamAllowances: overrides.length > 0 ? overrides : undefined }
+        const derived = deriveCutLineForPiece(next, next.seamLine, next.seamAllowanceMm!)
+        if (!derived.ok) {
+          toastMessage = `warn:${derived.message}`
+          return p
+        }
+        const oldCut = p.cutLine
+        next.cutLine = derived.cutLine
+        next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
+        const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, derived.cutLine, p.softVertices)
+        next.softVertices = mappedSoft
+        return forceCutVerticesSoftAfterPromotion(next, mappedSoft)
+      })
+      return {
+        workspace: { ...s.workspace, pieces },
+        ...(toastMessage ? { toastMessage } : {}),
+      }
+    }),
 
   // Legacy-API-Name: arbeitet intern auf der Master-Kontur (seamLine bei Nahtzugabe, sonst cutLine).
   insertPointOnCutLine: (pieceId, curveIndex, point, t) => {
@@ -1651,7 +1718,7 @@ export const useStore = create<Store>((set, get) => ({
 
             if (seamPc && p.seamAllowanceMm != null) {
               const seamLine = newMaster
-              const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
+              const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
               if (!derived.ok) {
                 toastMessage = `warn:${derived.message}`
                 return p
@@ -1734,7 +1801,7 @@ export const useStore = create<Store>((set, get) => ({
               useSeamMaster && !skipSeamRecalc && seamAllowance != null
             if (cutRebuiltFromSeam) {
               const newSeam = nextCurves
-              const derived = deriveCutLineFromSeamWithValidation(newSeam, seamAllowance)
+              const derived = deriveCutLineForPiece(p, newSeam, seamAllowance)
               if (!derived.ok) {
                 toastMessage = `warn:${derived.message}`
                 return p
@@ -1811,7 +1878,7 @@ export const useStore = create<Store>((set, get) => ({
         }
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
-          const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
+          const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
           if (!derived.ok) {
             toastMessage = `warn:${derived.message}`
             return p
@@ -1861,7 +1928,7 @@ export const useStore = create<Store>((set, get) => ({
         }
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
-          const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
+          const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
           if (!derived.ok) {
             toastMessage = `warn:${derived.message}`
             return p
@@ -1907,7 +1974,7 @@ export const useStore = create<Store>((set, get) => ({
       if (piece && useSeamMaster && piece.seamAllowanceMm != null && master.length > 3) {
         const merged = mergeContourRemoveVertex(master, vertexIndex)
         if (merged) {
-          const derived = deriveCutLineFromSeamWithValidation(merged, piece.seamAllowanceMm)
+          const derived = deriveCutLineForPiece(piece, merged, piece.seamAllowanceMm)
           if (!derived.ok) {
             return { ...s, toastMessage: `warn:${derived.message}` }
           }
@@ -1928,7 +1995,7 @@ export const useStore = create<Store>((set, get) => ({
             let cutLine = p.cutLine
             let seamLine = p.seamLine
             if (seamMaster && seamAllowance != null) {
-              const derived = deriveCutLineFromSeamWithValidation(merged, seamAllowance)
+              const derived = deriveCutLineForPiece(p, merged, seamAllowance)
               if (!derived.ok) return p
               seamLine = merged
               cutLine = derived.cutLine
@@ -1961,7 +2028,11 @@ export const useStore = create<Store>((set, get) => ({
             const softVerticesMaster = (p.softVerticesMaster ?? [])
               .filter((vi) => vi !== vertexIndex)
               .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
-            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster })
+            const wasSoft = seamMaster
+              ? (p.softVerticesMaster ?? []).includes(vertexIndex)
+              : (p.softVertices ?? []).includes(vertexIndex)
+            const edgeSeamAllowances = adjustEdgeAllowancesAfterRemove(p.edgeSeamAllowances, vertexIndex, wasSoft)
+            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster, edgeSeamAllowances })
           }),
         },
         ...(toastMessage ? { toastMessage } : {}),
@@ -1983,7 +2054,7 @@ export const useStore = create<Store>((set, get) => ({
         next[curveIndex] = lineSeg
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
-          const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
+          const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
           if (!derived.ok) {
             toastMessage = `warn:${derived.message}`
             return p
@@ -2072,7 +2143,7 @@ export const useStore = create<Store>((set, get) => ({
         nextMaster[nextIdx] = { ...nextMaster[nextIdx], start: pts.end } as Curve
         if (seamPcP && p.seamAllowanceMm != null) {
           const seamLine = nextMaster
-          const derived = deriveCutLineFromSeamWithValidation(seamLine, p.seamAllowanceMm)
+          const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
           if (!derived.ok) {
             toastMessage = `warn:${derived.message}`
             return p
@@ -2288,6 +2359,7 @@ export const useStore = create<Store>((set, get) => ({
       pendingNahtzugabeClick: false,
       nahtzugabeDialogPieceId: null,
       piecePropertiesDialogPieceId: null,
+      edgeSeamPickingActive: false,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       rulerMode: false,
@@ -2453,6 +2525,7 @@ export const useStore = create<Store>((set, get) => ({
       pendingNahtzugabeClick: false,
       nahtzugabeDialogPieceId: null,
       piecePropertiesDialogPieceId: null,
+      edgeSeamPickingActive: false,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       rulerMode: false,

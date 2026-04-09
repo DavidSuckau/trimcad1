@@ -100,6 +100,7 @@ export function Toolbar() {
     setShowRockGeneratorModal,
     batchSelectionTargets,
     batchDeleteMarqueeCompletePieces,
+    setEdgeSeamPickingActive,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
@@ -795,6 +796,19 @@ export function Toolbar() {
                   }}
                 >
                   Nahtzugabe … <span className="menubar-shortcut">S</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  disabled={!workspace.pieces.some((p) => p.seamAllowanceMm != null && p.seamLine.length >= 3)}
+                  onClick={() => {
+                    setEdgeSeamPickingActive(true)
+                    closeMenu()
+                  }}
+                >
+                  Nahtzugabe pro Kante … <span className="menubar-shortcut">L</span>
                 </button>
               </li>
               <li>
