@@ -146,8 +146,8 @@ export function buildWorkspaceOverviewSvgDocument(
         const edgeDx = lastSeg.end.x - firstSeg.start.x
         const edgeDy = lastSeg.end.y - firstSeg.start.y
         const edgeLen = Math.hypot(edgeDx, edgeDy) || 1
-        const nx = outSign * (-edgeDy / edgeLen) * (OFFSET + 6)
-        const ny = outSign * (edgeDx / edgeLen) * (OFFSET + 6)
+        const nx = outSign * (-edgeDy / edgeLen) * (OFFSET + 12)
+        const ny = outSign * (edgeDx / edgeLen) * (OFFSET + 12)
         const lx = midX + nx
         const ly = midY + ny
         const ang = (Math.atan2(edgeDy, edgeDx) * 180) / Math.PI

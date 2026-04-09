@@ -5593,8 +5593,8 @@ export function WorkspaceCanvas() {
             const nxLocal = outSign * (-edgeDy / edgeLen)
             const nyLocal = outSign * (edgeDx / edgeLen)
             const labelLocal = {
-              x: midLocal.x + nxLocal * (PROFILE_LINE_OFFSET + 6),
-              y: midLocal.y + nyLocal * (PROFILE_LINE_OFFSET + 6),
+              x: midLocal.x + nxLocal * (PROFILE_LINE_OFFSET + 12),
+              y: midLocal.y + nyLocal * (PROFILE_LINE_OFFSET + 12),
             }
             const labelW = pieceLocalToWorld(labelLocal, piece)
             const startW = pieceLocalToWorld(startL, piece)
