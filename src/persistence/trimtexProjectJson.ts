@@ -7,9 +7,12 @@ import type {
   ViewState,
   SeamAssignment,
   SeamAssignmentKindId,
+  Notch,
+  NotchType,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
+import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
 import { worldToPieceLocal } from '../geometry/pieceTransform'
 import { isPointInClosedCurves } from '../geometry/pointInPolygon'
 
@@ -18,7 +21,7 @@ export const TRIMTEX_PROJECT_VERSION = 1 as const
 
 /** Entspricht `NotchSetting` im Store (ohne Import-Zyklus). */
 export type ProjectNotchSetting = {
-  type: 'strich' | 'kerbe'
+  type: 'keine' | 'strich' | 'kerbe'
   widthMm: number
   depthMm: number
 }
@@ -81,6 +84,56 @@ function isViewState(v: unknown): v is ViewState {
   )
 }
 
+const NOTCH_TYPES: readonly NotchType[] = ['single', 'double', 'v']
+
+function parseNotchRaw(o: unknown): Notch | null {
+  if (typeof o !== 'object' || o === null) return null
+  const r = o as Record<string, unknown>
+  if (typeof r.id !== 'string') return null
+  if (!isPoint(r.position)) return null
+  const angle = Number(r.angle)
+  if (!Number.isFinite(angle)) return null
+  const typeRaw = r.type
+  const type: NotchType =
+    typeof typeRaw === 'string' && NOTCH_TYPES.includes(typeRaw as NotchType)
+      ? (typeRaw as NotchType)
+      : 'v'
+  const depth = r.depth === undefined ? 4 : Number(r.depth)
+  if (!Number.isFinite(depth)) return null
+  const width = r.width === undefined ? undefined : Number(r.width)
+  if (width !== undefined && !Number.isFinite(width)) return null
+  const sNormalized = r.sNormalized === undefined ? undefined : Number(r.sNormalized)
+  if (sNormalized !== undefined && !Number.isFinite(sNormalized)) return null
+  const arcLengthMm = r.arcLengthMm === undefined ? undefined : Number(r.arcLengthMm)
+  if (arcLengthMm !== undefined && !Number.isFinite(arcLengthMm)) return null
+  return {
+    id: r.id,
+    position: { ...(r.position as Point) },
+    angle,
+    type,
+    depth,
+    ...(width !== undefined ? { width } : {}),
+    ...(sNormalized !== undefined ? { sNormalized } : {}),
+    ...(arcLengthMm !== undefined ? { arcLengthMm } : {}),
+  }
+}
+
+function normalizeNotchesArray(raw: unknown, cutLine: Curve[]): Notch[] {
+  if (!Array.isArray(raw)) return []
+  const out: Notch[] = []
+  for (const item of raw) {
+    const n = parseNotchRaw(item)
+    if (!n) continue
+    if (cutLine.length >= 2) {
+      const m = materializeNotchAnchorsOnCutLine(n, cutLine)
+      out.push(m ?? n)
+    } else {
+      out.push(n)
+    }
+  }
+  return out
+}
+
 function normalizePiece(raw: PatternPiece): PatternPiece {
   const cutLine = Array.isArray(raw.cutLine) ? raw.cutLine.filter(isCurve) : []
   const seamLine = Array.isArray(raw.seamLine) ? raw.seamLine.filter(isCurve) : []
@@ -98,7 +151,7 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
             const v = Number(raw.seamAllowanceMm)
             return Number.isFinite(v) ? v : null
           })(),
-    notches: Array.isArray(raw.notches) ? raw.notches : [],
+    notches: normalizeNotchesArray(raw.notches, cutLine),
     drills: Array.isArray(raw.drills) ? raw.drills : [],
     grainLine: raw.grainLine && isPoint((raw.grainLine as { start?: unknown }).start) && isPoint((raw.grainLine as { end?: unknown }).end)
       ? { start: { ...(raw.grainLine as { start: Point }).start }, end: { ...(raw.grainLine as { end: Point }).end } }
@@ -300,7 +353,7 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     ? o.notchSettings.map((n) => {
         const x = n as Record<string, unknown>
         return {
-          type: x.type === 'kerbe' ? 'kerbe' : 'strich',
+          type: x.type === 'kerbe' ? 'kerbe' : x.type === 'keine' ? 'keine' : 'strich',
           widthMm: typeof x.widthMm === 'number' && Number.isFinite(x.widthMm) ? x.widthMm : 6,
           depthMm: typeof x.depthMm === 'number' && Number.isFinite(x.depthMm) ? x.depthMm : 4,
         }
@@ -360,7 +413,16 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     dxfImportDetectVNotches,
     dxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm,
-    notchSettings: notchSettings.length >= 10 ? notchSettings : Array.from({ length: 10 }, (_, i) => notchSettings[i] ?? { type: 'strich', widthMm: 6, depthMm: 4 }),
+    notchSettings:
+      notchSettings.length >= 10
+        ? notchSettings
+        : Array.from({ length: 10 }, (_, i) =>
+            notchSettings[i] ?? {
+              type: i === 0 ? 'kerbe' : 'strich',
+              widthMm: i === 0 ? 6 : 2.5,
+              depthMm: i === 0 ? 4 : 2,
+            }
+          ),
     imageDigitizeSession,
   }
 

@@ -1,24 +1,62 @@
-import type { Curve, Notch, PatternPiece } from '../types/model'
-import { outwardNormalAngleAt } from './curveToPath'
-import { getNotchPositionAndAngle } from './notchOnCurve'
+import type { Curve, Notch, PatternPiece, Point } from '../types/model'
+import { outwardNormalAngleAt, totalPathLength, pointAtPathLength } from './curveToPath'
+import {
+  getNotchPositionAndAngle,
+  getNotchCutLineParameter,
+  materializeNotchAnchorsOnCutLine,
+} from './notchOnCurve'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
-const VERTEX_ANCHOR_T_EPS = 0.04
-const VERTEX_ANCHOR_DIST_MM = 0.55
+type Nr = { point: Point; curveIndex: number; t: number }
 
-/** Naht-Ecke ausblenden, wenn eine Kerbe (über ihre CutLine-Position) dort „sitzt“. */
-const SEAM_VERTEX_NOTCH_OCCLUSION_MM = 5.5
+function isTopologyCompatibleForIndexT(oldCutLine: Curve[], newCutLine: Curve[]): boolean {
+  if (oldCutLine.length !== newCutLine.length) return false
+  for (let i = 0; i < oldCutLine.length; i++) {
+    if (oldCutLine[i].type !== newCutLine[i].type) return false
+  }
+  return true
+}
+
+const ENDPOINT_EPS_MM = 1.0
 
 /**
- * Nach **topologischer oder geometrischer** Änderung der `cutLine` (Offset, Vertex löschen, …):
+ * Prüft ob altes und neues Segment mindestens einen gemeinsamen Endpunkt haben.
+ * Bei Vertex-Drag ändert sich nur ein Endpunkt pro Segment – der andere bleibt gleich.
+ * Bei zyklischem Shift stimmen beide Endpunkte nicht überein.
+ */
+function segmentsShareEndpoint(a: Curve, b: Curve): boolean {
+  return (
+    Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) < ENDPOINT_EPS_MM ||
+    Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y) < ENDPOINT_EPS_MM
+  )
+}
+
+/**
+ * Projiziert einen Punkt nur auf ein einzelnes Segment (nicht auf die gesamte Kontur).
+ * Gibt (curveIndex, t, point) zurück – curveIndex ist der übergebene `ci`.
+ */
+function projectOntoSingleSegment(pos: Point, curves: Curve[], ci: number): Nr | null {
+  if (ci < 0 || ci >= curves.length) return null
+  const hit = nearestCurveIndexAndPoint(pos, [curves[ci]])
+  if (!hit) return null
+  return { point: hit.point, curveIndex: ci, t: hit.t ?? 0 }
+}
+
+/**
+ * Nach Änderung der `cutLine`: auf die neue Kontur abbilden.
  *
- * - Ausgang: kanonische Punktlage auf der **alten** cutLine (`getNotchPositionAndAngle` → berücksichtigt
- *   `vertexIndex` vor `position`).
- * - Ziel: **eine** neue Darstellung auf der **neuen** cutLine: nächstgelegener Punkt; optional wieder
- *   `vertexIndex`, wenn t nahe 0/1 und Abstand zur Ecke klein („re-snap“ an Ecke). Sonst freie Kerbe:
- *   `vertexIndex: undefined`, `position`/`angle` auf Fußpunkt/Normale.
+ * Kerben bleiben **frei auf der Kontur** (`vertexIndex` wird nicht gesetzt).
  *
- * Damit ist die Strategie **parametrisch** (implizit über Projektion), nicht „mm absolut losgelöst“.
+ * **Strategie:**
+ * 1. Topologie kompatibel (gleiche Segmentzahl/-typen, z. B. Vertex-Drag):
+ *    a) Segment teilt mindestens einen Endpunkt → Projektion NUR auf dieses Segment.
+ *       Kerbe darf **nie** auf ein anderes Segment springen.
+ *    b) Kein gemeinsamer Endpunkt (zyklischer Shift) → volle Euklidische Projektion.
+ * 2. Topologie inkompatibel (z. B. Offset/Nahtzugabe):
+ *    `sNormalized` übertragen → gleicher Konturanteil auf der neuen Kontur.
+ * 3. Fallback: Euklidische Projektion der alten Position.
+ *
+ * `materializeNotchAnchorsOnCutLine` setzt `sNormalized` / `arcLengthMm` neu.
  */
 export function resyncNotchesAfterCutLineRebuilt(
   notches: Notch[],
@@ -26,93 +64,180 @@ export function resyncNotchesAfterCutLineRebuilt(
   newCutLine: Curve[]
 ): Notch[] {
   if (newCutLine.length === 0) return notches
-  const oldLen = oldCutLine.length
-  const newLen = newCutLine.length
+  const topoCompat = isTopologyCompatibleForIndexT(oldCutLine, newCutLine)
+
   return notches.map((notch) => {
-    const hadVertexIndex = notch.vertexIndex != null
     const oldPos = getNotchPositionAndAngle(notch, oldCutLine).position
 
-    /**
-     * Wichtiger Spezialfall:
-     * Wenn die Vertex-Anzahl erhalten bleibt (Offset/Nahtzugabe mit gleicher Topologie),
-     * dann soll eine zuvor verankerte Kerbe auch nach dem Rebuild wieder als verankert gelten,
-     * damit die UI-Eckpunkt-Ausblendung zuverlässig funktioniert (masterNotchVertexIndexSet).
-     *
-     * Ansonsten wird die Kerbe ggf. "frei" (vertexIndex = undefined), weil die geometrische Distanz
-     * Cut→(neu)Cut durch den Offset größer als `VERTEX_ANCHOR_DIST_MM` ist.
-     * Die (topologische) Korrektheit ist hier wichtiger als das strikte t≈0/1 Kriterium.
-     */
-    if (hadVertexIndex && oldLen === newLen && notch.vertexIndex != null) {
-      // Bei erhaltener Topologie (gleiche Vertex-Anzahl) ist die Indexbasis stabil genug,
-      // um die verankerte Kerbe auch nach dem Rebuild wieder als verankert zu behandeln.
-      const vi = ((notch.vertexIndex % newLen) + newLen) % newLen
-      const pos = vi === 0 ? { ...newCutLine[0].start } : { ...newCutLine[vi - 1].end }
-      return { ...notch, vertexIndex: vi, position: pos, angle: notch.angle }
-    }
+    let nr: Nr | null = null
 
-    const nr = nearestCurveIndexAndPoint(oldPos, newCutLine)
-    if (!nr) {
-      return { ...notch, vertexIndex: undefined }
-    }
-    const t = nr.t ?? 0
-    let vertexIndex: number | undefined
-
-    if (t <= VERTEX_ANCHOR_T_EPS) {
-      const vi = nr.curveIndex
-      const vPt = newCutLine[vi].start
-      // Wenn die Kerbe vorher explizit an einer Ecke verankert war, soll sie
-      // bei Nahtzugabe (Offset) nicht "unanchor'ed" werden, nur weil die Euclid-Distanz
-      // alt->neu groß ist. Dann reicht die parametrische Ecke-Nähe (t) als Kriterium.
-      if (hadVertexIndex) {
-        vertexIndex = vi
-      } else if (Math.hypot(nr.point.x - vPt.x, nr.point.y - vPt.y) <= VERTEX_ANCHOR_DIST_MM) {
-        vertexIndex = vi
-      }
-    } else if (t >= 1 - VERTEX_ANCHOR_T_EPS) {
-      const vi = (nr.curveIndex + 1) % newCutLine.length
-      const vPt = vi === 0 ? newCutLine[0].start : newCutLine[vi - 1].end
-      if (hadVertexIndex) {
-        vertexIndex = vi
-      } else if (Math.hypot(nr.point.x - vPt.x, nr.point.y - vPt.y) <= VERTEX_ANCHOR_DIST_MM) {
-        vertexIndex = vi
-      }
-    }
-
-    if (vertexIndex != null) {
-      const pos =
-        vertexIndex === 0 ? { ...newCutLine[0].start } : { ...newCutLine[vertexIndex - 1].end }
-      return { ...notch, vertexIndex, position: pos, angle: notch.angle }
-    }
-
-    // Fallback: Wenn die Kerbe vorher explizit an einer Ecke verankert war, aber unsere
-    // Parametrik-Kriteri(en) für (t nahe 0/1) bei starken Offset/Segment-Änderungen nicht triggern,
-    // wähle trotzdem die nächstgelegene Ecke (Endpoint) der neuen cutLine als vertexIndex.
-    if (hadVertexIndex) {
-      let bestVi = 0
-      let bestD = Infinity
-      for (let vi = 0; vi < newCutLine.length; vi++) {
-        const vPt = vi === 0 ? newCutLine[0].start : newCutLine[vi - 1].end
-        const d = Math.hypot(oldPos.x - vPt.x, oldPos.y - vPt.y)
-        if (d < bestD) {
-          bestD = d
-          bestVi = vi
+    if (topoCompat) {
+      const oldParam = getNotchCutLineParameter(notch, oldCutLine)
+      if (oldParam != null && oldParam.curveIndex >= 0 && oldParam.curveIndex < newCutLine.length) {
+        const ci = oldParam.curveIndex
+        if (segmentsShareEndpoint(oldCutLine[ci], newCutLine[ci])) {
+          nr = projectOntoSingleSegment(oldPos, newCutLine, ci)
         }
       }
-      const pos = bestVi === 0 ? { ...newCutLine[0].start } : { ...newCutLine[bestVi - 1].end }
-      return { ...notch, vertexIndex: bestVi, position: pos, angle: notch.angle }
+      if (!nr) {
+        const nearest = nearestCurveIndexAndPoint(oldPos, newCutLine)
+        if (nearest) {
+          nr = { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 }
+        }
+      }
     }
 
-    const angle = outwardNormalAngleAt(newCutLine, nr.curveIndex, t) + 180
-    return {
+    if (!nr) {
+      const sn = notch.sNormalized
+      const newTotal = totalPathLength(newCutLine)
+      if (sn != null && Number.isFinite(sn) && newTotal > 0) {
+        const pt = pointAtPathLength(newCutLine, Math.max(0, Math.min(1, sn)) * newTotal)
+        if (pt) {
+          nr = { curveIndex: pt.curveIndex, t: pt.t, point: pt.point }
+        }
+      }
+    }
+
+    if (!nr) {
+      const nearest = nearestCurveIndexAndPoint(oldPos, newCutLine)
+      if (!nearest) {
+        return {
+          ...notch,
+          vertexIndex: undefined,
+          sNormalized: undefined,
+          arcLengthMm: undefined,
+        }
+      }
+      nr = { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 }
+    }
+
+    const nextFree: Notch = {
       ...notch,
       vertexIndex: undefined,
+      sNormalized: undefined,
+      arcLengthMm: undefined,
       position: { ...nr.point },
-      angle,
+      angle: outwardNormalAngleAt(newCutLine, nr.curveIndex, nr.t) + 180,
     }
+
+    return materializeNotchAnchorsOnCutLine(nextFree, newCutLine) ?? nextFree
   })
 }
 
-/** Für Seam-as-Master: Eckpunkt-Hit nicht per cutLine-vertexIndex maskieren (falsche Indexbasis). */
+/**
+ * Seam-as-Master Vertex-Drag: Die cutLine kommt von Clipper und hat bei jedem Drag
+ * eine andere Segmentzahl. Die seamLine hingegen hat stabile Topologie (gleiche Segmente,
+ * nur ein Vertex verschoben). Diese Funktion nutzt die seamLine als Anker:
+ *
+ * 1. Kerben-Position auf alte seamLine projizieren → SeamLine-Segment identifizieren.
+ * 2. Segment-gesperrt: Position auf DASSELBE Segment der neuen seamLine projizieren.
+ * 3. Punkt von der neuen seamLine nach außen auf die neue cutLine projizieren.
+ *
+ * So kann eine Kerbe nie auf ein anderes logisches Segment springen,
+ * obwohl die Clipper-cutLine sich strukturell ändert.
+ */
+export function resyncNotchesViaSeamAnchor(
+  notches: Notch[],
+  oldCutLine: Curve[],
+  newCutLine: Curve[],
+  oldSeamLine: Curve[],
+  newSeamLine: Curve[]
+): Notch[] {
+  if (newCutLine.length === 0) return notches
+
+  const seamStable =
+    oldSeamLine.length > 0 &&
+    oldSeamLine.length === newSeamLine.length &&
+    oldSeamLine.every((c, i) => c.type === newSeamLine[i].type)
+
+  if (!seamStable) {
+    return resyncNotchesAfterCutLineRebuilt(notches, oldCutLine, newCutLine)
+  }
+
+  return notches.map((notch) => {
+    const oldPos = getNotchPositionAndAngle(notch, oldCutLine).position
+
+    const seamProj = nearestCurveIndexAndPoint(oldPos, oldSeamLine)
+    if (!seamProj) {
+      return fallbackResync(notch, oldPos, newCutLine)
+    }
+
+    const ci = seamProj.curveIndex
+    if (ci >= newSeamLine.length || !segmentsShareEndpoint(oldSeamLine[ci], newSeamLine[ci])) {
+      return fallbackResync(notch, oldPos, newCutLine)
+    }
+
+    const lockedSeam = projectOntoSingleSegment(oldPos, newSeamLine, ci)
+    if (!lockedSeam) {
+      return fallbackResync(notch, oldPos, newCutLine)
+    }
+
+    const cutProj = nearestCurveIndexAndPoint(lockedSeam.point, newCutLine)
+    if (!cutProj) {
+      return fallbackResync(notch, oldPos, newCutLine)
+    }
+
+    const nr: Nr = { point: cutProj.point, curveIndex: cutProj.curveIndex, t: cutProj.t ?? 0 }
+    return finalizeNotch(notch, nr, newCutLine)
+  })
+}
+
+function fallbackResync(notch: Notch, oldPos: Point, newCutLine: Curve[]): Notch {
+  const nearest = nearestCurveIndexAndPoint(oldPos, newCutLine)
+  if (!nearest) {
+    return { ...notch, vertexIndex: undefined, sNormalized: undefined, arcLengthMm: undefined }
+  }
+  return finalizeNotch(
+    notch,
+    { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 },
+    newCutLine
+  )
+}
+
+function finalizeNotch(notch: Notch, nr: Nr, cutLine: Curve[]): Notch {
+  const nextFree: Notch = {
+    ...notch,
+    vertexIndex: undefined,
+    sNormalized: undefined,
+    arcLengthMm: undefined,
+    position: { ...nr.point },
+    angle: outwardNormalAngleAt(cutLine, nr.curveIndex, nr.t) + 180,
+  }
+  return materializeNotchAnchorsOnCutLine(nextFree, cutLine) ?? nextFree
+}
+
+const CORNER_T_EPS = 0.01
+
+/**
+ * Prüft ob eine Konturänderung (z. B. Vertex-Drag) eine Kerbe an einen Eckpunkt geschoben hat.
+ * Gibt `true` zurück, wenn mindestens eine Kerbe NEU an einer Ecke liegt (t < ε oder t > 1−ε),
+ * die vorher NICHT an einer Ecke war. Kerben, die schon vorher an einer Ecke lagen, blockieren nicht.
+ */
+export function notchPushedToCorner(
+  oldNotches: Notch[],
+  oldCutLine: Curve[],
+  newNotches: Notch[],
+  newCutLine: Curve[]
+): boolean {
+  for (let i = 0; i < newNotches.length; i++) {
+    const np = getNotchCutLineParameter(newNotches[i], newCutLine)
+    if (!np) continue
+    const newAtCorner = np.t < CORNER_T_EPS || np.t > 1 - CORNER_T_EPS
+    if (!newAtCorner) continue
+    if (i < oldNotches.length) {
+      const op = getNotchCutLineParameter(oldNotches[i], oldCutLine)
+      if (op && (op.t < CORNER_T_EPS || op.t > 1 - CORNER_T_EPS)) continue
+    }
+    return true
+  }
+  return false
+}
+
+/**
+ * @deprecated Nicht mehr für Treffer/Eckpunkt-Logik verwenden: jede freie Kerbe in Projektionsnähe
+ * blockierte fälschlich Ecken. Stattdessen `masterNotchVertexIndexSet` (nur verankerte Kerben).
+ * Behalten für Referenz / ggf. Debug.
+ */
 export function seamVertexNearProjectedNotch(piece: PatternPiece, seamVertexIndex: number): boolean {
   const seam = piece.seamLine
   if (seam.length < 3) return false
@@ -121,9 +246,9 @@ export function seamVertexNearProjectedNotch(piece: PatternPiece, seamVertexInde
   const seamPos = vi === 0 ? seam[0].start : seam[vi - 1].end
   for (const notch of piece.notches) {
     const cutPos = getNotchPositionAndAngle(notch, piece.cutLine).position
-    const nr = nearestCurveIndexAndPoint(cutPos, seam)
-    if (!nr) continue
-    if (Math.hypot(nr.point.x - seamPos.x, nr.point.y - seamPos.y) <= SEAM_VERTEX_NOTCH_OCCLUSION_MM) {
+    const nrr = nearestCurveIndexAndPoint(cutPos, seam)
+    if (!nrr) continue
+    if (Math.hypot(nrr.point.x - seamPos.x, nrr.point.y - seamPos.y) <= 5.5) {
       return true
     }
   }

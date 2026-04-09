@@ -7,48 +7,30 @@
 
   Bereiche der LOP-Punkte und Umgang mit Erweiterungen
   -----------------------------------------
-  • LOP-001–016: Technik / Code-Review (konkrete Codepfade, Doku-Lücken,
-    Seam-as-Master vs. cutLine).
+  • LOP-009, LOP-010, LOP-014, LOP-016: Technik / Code-Review (konkrete
+    Codepfade, Doku-Lücken, Seam-as-Master vs. cutLine).
   • LOP-020–041: Produkt, UX, Import/Export-Roadmap, Vision.
   Neue Funktionen, Erweiterungen und größere Refactorings: immer als **neuer**
-  LOP-Punkt mit der **nächsten freien ID** (nach 041 fortführen; technische
-  Ergänzungen ab LOP-042) eintragen; bei Überschneidung mit technischen LOP-Punkten
-  **„Siehe auch LOP-xxx“** setzen.
+  LOP-Punkt mit der **nächsten freien ID** (nach 041 fortführen) eintragen;
+  bei Überschneidung mit technischen LOP-Punkten **„Siehe auch LOP-xxx“** setzen.
 
   Legende
   -------
-  [x] BEARBEITET     – im Code/Doku angegangen (siehe „Bearbeitungsnotiz“)
   [~] IN BEARBEITUNG – begonnen, noch nicht abgeschlossen / teilweise nutzbar
   [ ] OFFEN          – noch zu klären oder umzusetzen
   [!] KRITISCH       – Blocker oder hohes Risiko für Daten/UI/Export
 
 
 ================================================================================
-  LOP-PUNKTE – Übersicht Technik / Code-Review (LOP-001–016, LOP-042–045)
+ LOP-PUNKTE – Übersicht Technik / Code-Review (offene Punkte)
 ================================================================================
 
-  ID        Kurztitel                                    Status
-  --------  -------------------------------------------  ----------
-  LOP-001   NAMEN-KONVENTIONEN vs. Seam-as-Master        [x]
-  LOP-002   removeVertex bei Seam-as-Master              [x]
-  LOP-003   recomputeSeamLine vs. Seam-as-Master         [x]
-  LOP-004   insertPointOnCutLine / Master (seam)         [x]
-  LOP-005   replaceSegment / movePoint / convertBezier   [x]
-  LOP-006   offsetSegment / Master (seam)                [x]
-  LOP-007   updateCurvePoint / Master (seam)             [x]
-  LOP-008   Segment-Highlight & Kante-Tool / Master    [x]
-  LOP-009   NotchType: strich/kerbe vs. single/double/v  [ ]
-  LOP-010   Notch vertexIndex: cutLine vs. Master        [ ]
-  LOP-011   getSeamEdgeCurves: Lesbarkeit/Doku         [ ]
-  LOP-012   adjustSeamAfterInsert/Remove: Tests/Komment. [ ]
-  LOP-013   Digitize: softVertices-Index-Doku           [ ]
-  LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [ ]
-  LOP-015   piece.layer (Zweck im Export)                [ ]
-  LOP-016   removeNotch/toggleNotch/addCurve, flipGrain  [ ] [!]
-  LOP-042   API-/Testnamen vs. Master-Kontur (CutLine)   [ ]
-  LOP-043   recomputeSeamLine: Store ohne Seam-Master-Guard [ ]
-  LOP-044   Vertex-Drag-Ende: seamIsMaster vs. vertexMaster [ ]
-  LOP-045   updateCurvePoint: zwei Offset-Strategien       [ ]
+ ID        Kurztitel                                    Status
+ --------  -------------------------------------------  ----------
+ LOP-009   NotchType: strich/kerbe vs. single/double/v  [ ]
+ LOP-010   Notch vertexIndex: cutLine vs. Master        [~]
+ LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [ ]
+ LOP-016   removeNotch/toggleNotch/addCurve, flipGrain  [~] [!]
 
 
 ================================================================================
@@ -82,105 +64,27 @@
 
 
 ================================================================================
-  BEARBEITET (abgeschlossene LOP-Punkte)
-================================================================================
-
---- LOP-001 [x] NAMEN-KONVENTIONEN vs. Cursor-Rules vs. Code ---------------
-
-  Bearbeitungsnotiz (März 2026):
-  Abschnitt 7 in NAMEN-KONVENTIONEN-LINIEN-PUNKTE-NOTCHES.txt an Seam-as-Master
-  angepasst; SeamAssignment-Kommentar in model.ts an getCurvesForSeamEdge
-  angeglichen.
-
-  Ursprüngliches Problem (Archiv):
-  Doku sagte „Bearbeitung immer auf cutLine“; Rule und Code nutzen Seam-as-Master
-  (bei Nahtzugabe: seamLine Master, cutLine abgeleitet).
-
-
---- LOP-002 [x] removeVertex bei Seam-as-Master ---------------------------
-
-  Bearbeitungsnotiz (März 2026):
-  useStore.removeVertex arbeitet bei Nahtzugabe auf seamLine und leitet cutLine ab;
-  adjustSeamAfterRemove nutzt die Master-Kontur-Länge (wie Nahtzuordnung).
-
-  Ursprüngliches Problem (Archiv):
-  vertexIndex aus UI (seamLine) vs. removeVertex nur auf cutLine → Mismatch.
-
-
---- LOP-003 [x] recomputeSeamLine nach Drag --------------------------------
-
-  Bearbeitungsnotiz (März 2026):
-  Nach Vertex-/Kurvenpunkt-Drag in WorkspaceCanvas wird recomputeSeamLine nur noch
-  bei Cut-as-Master (ohne Seam-as-Master) aufgerufen.
-
-  Ursprüngliches Problem (Archiv):
-  seamLine aus cutLine neu berechnen würde bei Seam-as-Master Nutzeränderungen an
-  der seamLine überschreiben.
-
-
---- LOP-004 [x] insertPointOnCutLine: Master-Kontur ----------------------------
-
-  Bearbeitungsnotiz (März 2026):
-  insertPointOnCutLine nutzt useSeamLineForPointCurveEditing: Einfügen in seamLine,
-  cutLine per deriveCutLineFromSeamWithValidation; Notch-Resync bei Rebuild.
-  seamAssignments bei Seam-Master unverändert (adjustSeamAfterInsert nur bei Cut-Master).
-
-
---- LOP-005 [x] replaceSegment / movePoint / convertBezier -------------------
-
-  Bearbeitungsnotiz (März 2026):
-  replaceSegmentWithBezier, movePointOnCurve, convertBezierSegmentToLine: Ziel-
-  kontur = seamLine bei useSeamLineForPointCurveEditing, sonst cutLine; Ableitung
-  wie bei insertPoint. WorkspaceCanvas: point/curvepoint-Hover auf masterPv/masterCv.
-
-
---- LOP-007 [x] updateCurvePoint ------------------------------------------------
-
-  Bearbeitungsnotiz (März 2026):
-  updateCurvePoint bearbeitet seamLine bei useSeamLineForPointCurveEditing und
-  leitet cutLine ab (deriveCutLineFromSeamWithValidation, Notch-Resync).
-
-
---- LOP-006 [x] offsetSegment ---------------------------------------------------
-
-  Bearbeitungsnotiz (März 2026):
-  offsetSegment verschiebt bei useSeamLineForPointCurveEditing das Segment auf der
-  seamLine; cutLine per deriveCutLineFromSeamWithValidation, Notch-Resync. Parallel-
-  Linie (Menü/Taste P) nutzt dieselbe Master-Kontur für offsetSegmentPoints.
-
-
---- LOP-008 [x] Kante-Tool: Hover & Highlight auf Master -----------------------
-
-  Bearbeitungsnotiz (März 2026):
-  Kante-Werkzeug: nearest auf seamLine wenn Nahtzugabe+seamLine (wie Punkt-Tool);
-  Segment-Highlight (hoveredSegmentOnSeam) auch bei tool === 'kante'. Feintuning UX:
-  LOP-041.
-
-
-================================================================================
   OFFEN – Technik, nach Dringlichkeit sortiert
 ================================================================================
 
   Priorität A (Seam-as-Master: weiterhin cutLine-zentriert, inkonsistent)
   -----------------------------------------------------------------------
   LOP-016 (u. a. flipPieceAlongGrain, Notch-Hooks, addCurveToCutLine)
-  LOP-042 (Namen Öffentliche API / Tests), LOP-043–044 (recompute / seamIsMaster)
   (Übergeordnete Einordnung: LOP-033)
 
   Priorität B (Modell/DXF/Doku)
   -----------------------------
-  LOP-009, LOP-010, LOP-014, LOP-015
+  LOP-009, LOP-010, LOP-014
   (Schneidet mit Produkt: LOP-020, LOP-021, LOP-030)
 
   Priorität C (UX-Test oder Lesbarkeit/Wartung)
   ----------------------------------------------
-  LOP-011, LOP-012, LOP-013
+  –
   (Digitalisierung-Code: auch LOP-022)
 
 
 ================================================================================
-  OFFEN – Detail je technischem LOP-Punkt (LOP-009 … LOP-016, LOP-042 … LOP-045;
-  LOP-001–008 bearbeitet)
+ OFFEN – Detail je technischem LOP-Punkt (LOP-009 … LOP-016)
 ================================================================================
 
 --- LOP-009 [ ] NotchType: zwei Typ-Systeme -------------------------------
@@ -194,7 +98,7 @@
   Siehe auch LOP-021 (Produkt: mehrere Notch-Typen / Nutzerwahl).
 
 
---- LOP-010 [ ] vertexIndex bei Notches: cutLine-zentriert ----------------
+--- LOP-010 [~] vertexIndex bei Notches: cutLine-zentriert ----------------
 
   Problem:
   notch.vertexIndex / getNotchPositionAndAngle: cutLine[vi]. Bei Seam-as-Master
@@ -203,28 +107,11 @@
   Offen:
   Verankerte Notches korrekt? ggf. Master-Kontur indizieren.
 
-
---- LOP-011 [ ] getSeamEdgeCurves: komplexe Sonderfälle --------------------
-
-  seamUtils.ts: viele Fälle (master seam vs. cut), schwer im Kopf nachvollziehbar.
-
-  Empfehlung:
-  Kommentar mit Beispiel-Fall oder kleines Diagramm.
-
-
---- LOP-012 [ ] adjustSeamAfterInsert / adjustSeamAfterRemove -------------
-
-  Logik mathematisch plausibel, aber Randfälle (isWrapping, Indizes) schwer lesbar.
-
-  Empfehlung:
-  Unit-Tests oder ausführliche Inline-Kommentare.
-
-
---- LOP-013 [ ] Digitize: softVertices-Mapping ----------------------------
-
-  finishDigitize: softVertices aus nodes (handleOut); Indizes auf neue cutLine.
-  Dokumentation „Index ↔ Node/Vertex“ fehlt.
-  Siehe auch LOP-022 (bekannte Digitalisierungs-Bugs in der App).
+  Zwischenstand (April 2026, in Arbeit):
+  notchResyncCutLine wurde erweitert (Eck-Anker robuster), inkl. neuem Test
+  notchResyncCutLine.test.ts; zusätzlich Mapping in seamUtils.countNotchesOnEdge
+  für Master-seitige Kantenzählung verbessert. Vollständige Modell-/API-Entscheidung
+  weiterhin offen (siehe LOP-009 / LOP-021).
 
 
 --- LOP-014 [ ] DXF-MASTER-SPEZIFIKATION vs. AAMA/ASTM --------------------
@@ -237,74 +124,18 @@
   Siehe auch LOP-020, LOP-030.
 
 
---- LOP-015 [ ] PIECE.LAYER (string) --------------------------------------
-
-  piece.layer Default 'CUT'; unklar ob/wie für DXF-Export genutzt. Kommentar im
-  Modell oder Export wünschenswert.
-
-
---- LOP-016 [ ] [!] Weitere Store-Funktionen cutLine-zentriert ------------
+--- LOP-016 [~] [!] Weitere Store-Funktionen cutLine-zentriert ------------
 
   Aus Code-Verifizierung (noch nicht auf Seam-as-Master umgestellt):
   - removeNotchAnchor, toggleNotchAnchor, addCurveToCutLine → cutLine
   -   flipPieceAlongGrain: spiegelt cutLine, leitet seamLine aus cutLine ab
     → bei Seam-as-Master: seamLine spiegeln, cutLine ableiten
 
-
---- LOP-042 [ ] API- und Testnamen vs. Master-Kontur („CutLine“) ------------
-
-  Problem:
-  Öffentliche Store-Methoden heißen weiterhin `insertPointOnCutLine` und
-  `addCurveToCutLine`, obwohl bei Nahtzugabe die Master-Kontur die Nahtlinie ist
-  (Verhalten teils in LOP-004/016 beschrieben; Namen bleiben irreführend).
-  Testdatei `insertPointOnSeamLine.test.ts` beschreibt dieselbe Funktion wie der
-  Name `insertPointOnCutLine` — für Leser nicht auf einen Blick konsistent.
-
-  Empfehlung:
-  Kurz in Modul-/Store-Doku festhalten oder mittelfristig Alias-Namen; siehe
-  LOP-016, LOP-004.
-
-
---- LOP-043 [ ] recomputeSeamLine: Implementierung nur „Naht aus Schnitt“ -----
-
-  Problem:
-  `useStore.recomputeSeamLine` setzt `seamLine` immer per
-  `offsetCurvesInwardForSeam(p.cutLine, …)` ohne Prüfung auf
-  `useSeamLineForVertexEditing`. Der Aufrufer `WorkspaceCanvas` beim
-  Vertex-Drag-Ende überspringt das bei Seam-as-Master (Kommentar dort), aber
-  ein anderer künftiger Aufrufer könnte die Nahtlinie fälschlich überschreiben.
-
-  Empfehlung:
-  Guard im Store (oder klare „nur Cut-Master“-Dokumentation an der API) und
-  ggf. dieselbe Bedingung wie LOP-044.
-
-
---- LOP-044 [ ] Vertex-Drag-Ende: seamIsMaster vs. vertexMaster ---------------
-
-  Problem:
-  Am Ende eines Vertex-Drags prüft `WorkspaceCanvas` `seamIsMaster` mit
-  Nahtzugabe + `seamLine.length >= 3`. `useSeamLineForVertexEditing` verlangt
-  zusätzlich `cutLine.length >= 3`. Sehr seltene Abweichung: unterschiedliche
-  Entscheidung, ob `recomputeSeamLine` läuft vs. was die Regeln als Master
-  definieren.
-
-  Empfehlung:
-  Hilfsfunktion aus `vertexMaster.ts` wiederverwenden oder Bedingungen angleichen.
-
-
---- LOP-045 [ ] updateCurvePoint: zwei Strategien für Naht ↔ Schnitt ----------
-
-  Problem:
-  Im Seam-Master-Zweig: `deriveCutLineFromSeamWithValidation` + Notch-Resync.
-  Im Cut-Master-Zweig (weiterhin `cutLine` bearbeiten): `seamLine` wird mit
-  `offsetCurvesInwardForSeam(cutLine, …)` gesetzt — nicht derselbe Validierungs-
-  und Ableitungspfad wie oben und ohne Notch-Resync. Für Reviewer wirkt das wie
-  parallele Wahrheiten, auch wenn der zweite Fall „Cut ist Master“ ist.
-
-  Empfehlung:
-  Kurzkommentar am else-Zweig (Legacy/Cut-Master); bei Refactor prüfen, ob
-  bewusste Abweichung von `deriveCutLineFromSeam` dokumentiert sein soll.
-  Siehe LOP-033.
+  Zwischenstand (April 2026, in Arbeit):
+  Teilweise Absicherung in angrenzenden Store-/Canvas-Pfaden umgesetzt
+  (u. a. Guards/Validierung bei Vertex-Operationen, Batch-Delete-softVertices,
+  Notch-Preview/Commit-Konsistenz). Kernpunkt bleibt offen: die oben genannten
+  Funktionen sind weiterhin konzeptionell cutLine-zentriert.
 
 
 ================================================================================
@@ -320,7 +151,7 @@
   Nutzer- oder Entwickler-Dokumentation.
   Status: Teilweise umgesetzt, End-to-End-Test und Vollständigkeit offen → Blocker
   für tiefergehende Features.
-  Siehe auch: LOP-014, LOP-015, LOP-030; Projektregel Zielformat AAMA/ASTM.
+  Siehe auch: LOP-014, LOP-030; Projektregel Zielformat AAMA/ASTM.
 
 
 --- LOP-021 [ ] [!] Notch-System erweitern --------------------------------
@@ -337,7 +168,7 @@
   Bekannte Probleme (Backlog): Referenzlinie „zu kurz“ / nicht auswählbar;
   Transparenz; Bild verschwindet nach Digitalisierung; Notches danach problematisch;
   Bild manuell löschen nötig.
-  Siehe auch: LOP-013; ggf. PLAN-BILD-DIGITALISIERUNG.txt.
+  Ggf. siehe PLAN-BILD-DIGITALISIERUNG.txt.
 
 
 --- LOP-023 [ ] Fehler- und Regel-System ----------------------------------
@@ -355,14 +186,13 @@
 --- LOP-025 [~] Kurven & Geometrie ----------------------------------------
 
   Saubere Darstellung; Kurvenpunkte zuverlässig bearbeitbar.
-  Technik-Überschneidung: LOP-005–008 erledigt; ggf. LOP-016 bei Sonderfällen.
+  Technik-Überschneidung: ggf. LOP-016 bei Sonderfällen.
 
 
 --- LOP-026 [~] Teile bearbeiten ------------------------------------------
 
   Punkte bearbeiten (Typ: Linie / Ecke / Kurve); Bearbeitung nur auf aktiver
-  Master-Kontur. Drehen frei und in 90°-Schritten: [x] abgeschlossen (Stand laut
-  Backlog-Notiz; bei Regression LOP-Punkt-Eintrag anpassen).
+  Master-Kontur.
 
 
 --- LOP-027 [~] Kontextmenü / Bedienung -------------------------------------
@@ -402,8 +232,8 @@
 --- LOP-033 [~] [!] Architektur: Seam vs. Cut (Gesamtbild) ------------------
 
   Entscheidung und Umsetzung: Seam-as-Master bei Nahtzugabe (Projektregel) vs.
-  verbleibende cutLine-zentrierte Pfade. Konkrete offene Arbeit: LOP-009–010,
-  LOP-016, LOP-042–045; erledigt: LOP-001–008.
+  verbleibende cutLine-zentrierte Pfade. Konkrete offene Arbeit: LOP-009–010
+  und LOP-016.
   Empfehlung: keine parallele „zweite Wahrheit“ in UI und Store; Master-Kontur
   überall dieselbe wie bei Hit-Tests.
 
@@ -449,49 +279,19 @@
 
   Hover bei Notches; Mehrfach-Notches vermeiden/regeln; Punktauswahl präziser;
   Laufrichtung visuell klar; Shortcuts; Zoom/Lupe für Fehleranalyse.
-  Siehe auch: LOP-021 (Notches). Kante/Segment-Master: LOP-006/008 erledigt.
-
-
-================================================================================
-  ANHANG A: Seam-as-Master – Code-Verifizierung (Kurzreferenz)
-================================================================================
-
-  Bereits auf Seam-as-Master ausgelegt (Stand laut Review):
-  • updateVertex (useStore): seamLine bei Nahtzugabe, cutLine abgeleitet
-  • updatePiece: cutLine aus seamLine bei seamAllowanceMm
-  • Eckpunkt-Hit/Hover: curvesForVertices = useSeamMaster ? seamLine : cutLine
-  • getCurvesForSeamEdge: liefert seamLine bei Seam-as-Master
-  • removeVertex, recomputeSeamLine-Aufruf: siehe LOP-002, LOP-003 [x]
-  • insertPointOnCutLine, replaceSegment/movePoint/convertBezier, updateCurvePoint:
-    siehe LOP-004, LOP-005, LOP-007 [x]
-  • offsetSegment, Kante-Hover/Highlight: LOP-006, LOP-008 [x]
-
-  Noch cutLine-zentriert: LOP-016 (u. a. flipGrain, addCurveToCutLine, Notch-Anchors)
-
-  Namens-/API-Klarheit und Ablauf: LOP-042 (insertPointOnCutLine / Testdateiname),
-  LOP-043 (recomputeSeamLine ohne Guard), LOP-044 (seamIsMaster vs. vertexMaster),
-  LOP-045 (updateCurvePoint: derive vs. offsetCurvesInwardForSeam)
+  Siehe auch: LOP-021 (Notches).
 
 
 ================================================================================
   ANHANG B: Empfohlene Maßnahmen (Technik, konsolidiert)
 ================================================================================
 
-  1. [teilw. erledigt] LOP-003 recomputeSeamLine nur ohne Seam-Master
-  2. [teilw. erledigt] LOP-002 removeVertex auf Master-Kontur
-  3. [erledigt] LOP-004 insertPointOnCutLine + Master-Kontur
-  4. [erledigt] LOP-005 Kurven-Tools + Hover (point/curvepoint) auf Master
-  5. [erledigt] LOP-007 updateCurvePoint auf Master
-  6. [erledigt] LOP-006 offsetSegment + Parallel-Linie auf Master
-  7. [erledigt] LOP-008 Kante-Hover/Highlight auf Master
-
   Nächste sinnvolle Schritte (offen):
-  8. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
-  8b. LOP-042–045 Namen/Guards/Konsistenz (recomputeSeamLine, seamIsMaster,
-      updateCurvePoint-Zweige)
-  9. LOP-010 / LOP-009 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
-  10. LOP-014 / LOP-015 DXF-Doku und piece.layer (mit LOP-020/030)
-  11. LOP-011 / LOP-012 / LOP-013 Wartbarkeit; LOP-041 UX-Feintuning
+  1. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
+  2. LOP-009/010 Notch-Modell-/Verankerung weiter konsolidieren
+  3. LOP-010 / LOP-009 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
+  4. LOP-014 DXF-Doku/Writer-Abgrenzung (mit LOP-020/030)
+  5. LOP-041 UX-Feintuning
 
 
 ================================================================================
@@ -501,51 +301,20 @@
   Blocker / kritisch
   ------------------
   • LOP-020 DXF-Export produktionsreif
-  • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016, LOP-042–045)
-  • LOP-022 Digitalisierung stabil (inkl. LOP-013 wo relevant)
+  • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016)
+  • LOP-022 Digitalisierung stabil (weitere Produkt-/UX-Themen)
 
   Wichtig
   -------
   • LOP-021 Notch-System
   • LOP-028 Nahtlogik
-  • LOP-025 Kurvenbearbeitung (Technik: LOP-005–008 erledigt; Rest v. a. Produkt)
+  • LOP-025 Kurvenbearbeitung (Rest v. a. Produkt)
 
   Erweiterung / später
   --------------------
   • LOP-034 Automatisierungen, LOP-035 Konfiguratoren
   • LOP-038 Materialdatenbank, LOP-039 Produktionsintegration
   • LOP-030–032, LOP-036–037, LOP-040–041 je nach Roadmap
-
-
-================================================================================
-  ANHANG D: Fortschritt in Prozent (aus Übersichtstabellen)
-================================================================================
-
-  Grundlage: alle LOP-Einträge in den Übersichten oben (LOP-001–016,
-  LOP-042–045 und LOP-020–041) = **42 Punkte**. Legende: [x] abgeschlossen,
-  [~] begonnen/teilweise, [ ] offen. Bei Statusänderungen in den Tabellen diese
-  Zahlen manuell anpassen.
-
-  Gesamt (42 Punkte)
-  ------------------
-  • Abgeschlossen [x]:     8  →  **19,0 %**
-  • In Bearbeitung [~]:    7  →  **16,7 %**
-  • Offen [ ]:            27  →  **64,3 %**
-  (Rundung: Summe der Prozentwerte kann von 100 % um weniger als 0,1 abweichen.)
-
-  Nur Technik / Code-Review (LOP-001–016 und LOP-042–045, 20 Punkte)
-  ------------------------------------------------------------------
-  • [x]: 8  → **40,0 %** abgeschlossen
-  • [ ]: 12 → **60,0 %** noch offen
-
-  Nur Produkt & Roadmap (LOP-020–041, 22 Punkte)
-  ----------------------------------------------
-  • [x]: 0  → **0 %** voll abgeschlossen
-  • [~]: 7  → **31,8 %** begonnen
-  • [ ]: 15 → **68,2 %** offen
-
-  Hinweis: „Wie viel abgearbeitet?“ ist am klarsten über **[x] = 19,0 %** der
-  Liste beantwortet; **[~]** zählt als Fortschritt, aber noch nicht als erledigt.
 
 
 ================================================================================

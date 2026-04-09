@@ -26,8 +26,8 @@ export type NotchType = 'single' | 'double' | 'v'
 export type Notch = {
   id: string
   /**
-   * Freie Kerbe: Näherungspunkt in mm; kanonische Lage = Projektion auf aktuelle `cutLine` (siehe
-   * `getNotchCutLineParameter` / `getNotchPositionAndAngle`). Bei Ecken-Verankerung hat `vertexIndex` Vorrang.
+   * Cache für Treffer/UI; kanonische Lage folgt der Anker-Priorität in `resolveNotchCutLineAnchor`
+   * (`sNormalized` > `arcLengthMm` > Projektion von `position`).
    */
   position: Point
   angle: number
@@ -35,12 +35,15 @@ export type Notch = {
   depth: number
   /** Breite der Kerbe in mm (entlang der Kontur). Default 6. */
   width?: number
-  /**
-   * Optional: Ecke der **cutLine** (`cutLine[vertexIndex].start`). Entspricht Parameter **t = 0** auf
-   * diesem Segment; die Kerbe „wandert“ mit dem Vertex. Ohne `vertexIndex`: implizit **(curveIndex, t)**
-   * über Projektion von `position`.
-   */
+  /** @deprecated Feld bleibt nur für JSON-Kompatibilität; wird im Code ignoriert. */
   vertexIndex?: number
+  /**
+   * Kanonischer Anker: Anteil der Bogenlänge entlang der geschlossenen **cutLine** [0, 1].
+   * Hat Vorrang vor `arcLengthMm` und `position`.
+   */
+  sNormalized?: number
+  /** Bogenlänge in mm vom selben Startpunkt; Denormalisierung zu `sNormalized` über `totalPathLength(cutLine)`. */
+  arcLengthMm?: number
 }
 
 export type Drill = {
@@ -70,6 +73,11 @@ export type PatternPiece = {
   drills: Drill[]
   grainLine: Line | null
   internalLines: Curve[]
+  /**
+   * Semantische Layer-Klassifikation des Teils (derzeit v. a. für UI/Interchange).
+   * Der DXF-Export ordnet Geometrie aktuell über Writer-spezifische Layerregeln zu
+   * (AAMA/ASTM), nicht 1:1 über dieses Feld.
+   */
   layer: string
   transform: PatternPieceTransform
   /** Vertex-Indices die per "Erzeuge Punkt" eingefügt wurden (blaue Punkte, keine Eckpunkte). */
@@ -84,7 +92,7 @@ export type PatternPiece = {
    * Fehlt bei alten Daten → wie true behandeln.
    */
   fillInterior?: boolean
-  /** Freitext für Stückliste / Verbrauch (z. B. Stoffart). */
+  /** Freitext für Stückliste / Verbrauch (z. B. Stoffart). */
   material?: string
   /** Stückzahl für BOM; ganzzahlig ≥ 1. */
   bomQuantity?: number

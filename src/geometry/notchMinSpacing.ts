@@ -1,7 +1,7 @@
 import type { Notch, PatternPiece } from '../types/model'
 import { pathLengthAt, totalPathLength } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
-import { getNotchPositionAndAngle } from './notchOnCurve'
+import { resolveNotchCutLineAnchor } from './notchOnCurve'
 
 /** Mindestabstand zwischen zwei Kerben entlang der Schnittkontur (Cut Line), in mm. */
 export const NOTCH_MIN_SPACING_MM = 4
@@ -28,10 +28,9 @@ export function minContourGapToOtherNotchesMm(
 
   for (const n of piece.notches) {
     if (excludeNotchId != null && n.id === excludeNotchId) continue
-    const pos = getNotchPositionAndAngle(n, cutLine).position
-    const nr = nearestCurveIndexAndPoint(pos, cutLine)
-    if (!nr) continue
-    const s = pathLengthAt(cutLine, nr.curveIndex, nr.t ?? 0)
+    const anchor = resolveNotchCutLineAnchor(n, cutLine)
+    if (!anchor) continue
+    const s = pathLengthAt(cutLine, anchor.curveIndex, anchor.t)
     const d1 = Math.abs(s0 - s)
     const along = Math.min(d1, total - d1)
     if (along < minGap) minGap = along
@@ -50,20 +49,20 @@ export function isNotchSpacingValid(
   return minContourGapToOtherNotchesMm(piece, candidateCurveIndex, candidateT, excludeNotchId) >= minMm - LENGTH_EPS
 }
 
-/** Prüft Abstand für einen (noch nicht gespeicherten) Notch anhand von Position / vertexIndex. */
+/** Prüft Abstand für einen (noch nicht gespeicherten) Notch anhand von Anker / Position. */
 export function isNotchSpacingValidForCandidate(
   piece: PatternPiece,
-  candidate: Pick<Notch, 'position' | 'vertexIndex' | 'angle'>,
+  candidate: Pick<Notch, 'position' | 'angle' | 'sNormalized' | 'arcLengthMm'>,
   excludeNotchId?: string,
   minMm: number = NOTCH_MIN_SPACING_MM
 ): boolean {
   const cutLine = piece.cutLine
   if (cutLine.length === 0) return true
-  const { position, vertexIndex } = candidate
-  if (vertexIndex != null && vertexIndex >= 0 && vertexIndex < cutLine.length) {
-    return isNotchSpacingValid(piece, vertexIndex, 0, excludeNotchId, minMm)
+  const anchor = resolveNotchCutLineAnchor(candidate as Notch, cutLine)
+  if (anchor) {
+    return isNotchSpacingValid(piece, anchor.curveIndex, anchor.t, excludeNotchId, minMm)
   }
-  const nr = nearestCurveIndexAndPoint(position, cutLine)
+  const nr = nearestCurveIndexAndPoint(candidate.position, cutLine)
   if (!nr) return false
   return isNotchSpacingValid(piece, nr.curveIndex, nr.t ?? 0, excludeNotchId, minMm)
 }

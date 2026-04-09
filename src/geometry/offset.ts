@@ -227,8 +227,8 @@ export function offsetCurvesInwardForSeam(
   if (raw.length === 0) return []
   const cutArea = signedAreaCurves(cutLine)
   const seamArea = signedAreaCurves(raw)
-  if (cutArea * seamArea < 0) return reverseCurves(raw)
-  return raw
+  const oriented = cutArea * seamArea < 0 ? reverseCurves(raw) : raw
+  return alignClosedCurveStart(oriented, cutLine[0].start)
 }
 
 /**
@@ -246,8 +246,27 @@ export function offsetCurvesOutwardForCut(seamLine: Curve[], seamAllowanceMm: nu
   if (raw.length === 0) return []
   const seamArea = signedAreaCurves(seamLine)
   const cutArea = signedAreaCurves(raw)
-  if (seamArea * cutArea < 0) return reverseCurves(raw)
-  return raw
+  const oriented = seamArea * cutArea < 0 ? reverseCurves(raw) : raw
+  return alignClosedCurveStart(oriented, seamLine[0].start)
+}
+
+/**
+ * Rotiert eine geschlossene Kurvenliste, sodass der Startpunkt dem Referenzpunkt am nächsten liegt.
+ * Clipper-Offset ändert den Startpunkt; diese Funktion stellt die Ausrichtung zur Quellkontur wieder her.
+ */
+function alignClosedCurveStart(curves: Curve[], referenceStart: Point): Curve[] {
+  if (curves.length <= 1) return curves
+  let bestIdx = 0
+  let bestDist = Infinity
+  for (let i = 0; i < curves.length; i++) {
+    const d = Math.hypot(curves[i].start.x - referenceStart.x, curves[i].start.y - referenceStart.y)
+    if (d < bestDist) {
+      bestDist = d
+      bestIdx = i
+    }
+  }
+  if (bestIdx === 0) return curves
+  return [...curves.slice(bestIdx), ...curves.slice(0, bestIdx)]
 }
 
 /** Mindestlänge eines Naht-Segments (Start–Ende); darunter ist der Clipper-Offset unzuverlässig. */
@@ -449,6 +468,7 @@ export function deriveCutLineFromSeamWithValidation(
   if (seamArea * cutAreaSigned < 0) {
     cutLine = reverseCurves(cutLine)
   }
+  cutLine = alignClosedCurveStart(cutLine, seamLine[0].start)
 
   const cutArea = Math.abs(signedAreaCurves(cutLine))
   const seamAreaAbs = Math.abs(seamArea)

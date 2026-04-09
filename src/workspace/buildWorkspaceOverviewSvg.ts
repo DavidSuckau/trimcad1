@@ -1,6 +1,10 @@
 import type { PatternPiece } from '../types/model'
 import { closedPathD } from '../geometry/curveToPath'
-import { cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
+import {
+  cutLineWithNotchCutouts,
+  getNotchPositionAndAngleOnCutLine,
+  seamLineWithNotchCutouts,
+} from '../geometry/notchOnCurve'
 import { getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import {
   boundsForWorkspaceImage,
@@ -67,6 +71,18 @@ export function buildWorkspaceOverviewSvgDocument(
       )
     } else {
       parts.push(`<circle cx="0" cy="0" r="3" fill="none" stroke="#bbbbbb" stroke-width="0.5"/>`)
+    }
+
+    for (const n of p.notches) {
+      if (n.type !== 'single') continue
+      const { position, angle } = getNotchPositionAndAngleOnCutLine(n, p.cutLine, p.seamLine)
+      const rad = (angle * Math.PI) / 180
+      const d = Math.max(1e-6, n.depth)
+      const x2 = position.x + d * Math.cos(rad)
+      const y2 = position.y + d * Math.sin(rad)
+      parts.push(
+        `<line x1="${position.x}" y1="${position.y}" x2="${x2}" y2="${y2}" stroke="#1a1a1a" stroke-width="0.5" stroke-linecap="round" fill="none"/>`,
+      )
     }
 
     const grain = getGrainArrowLayout(p)

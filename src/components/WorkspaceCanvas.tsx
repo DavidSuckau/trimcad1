@@ -1,6 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
+import type { NotchSetting } from '../store/useStore'
 import {
   closedPathD,
   curveToPathD,
@@ -10,12 +11,23 @@ import {
   curvesBounds,
   outwardNormalAngleAt,
   pointAtPathLength,
+  pathLengthAt,
+  totalPathLength,
 } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { offsetSegmentPoints } from '../geometry/offset'
-import { getNotchPositionAndAngle, getNotchPositionAndAngleOnCutLine, getNotchPositionAndAngleOnSeamLine, notchTriangleCorners, notchCutoutPoints, cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
+import {
+  getNotchPositionAndAngle,
+  getNotchPositionAndAngleOnCutLine,
+  getNotchPositionAndAngleOnSeamLine,
+  getNotchCurveIndexAndT,
+  notchTriangleCorners,
+  notchCutoutPoints,
+  type NotchCutoutGeom,
+  cutLineWithNotchCutouts,
+  seamLineWithNotchCutouts,
+} from '../geometry/notchOnCurve'
 import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
-import { seamVertexNearProjectedNotch } from '../geometry/notchResyncCutLine'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   getCornerRange,
@@ -27,8 +39,6 @@ import {
   edgeTotalLength,
   bestSeamSubSegmentPairing,
   masterSoftVertexIndexSet,
-  masterNotchVertexIndexSet,
-  mapCutVertexIndexToMasterVertexIndexForVertexDrag,
 } from '../geometry/seamUtils'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
@@ -36,7 +46,7 @@ import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
-import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter } from '../types/model'
+import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
@@ -71,43 +81,79 @@ function cloneVertexDragNotches(notches: PatternPiece['notches']): PatternPiece[
   return notches.map((n) => ({ ...n, position: { ...n.position } }))
 }
 
-/**
- * Verankerte Kerbe (F): Ziehen = Eckpunkt der Master-Kontur verschieben (alle Richtungen), nicht nur entlang der Linie.
- * Ohne gültigen vertexIndex oder wenn Cut→Naht-Zuordnung fehlt → null (dann klassisches notchMove).
- */
-function vertexDragStateForAnchoredNotch(
-  piece: PatternPiece,
-  notch: PatternPiece['notches'][number]
-):
-  | {
-      kind: 'vertex'
-      pieceId: string
-      vertexIndex: number
-      startLocal: Point
-      notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[] }
-    }
-  | null {
-  const vi = notch.vertexIndex
-  if (vi == null) return null
-  const cut = piece.cutLine
-  if (vi < 0 || vi >= cut.length) return null
-  const useSeamMaster = useSeamLineForVertexEditing(piece)
-  const masterVi = useSeamMaster ? mapCutVertexIndexToMasterVertexIndexForVertexDrag(piece, vi) : vi
-  if (masterVi == null) return null
-  const curves = useSeamMaster ? piece.seamLine : piece.cutLine
-  if (masterVi < 0 || masterVi >= curves.length) return null
-  const startLocal = masterVi === 0 ? { ...curves[0].start } : { ...curves[masterVi - 1].end }
-  const notchStabilize =
-    piece.seamAllowanceMm != null && useSeamMaster
-      ? { notches: cloneVertexDragNotches(piece.notches), cutLine: cloneVertexDragCutLine(piece.cutLine) }
-      : undefined
+/** Einstellungs-Preset → Modell-Notch; bei „keine“ wird nichts gesetzt. */
+function modelNotchFieldsFromPreset(p: NotchSetting): { type: ModelNotchType; depth: number; width: number } | null {
+  if (p.type === 'keine') return null
   return {
-    kind: 'vertex',
-    pieceId: piece.id,
-    vertexIndex: masterVi,
-    startLocal,
-    ...(notchStabilize ? { notchStabilize } : {}),
+    type: p.type === 'kerbe' ? 'v' : 'single',
+    depth: Math.max(0.5, p.depthMm || 4),
+    width: Math.max(0.5, p.widthMm || 6),
   }
+}
+
+/** SVG-Pfade für Kerben-Darstellung (V oder Strich = eine Linie). */
+function notchCutoutSvgPaths(geom: NotchCutoutGeom): { fillD: string; edgesD: string } {
+  if (geom.kind === 'line') {
+    const { start, end } = geom
+    return {
+      fillD: '',
+      edgesD: `M ${start.x} ${start.y} L ${end.x} ${end.y}`,
+    }
+  }
+  const { left, tip, right } = geom
+  return {
+    fillD: `M ${left.x} ${left.y} L ${tip.x} ${tip.y} L ${right.x} ${right.y} Z`,
+    edgesD: `M ${left.x} ${left.y} L ${tip.x} ${tip.y} L ${right.x} ${right.y}`,
+  }
+}
+
+function distancePointToSegmentSq(p: Point, a: Point, b: Point): number {
+  const vx = b.x - a.x
+  const vy = b.y - a.y
+  const wx = p.x - a.x
+  const wy = p.y - a.y
+  const len2 = vx * vx + vy * vy
+  if (len2 < 1e-18) return wx * wx + wy * wy
+  let t = (wx * vx + wy * vy) / len2
+  t = Math.max(0, Math.min(1, t))
+  const nx = a.x + t * vx - p.x
+  const ny = a.y + t * vy - p.y
+  return nx * nx + ny * ny
+}
+
+/** Distanz Punkt → Kerbe (Cut); `cutPosCenter` für Fallback. */
+function distanceToNotchCutoutGeom(
+  local: Point,
+  geom: NotchCutoutGeom,
+  cutPosCenter: Point
+): number {
+  if (geom.kind === 'line') {
+    const dSeg = Math.sqrt(distancePointToSegmentSq(local, geom.start, geom.end))
+    const dAnchor = Math.hypot(local.x - cutPosCenter.x, local.y - cutPosCenter.y)
+    return Math.min(dSeg, dAnchor)
+  }
+  const tri = [geom.left, geom.tip, geom.right]
+  if (isPointInPolygon(local, tri)) return 0
+  return Math.min(
+    Math.hypot(local.x - cutPosCenter.x, local.y - cutPosCenter.y),
+    ...tri.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y))
+  )
+}
+
+function findMatchingNotchPresetIndex(notch: { type: ModelNotchType; depth: number; width?: number }, settings: NotchSetting[]): number | null {
+  const w = notch.width ?? 6
+  for (let i = 0; i < settings.length; i++) {
+    const f = modelNotchFieldsFromPreset(settings[i])
+    if (!f) continue
+    if (
+      f.type === notch.type &&
+      Math.abs(f.depth - notch.depth) < 0.02 &&
+      Math.abs(f.width - w) < 0.02
+    ) {
+      return i
+    }
+  }
+  return null
 }
 
 function workspaceImageLayout(session: {
@@ -534,15 +580,9 @@ function findPivotSnapTargetAtWorld(world: Point, pieces: PatternPiece[]): { pie
   for (const p of pieces) {
     if (!p || p.cutLine.length === 0) continue
     const local = worldToPieceLocal(world, p)
-    const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
     const useSeamMaster = useSeamLineForVertexEditing(p)
     const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
     for (let vi = 0; vi < curvesForHover.length; vi++) {
-      if (useSeamMaster) {
-        if (seamVertexNearProjectedNotch(p, vi)) continue
-      } else if (notchVIs.has(vi)) {
-        continue
-      }
       if (curvesForHover.length <= 3) continue
       const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
       const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
@@ -573,16 +613,11 @@ function findPivotSnapTargetAtWorld(world: Point, pieces: PatternPiece[]): { pie
       const depth = notch.depth
       const width = notch.width ?? 6
       const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-      const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine)
+      const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
+      const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
       let d = bestNotch.dist + 1
       if (cutPts) {
-        const tri = [cutPts.left, cutPts.tip, cutPts.right]
-        if (isPointInPolygon(local, tri)) {
-          d = 0
-        } else {
-          const pts = [cutPos.position, cutPts.left, cutPts.right, cutPts.tip]
-          d = Math.min(...pts.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y)))
-        }
+        d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
       } else {
         const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
         d = Math.hypot(local.x - position.x, local.y - position.y)
@@ -591,17 +626,9 @@ function findPivotSnapTargetAtWorld(world: Point, pieces: PatternPiece[]): { pie
       if (p.seamLine.length >= 3) {
         const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
         if (seamPos) {
-          const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine)
+          const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
           if (seamPts) {
-            const triSeam = [seamPts.left, seamPts.tip, seamPts.right]
-            const dSeam = isPointInPolygon(local, triSeam)
-              ? 0
-              : Math.min(
-                  Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y),
-                  Math.hypot(local.x - seamPts.left.x, local.y - seamPts.left.y),
-                  Math.hypot(local.x - seamPts.right.x, local.y - seamPts.right.y),
-                  Math.hypot(local.x - seamPts.tip.x, local.y - seamPts.tip.y)
-                )
+            const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
             if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
           } else {
             const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
@@ -883,49 +910,56 @@ function PieceGroup({
         const depth = n.depth
         const width = n.width ?? 6
         const cutPos = getNotchPositionAndAngleOnCutLine(n, cutLine, seamLine)
-        const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, cutLine)
+        const cutParam = getNotchCurveIndexAndT(n, cutLine, seamLine)
+        const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, cutLine, cutParam, n.type)
         if (!cutPts) return null
-        const cutFillD = `M ${cutPts.left.x} ${cutPts.left.y} L ${cutPts.tip.x} ${cutPts.tip.y} L ${cutPts.right.x} ${cutPts.right.y} Z`
-        const cutEdgesD = `M ${cutPts.left.x} ${cutPts.left.y} L ${cutPts.tip.x} ${cutPts.tip.y} L ${cutPts.right.x} ${cutPts.right.y}`
+        const { fillD: cutFillD, edgesD: cutEdgesD } = notchCutoutSvgPaths(cutPts)
+        const cutIsLine = cutPts.kind === 'line'
         const seamPos = getNotchPositionAndAngleOnSeamLine(n, cutLine, seamLine)
         let seamFillD: string | null = null
         let seamEdgesD: string | null = null
         if (seamPos && seamLine.length > 0) {
-          const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, seamLine)
+          const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, seamLine, undefined, n.type)
           if (seamPts) {
-            seamFillD = `M ${seamPts.left.x} ${seamPts.left.y} L ${seamPts.tip.x} ${seamPts.tip.y} L ${seamPts.right.x} ${seamPts.right.y} Z`
-            seamEdgesD = `M ${seamPts.left.x} ${seamPts.left.y} L ${seamPts.tip.x} ${seamPts.tip.y} L ${seamPts.right.x} ${seamPts.right.y}`
+            const seamPaths = notchCutoutSvgPaths(seamPts)
+            seamFillD = seamPaths.fillD || null
+            seamEdgesD = seamPaths.edgesD
           }
         }
-        const isAnchored = n.vertexIndex != null
         const isHovered = hoveredNotchId === n.id
         const stroke = isHovered ? '#1565c0' : NOTCH_STROKE
         const strokeW = isHovered ? 0.7 : 0.4
         const circleR = isHovered ? 1 : 0.8
         return (
           <g key={n.id} pointerEvents="none">
-            <path d={cutFillD} fill="#fff" stroke="none" />
-            <path d={cutEdgesD} fill="none" stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round" />
+            {cutFillD ? <path d={cutFillD} fill="#fff" stroke="none" /> : null}
+            <path
+              d={cutEdgesD}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={cutIsLine ? Math.max(strokeW, 0.55) : strokeW}
+              strokeLinejoin="round"
+              strokeLinecap={cutIsLine ? 'round' : 'butt'}
+            />
             <circle
               cx={cutPos.position.x}
               cy={cutPos.position.y}
               r={circleR}
-              fill={isAnchored ? stroke : 'none'}
+              fill="none"
               stroke={stroke}
               strokeWidth={isHovered ? 0.5 : 0.3}
             />
-            {seamFillD && (
-              <path d={seamFillD} fill="#fff" stroke="none" />
-            )}
-            {seamEdgesD && (
+            {seamFillD ? <path d={seamFillD} fill="#fff" stroke="none" /> : null}
+            {seamEdgesD ? (
               <path
                 d={seamEdgesD}
                 fill="none"
                 stroke={stroke}
-                strokeWidth={strokeW}
+                strokeWidth={cutIsLine ? Math.max(strokeW, 0.55) : strokeW}
                 strokeLinejoin="round"
+                strokeLinecap={cutIsLine ? 'round' : 'butt'}
               />
-            )}
+            ) : null}
           </g>
         )
       })}
@@ -1275,6 +1309,8 @@ export function WorkspaceCanvas() {
     setPiecePropertiesDialogPieceId,
     setWorkspaceImageLocked,
     exitAllModes,
+    notchSettings,
+    activeNotchPresetIndex,
     setMassstabDialog,
     setSeamAssignmentMetaDialogId,
     seamAssignmentMetaDialogId,
@@ -1324,7 +1360,7 @@ export function WorkspaceCanvas() {
         startLocal: Point
         seamDrag?: { startLocal: Point; cutVertexIndex: number }
         /** Nahtzugabe + Seam-Master: Kerben während Ziehen nicht pro Frame auf Cut projizieren. */
-        notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[] }
+        notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[]; seamLine: Curve[] }
       }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
@@ -1368,6 +1404,8 @@ export function WorkspaceCanvas() {
     | null
   >(null)
   const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
+  /** Kerbe bearbeiten (Typ/Breite/Tiefe); unabhängig vom Hover, damit das Panel bedienbar bleibt. */
+  const [notchEditTarget, setNotchEditTarget] = useState<{ pieceId: string; notchId: string } | null>(null)
   const [notchPreview, setNotchPreview] = useState<{
     pieceId: string
     position: Point
@@ -1446,6 +1484,10 @@ export function WorkspaceCanvas() {
   useEffect(() => {
     if (tool !== 'kante') closeSegmentMenu()
   }, [tool, closeSegmentMenu])
+
+  useEffect(() => {
+    if (tool !== 'select') setNotchEditTarget(null)
+  }, [tool])
 
   useEffect(() => {
     if (!toastMessage) return
@@ -1540,8 +1582,10 @@ export function WorkspaceCanvas() {
         let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
         for (const p of pieces) {
           if (!p.cutLine || p.cutLine.length === 0) continue
-          const hasSeam = p.seamLine.length >= 3
-          const curvesForHit = hasSeam ? p.seamLine : p.cutLine
+          // Master-Kontur für SeamAssignment-Indices: seamLine nur wenn Nahtzugabe aktiv (seamAllowanceMm != null),
+          // ansonsten sind Indizes auf cutLine-Basis.
+          const curvesForHit = getCurvesForSeamEdge(p)
+          const hasSeam = curvesForHit === p.seamLine
           const local = worldToPieceLocal(world, p)
           const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
           if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
@@ -1557,7 +1601,7 @@ export function WorkspaceCanvas() {
             const midHit = segHit ? curveMidpoint(segHit) : nearest.point
             const nr = nearestCurveIndexAndPoint(midHit, p.cutLine)
             if (!nr) continue
-            const seamMm = p.seamAllowanceMm ?? 10
+            const seamMm = p.seamAllowanceMm!
             if (nr.distance > seamMm * 2.5) continue
             // Master-Kontur = seamLine; getCornerRange / SeamAssignment erwarten seam-Indices, nicht Cut-Polylinien-Index.
             cutCurveIndex = nearest.curveIndex
@@ -1640,7 +1684,6 @@ export function WorkspaceCanvas() {
           const curvesForVertices = useSeamMaster ? p!.seamLine : p?.cutLine ?? []
           if (!p || curvesForVertices.length === 0) continue
           const local = worldToPieceLocal(world, p)
-          const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
           const vertexHitR = useSeamMaster ? VERTEX_HIT_SEAM : VERTEX_HIT
           const curvesForPointCurve = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           // Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur
@@ -1656,11 +1699,6 @@ export function WorkspaceCanvas() {
           // Eckpunkte – Seam-Master: direkt auf seamLine; sonst cut/seam je nach Ansicht
           const n = curvesForVertices.length
           for (let vi = 0; vi < n; vi++) {
-            if (useSeamMaster) {
-              if (seamVertexNearProjectedNotch(p, vi)) continue
-            } else if (notchVIs.has(vi)) {
-              continue
-            }
             const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
             const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
             if (d < vertexHitR && (!bestVertex || d < bestVertex.dist)) {
@@ -1675,15 +1713,11 @@ export function WorkspaceCanvas() {
               const depth = notch.depth
               const width = notch.width ?? 6
               const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine)
+              const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
+              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
               let d = Infinity
               if (cutPts) {
-                const tri = [cutPts.left, cutPts.tip, cutPts.right]
-                if (isPointInPolygon(local, tri)) d = 0
-                else {
-                  const pts = [cutPos.position, cutPts.left, cutPts.right, cutPts.tip]
-                  d = Math.min(...pts.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y)))
-                }
+                d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
               } else {
                 const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
                 d = Math.hypot(local.x - position.x, local.y - position.y)
@@ -1694,17 +1728,9 @@ export function WorkspaceCanvas() {
               if (p.seamLine.length >= 3) {
                 const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
                 if (seamPos) {
-                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine)
+                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
                   if (seamPts) {
-                    const triSeam = [seamPts.left, seamPts.tip, seamPts.right]
-                    const dSeam = isPointInPolygon(local, triSeam)
-                      ? 0
-                      : Math.min(
-                          Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y),
-                          Math.hypot(local.x - seamPts.left.x, local.y - seamPts.left.y),
-                          Math.hypot(local.x - seamPts.right.x, local.y - seamPts.right.y),
-                          Math.hypot(local.x - seamPts.tip.x, local.y - seamPts.tip.y)
-                        )
+                    const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
                     if (dSeam <= NOTCH_CLICK_HIT && (!bestNotchClick || dSeam < bestNotchClick.dist)) {
                       bestNotchClick = { dist: dSeam, pieceId: p.id, notchId: notch.id }
                     }
@@ -1727,18 +1753,11 @@ export function WorkspaceCanvas() {
           minNotchDist < minVertexDist &&
           minNotchDist < minPointOnCurveDist
         if (useNotch && bestNotchClick && tool === 'select') {
-          const pc = pieces.find((x) => x.id === bestNotchClick.pieceId)
-          const nc = pc?.notches.find((nn) => nn.id === bestNotchClick.notchId)
-          const vDrag = pc && nc ? vertexDragStateForAnchoredNotch(pc, nc) : null
-          if (vDrag) {
-            setDragging(vDrag)
-          } else {
-            setDragging({
-              kind: 'notchMove',
-              pieceId: bestNotchClick.pieceId,
-              notchId: bestNotchClick.notchId,
-            })
-          }
+          setDragging({
+            kind: 'notchMove',
+            pieceId: bestNotchClick.pieceId,
+            notchId: bestNotchClick.notchId,
+          })
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
@@ -1766,7 +1785,7 @@ export function WorkspaceCanvas() {
               : curves[bestVertex.vertexIndex - 1].end
             const notchStabilize =
               p!.seamAllowanceMm != null && useSeamLineForVertexEditing(p!)
-                ? { notches: cloneVertexDragNotches(p!.notches), cutLine: cloneVertexDragCutLine(p!.cutLine) }
+                ? { notches: cloneVertexDragNotches(p!.notches), cutLine: cloneVertexDragCutLine(p!.cutLine), seamLine: p!.seamLine.map(c => c.type === 'line' ? { ...c, start: { ...c.start }, end: { ...c.end } } : { ...c, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }) }
                 : undefined
             setDragging({
               kind: 'vertex',
@@ -1844,19 +1863,20 @@ export function WorkspaceCanvas() {
         return
       }
       if (tool === 'select') {
+        if (hoveredDeletableNotch && e.altKey) {
+          e.preventDefault()
+          setNotchEditTarget({
+            pieceId: hoveredDeletableNotch.pieceId,
+            notchId: hoveredDeletableNotch.notchId,
+          })
+          return
+        }
         if (hoveredDeletableNotch) {
-          const pc = pieces.find((x) => x.id === hoveredDeletableNotch.pieceId)
-          const nc = pc?.notches.find((nn) => nn.id === hoveredDeletableNotch.notchId)
-          const vDrag = pc && nc ? vertexDragStateForAnchoredNotch(pc, nc) : null
-          if (vDrag) {
-            setDragging(vDrag)
-          } else {
-            setDragging({
-              kind: 'notchMove',
-              pieceId: hoveredDeletableNotch.pieceId,
-              notchId: hoveredDeletableNotch.notchId,
-            })
-          }
+          setDragging({
+            kind: 'notchMove',
+            pieceId: hoveredDeletableNotch.pieceId,
+            notchId: hoveredDeletableNotch.notchId,
+          })
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
@@ -2318,15 +2338,9 @@ export function WorkspaceCanvas() {
           for (const p of piecesForHover) {
             if (!p || p.cutLine.length === 0) continue
             const local = worldToPieceLocal(world, p)
-            const notchVIs = new Set(p.notches.map((nn) => nn.vertexIndex).filter((vi): vi is number => vi != null))
             const useSeamMaster = useSeamLineForVertexEditing(p)
             const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
             for (let vi = 0; vi < curvesForHover.length; vi++) {
-              if (useSeamMaster) {
-                if (seamVertexNearProjectedNotch(p, vi)) continue
-              } else if (notchVIs.has(vi)) {
-                continue
-              }
               if (curvesForHover.length <= 3) continue
               const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
               const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
@@ -2355,16 +2369,11 @@ export function WorkspaceCanvas() {
               const depth = notch.depth
               const width = notch.width ?? 6
               const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine)
+              const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
+              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
               let d = bestNotch.dist + 1
               if (cutPts) {
-                const tri = [cutPts.left, cutPts.tip, cutPts.right]
-                if (isPointInPolygon(local, tri)) {
-                  d = 0
-                } else {
-                  const pts = [cutPos.position, cutPts.left, cutPts.right, cutPts.tip]
-                  d = Math.min(...pts.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y)))
-                }
+                d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
               } else {
                 const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
                 d = Math.hypot(local.x - position.x, local.y - position.y)
@@ -2373,17 +2382,9 @@ export function WorkspaceCanvas() {
               if (p.seamLine.length >= 3) {
                 const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
                 if (seamPos) {
-                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine)
+                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
                   if (seamPts) {
-                    const triSeam = [seamPts.left, seamPts.tip, seamPts.right]
-                    const dSeam = isPointInPolygon(local, triSeam)
-                      ? 0
-                      : Math.min(
-                          Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y),
-                          Math.hypot(local.x - seamPts.left.x, local.y - seamPts.left.y),
-                          Math.hypot(local.x - seamPts.right.x, local.y - seamPts.right.y),
-                          Math.hypot(local.x - seamPts.tip.x, local.y - seamPts.tip.y)
-                        )
+                    const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
                     if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
                   } else {
                     const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
@@ -2455,16 +2456,11 @@ export function WorkspaceCanvas() {
               const depth = notch.depth
               const width = notch.width ?? 6
               const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine)
+              const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
+              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
               let d = bestNotch.dist + 1
               if (cutPts) {
-                const tri = [cutPts.left, cutPts.tip, cutPts.right]
-                if (isPointInPolygon(local, tri)) {
-                  d = 0
-                } else {
-                  const pts = [cutPos.position, cutPts.left, cutPts.right, cutPts.tip]
-                  d = Math.min(...pts.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y)))
-                }
+                d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
               } else {
                 const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
                 d = Math.hypot(local.x - position.x, local.y - position.y)
@@ -2473,17 +2469,9 @@ export function WorkspaceCanvas() {
               if (p.seamLine.length >= 3) {
                 const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
                 if (seamPos) {
-                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine)
+                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
                   if (seamPts) {
-                    const triSeam = [seamPts.left, seamPts.tip, seamPts.right]
-                    const dSeam = isPointInPolygon(local, triSeam)
-                      ? 0
-                      : Math.min(
-                          Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y),
-                          Math.hypot(local.x - seamPts.left.x, local.y - seamPts.left.y),
-                          Math.hypot(local.x - seamPts.right.x, local.y - seamPts.right.y),
-                          Math.hypot(local.x - seamPts.tip.x, local.y - seamPts.tip.y)
-                        )
+                    const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
                     if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
                   } else {
                     const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
@@ -2821,47 +2809,44 @@ export function WorkspaceCanvas() {
         const curves = useSeam ? piece.seamLine : piece.cutLine
         const nearest = nearestCurveIndexAndPoint(local, curves)
         if (nearest && nearest.distance < 25) {
-          const t = nearest.t ?? 0
-          const angle = outwardNormalAngleAt(curves, nearest.curveIndex, t) + 180
+          // Commit richtet sich (bei `notchMove`) immer auf cutLine (storePos/storeAngle).
+          // Damit Vorschau und Commit konsistent sind, projizieren wir daher auch die
+          // Distanzlabels und die Preview-Pose auf die cutLine.
+          const tOnCurves = nearest.t ?? 0
+          const cutNearest = nearestCurveIndexAndPoint(nearest.point, piece.cutLine)
+          const cutT = cutNearest?.t ?? tOnCurves
+          const tNudged = cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
+          const cutCurveIndex = cutNearest?.curveIndex ?? nearest.curveIndex
+          const curve = piece.cutLine[cutCurveIndex]
+
           let storePos: Point
           let storeAngle: number
-          if (useSeam) {
-            const cutNearest = nearestCurveIndexAndPoint(nearest.point, piece.cutLine)
-            if (cutNearest) {
-              const cutT = cutNearest.t ?? 0
-              const tNudged = cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
-              storePos = pointOnCurveAt(piece.cutLine[cutNearest.curveIndex], tNudged)
-              storeAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, tNudged) + 180
-            } else {
-              storePos = nearest.point
-              storeAngle = angle
-            }
+          if (cutNearest) {
+            storePos = pointOnCurveAt(piece.cutLine[cutNearest.curveIndex], tNudged)
+            storeAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, tNudged) + 180
           } else {
-            const cutCi = nearest.curveIndex
-            const cutT = t
-            const tNudged = cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
-            storePos = pointOnCurveAt(piece.cutLine[cutCi], tNudged)
-            storeAngle = outwardNormalAngleAt(piece.cutLine, cutCi, tNudged) + 180
+            // Fallback (sollte selten passieren): verwende cutLine-Indizierung wie vorhanden.
+            storePos = pointOnCurveAt(piece.cutLine[cutCurveIndex], tNudged)
+            storeAngle = outwardNormalAngleAt(piece.cutLine, cutCurveIndex, tNudged) + 180
           }
-          const notchesOnSegment = piece.notches.map((n) => {
-            if (n.id === dragging.notchId) return t
-            const pos =
-              curves === piece.seamLine && piece.seamLine.length > 0
-                ? (getNotchPositionAndAngleOnSeamLine(n, piece.cutLine, piece.seamLine)?.position ??
-                   getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine).position)
-                : getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine).position
-            const nr = nearestCurveIndexAndPoint(pos, curves)
-            return nr && nr.curveIndex === nearest.curveIndex && nr.t != null ? nr.t : null
-          }).filter((x): x is number => x != null)
-          const curve = curves[nearest.curveIndex]
-          const distanceMmLeft = distanceToPrevVertexOrNotch(curve, t, notchesOnSegment)
-          const distanceMmRight = distanceToNextVertexOrNotch(curve, t, notchesOnSegment)
+
+          const notchesOnSegment = piece.notches
+            .map((n) => {
+              if (n.id === dragging.notchId) return tNudged
+              const { position: notchPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
+              const nr = nearestCurveIndexAndPoint(notchPos, piece.cutLine)
+              return nr && nr.curveIndex === cutCurveIndex && nr.t != null ? nr.t : null
+            })
+            .filter((x): x is number => x != null)
+
+          const distanceMmLeft = distanceToPrevVertexOrNotch(curve, tNudged, notchesOnSegment)
+          const distanceMmRight = distanceToNextVertexOrNotch(curve, tNudged, notchesOnSegment)
           setNotchPreview({
             pieceId: dragging.pieceId,
-            position: nearest.point,
-            angle,
-            curveIndex: nearest.curveIndex,
-            t,
+            position: storePos,
+            angle: storeAngle,
+            curveIndex: cutCurveIndex,
+            t: tNudged,
             distanceMmLeft,
             distanceMmRight,
             storePos,
@@ -2999,6 +2984,7 @@ export function WorkspaceCanvas() {
     setHoveredCurvepointSegment(null)
     closeSegmentMenu()
     setWorkspaceNoteEditor(null)
+    setNotchEditTarget(null)
   }, [closeSegmentMenu])
 
   useEffect(() => {
@@ -3109,6 +3095,11 @@ export function WorkspaceCanvas() {
         return
       }
       if (!inInput && e.key === 'Escape') {
+        if (notchEditTarget) {
+          e.preventDefault()
+          setNotchEditTarget(null)
+          return
+        }
         if (batchSelectionTargets.length > 0) {
           e.preventDefault()
           clearBatchSelection()
@@ -3348,6 +3339,14 @@ export function WorkspaceCanvas() {
         selectedPieceIds.forEach((id) => alignPieceToGrain(id))
         return
       }
+      if ((e.key === 'e' || e.key === 'E') && !inInput && tool === 'select' && hoveredDeletableNotch && !dragging) {
+        e.preventDefault()
+        setNotchEditTarget({
+          pieceId: hoveredDeletableNotch.pieceId,
+          notchId: hoveredDeletableNotch.notchId,
+        })
+        return
+      }
       if ((e.key === 'f' || e.key === 'F') && !inInput && hoveredDeletableNotch) {
         e.preventDefault()
         toggleNotchAnchor(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
@@ -3373,6 +3372,13 @@ export function WorkspaceCanvas() {
       if (hoveredDeletableNotch) {
         e.preventDefault()
         removeNotch(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
+        setNotchEditTarget((prev) =>
+          prev &&
+          prev.pieceId === hoveredDeletableNotch!.pieceId &&
+          prev.notchId === hoveredDeletableNotch!.notchId
+            ? null
+            : prev
+        )
         setHoveredDeletableNotch(null)
         return
       }
@@ -3385,7 +3391,14 @@ export function WorkspaceCanvas() {
       if (!hoveredDeletablePoint) return
       e.preventDefault()
       if (hoveredDeletablePoint.kind === 'vertex') {
-        removeVertex(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex)
+        const piece = pieces.find((x) => x.id === hoveredDeletablePoint.pieceId)
+        const isSoft = piece ? masterSoftVertexIndexSet(piece).has(hoveredDeletablePoint.vertexIndex) : false
+        if (isSoft) {
+          // Weiche Punkte (blau) werden per Entf nur ent-weichtet (blau -> rot), nicht geometrisch gelöscht.
+          setVertexSoft(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex, false)
+        } else {
+          removeVertex(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex)
+        }
       } else {
         convertBezierSegmentToLine(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.curveIndex)
       }
@@ -3448,6 +3461,7 @@ export function WorkspaceCanvas() {
     batchSelectionTargets,
     clearBatchSelection,
     batchDeleteFiltered,
+    notchEditTarget,
   ])
 
   const handlePointerUp = useCallback((_e?: React.PointerEvent) => {
@@ -3535,11 +3549,17 @@ export function WorkspaceCanvas() {
       }
     } else if (dragging?.kind === 'notchMove') {
       if (notchPreview && notchPreview.pieceId === dragging.pieceId) {
-        updateNotch(dragging.pieceId, dragging.notchId, {
-          position: notchPreview.storePos,
-          angle: notchPreview.storeAngle,
-          vertexIndex: undefined,
-        })
+        const movePiece = pieces.find((p) => p.id === dragging.pieceId)
+        if (movePiece && movePiece.cutLine.length > 0) {
+          const L = pathLengthAt(movePiece.cutLine, notchPreview.curveIndex, notchPreview.t)
+          const total = totalPathLength(movePiece.cutLine)
+          updateNotch(dragging.pieceId, dragging.notchId, {
+            sNormalized: total > 0 ? L / total : undefined,
+            arcLengthMm: total > 0 ? L : undefined,
+            position: notchPreview.storePos,
+            angle: notchPreview.storeAngle,
+          })
+        }
       }
       setNotchPreview(null)
       setDragging(null)
@@ -3551,13 +3571,36 @@ export function WorkspaceCanvas() {
         const dy = current.y - position.y
         const dragDist = Math.hypot(dx, dy)
         const DRAG_THRESHOLD = 2
-        const defaultDepth = 4
-        const defaultWidth = 6
+        const presetIdx = Math.max(0, Math.min(notchSettings.length - 1, activeNotchPresetIndex))
+        const notchPreset = notchSettings[presetIdx] ?? { type: 'strich' as const, widthMm: 2.5, depthMm: 2 }
+        const modelFields = modelNotchFieldsFromPreset(notchPreset)
+        if (!modelFields) {
+          setDragging(null)
+          setTool('notch')
+          return
+        }
+        const { type: notchModelType, depth: defaultDepth, width: defaultWidth } = modelFields
         const isDrag = dragDist >= DRAG_THRESHOLD
         const curves = useSeamLine && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
-        const angle = isDrag
-            ? (Math.atan2(dy, dx) * 180) / Math.PI
-            : outwardNormalAngleAt(curves, curveIndex, t) + 180
+        /** Strich-Kerbe: Tiefe immer senkrecht zur Schnittkontur (Innennormale), nie in Mausrichtung. */
+        let angle: number
+        if (notchModelType === 'single') {
+          if (useSeamLine && piece.seamLine.length >= 3) {
+            const cn = nearestCurveIndexAndPoint(position, piece.cutLine)
+            if (cn) {
+              const ct = cn.t ?? 0
+              angle = outwardNormalAngleAt(piece.cutLine, cn.curveIndex, ct) + 180
+            } else {
+              angle = outwardNormalAngleAt(piece.cutLine, curveIndex, t) + 180
+            }
+          } else {
+            angle = outwardNormalAngleAt(piece.cutLine, curveIndex, t) + 180
+          }
+        } else if (isDrag) {
+          angle = (Math.atan2(dy, dx) * 180) / Math.PI
+        } else {
+          angle = outwardNormalAngleAt(curves, curveIndex, t) + 180
+        }
         const id = 'n' + Math.random().toString(36).slice(2, 9)
         const rejectNotchSpacing = () => {
           setToastMessage(
@@ -3572,7 +3615,7 @@ export function WorkspaceCanvas() {
           const cutNearest = nearestCurveIndexAndPoint(position, piece.cutLine)
           if (cutNearest) {
             notchPos = cutNearest.point
-            if (!isDrag) {
+            if (!isDrag || notchModelType === 'single') {
               const ct = cutNearest.t ?? 0
               notchAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
             }
@@ -3586,41 +3629,27 @@ export function WorkspaceCanvas() {
             id,
             position: notchPos,
             angle: notchAngle,
-            type: 'single',
-            depth: isDrag ? dragDist : defaultDepth,
+            type: notchModelType,
+            depth: defaultDepth,
             width: defaultWidth,
           })
         } else {
-          const inMiddle = t > 1e-6 && t < 1 - 1e-6
-          const n = piece.cutLine.length
-          let vertexIndex: number | undefined
-          if (inMiddle) {
-            if (!isNotchSpacingValid(piece, curveIndex, t)) {
-              rejectNotchSpacing()
-              return
-            }
-            const curve = piece.cutLine[curveIndex]
-            if (curve.type === 'bezier') {
-              insertPointOnCutLine(pieceId, curveIndex, position, t)
-            } else {
-              insertPointOnCutLine(pieceId, curveIndex, position, t)
-            }
-            vertexIndex = curveIndex + 1
-          } else {
-            vertexIndex = t < 0.5 ? curveIndex : (curveIndex + 1) % n
-            if (!isNotchSpacingValid(piece, vertexIndex, 0)) {
-              rejectNotchSpacing()
-              return
-            }
+          if (!isNotchSpacingValid(piece, curveIndex, t)) {
+            rejectNotchSpacing()
+            return
           }
+          const notchPos = nearestCurveIndexAndPoint(position, piece.cutLine)?.point ?? position
+          const L = pathLengthAt(piece.cutLine, curveIndex, t)
+          const total = totalPathLength(piece.cutLine)
           addNotch(pieceId, {
             id,
-            position,
+            position: notchPos,
             angle,
-            type: 'single',
-            depth: isDrag ? dragDist : defaultDepth,
+            type: notchModelType,
+            depth: defaultDepth,
             width: defaultWidth,
-            vertexIndex,
+            sNormalized: total > 0 ? L / total : undefined,
+            arcLengthMm: total > 0 ? L : undefined,
           })
         }
       }
@@ -3665,10 +3694,8 @@ export function WorkspaceCanvas() {
       // Cut-as-Master: Nahtlinie aus Schnittkante nachziehen. Bei Seam-as-Master ist seamLine die
       // bearbeitete Kontur (updateVertex leitet cutLine schon ab) – recomputeSeamLine würde seam überschreiben.
       const draggedPiece = pieces.find((p) => p.id === dragging.pieceId)
-      const seamIsMaster =
-        draggedPiece != null &&
-        draggedPiece.seamAllowanceMm != null &&
-        draggedPiece.seamLine.length >= 3
+      // Gleiche Master-Logik wie in der Vertex-Bearbeitung nutzen (verhindert seltene Divergenzfälle).
+      const seamIsMaster = draggedPiece != null && useSeamLineForVertexEditing(draggedPiece)
       if (!seamIsMaster) {
         recomputeSeamLine(dragging.pieceId)
       }
@@ -3717,6 +3744,8 @@ export function WorkspaceCanvas() {
     selectPiece,
     clearBatchSelection,
     setBatchSelectionTargets,
+    notchSettings,
+    activeNotchPresetIndex,
     cutSeamSwappedSet,
   ])
   const handleWheel = useCallback(
@@ -3780,6 +3809,110 @@ export function WorkspaceCanvas() {
       }}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>
+      {notchEditTarget &&
+        tool === 'select' &&
+        (() => {
+          const editPiece = pieces.find((p) => p.id === notchEditTarget.pieceId)
+          const editNotch = editPiece?.notches.find((n) => n.id === notchEditTarget.notchId)
+          if (!editPiece || !editNotch) return null
+          const matchedPreset = findMatchingNotchPresetIndex(editNotch, notchSettings)
+          return (
+            <div
+              className="notch-properties-bar"
+              style={{
+                position: 'fixed',
+                bottom: 12,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 10001,
+                isolation: 'isolate',
+                pointerEvents: 'auto',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 14px',
+                background: 'rgba(255,255,255,0.98)',
+                border: '1px solid #1565c0',
+                borderRadius: 8,
+                boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
+                maxWidth: 'min(96vw, 640px)',
+                fontSize: 13,
+                fontFamily: 'system-ui, sans-serif',
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
+            >
+              <span style={{ fontWeight: 600, color: '#1565c0' }}>Kerbe bearbeiten</span>
+              <span style={{ fontSize: 11, color: '#666' }}>Alt+Klick oder E (über Kerbe)</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: '#6d4c41',
+                  border: '1px solid #cfd8dc',
+                  borderRadius: 999,
+                  padding: '2px 8px',
+                  background: '#fafafa',
+                }}
+                title="Kerbe ist frei auf der Linie"
+              >
+                Frei (Linienanker)
+              </span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ whiteSpace: 'nowrap' }}>Aus Einstellungen</span>
+                <select
+                  value={matchedPreset === null ? '' : String(matchedPreset)}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    if (v === '') return
+                    const idx = Number(v)
+                    const preset = notchSettings[idx]
+                    if (!preset) return
+                    const f = modelNotchFieldsFromPreset(preset)
+                    if (!f) {
+                      setToastMessage(
+                        'error: Dieses Preset ist „Keine Notch“. In den Einstellungen einen Typ wählen (Strich/Kerbe).'
+                      )
+                      return
+                    }
+                    updateNotch(editPiece.id, editNotch.id, {
+                      type: f.type,
+                      depth: f.depth,
+                      width: f.width,
+                    })
+                  }}
+                  style={{ fontSize: 13, minWidth: 220, maxWidth: 360 }}
+                >
+                  {matchedPreset === null && (
+                    <option value="">Preset aus Einstellungen wählen…</option>
+                  )}
+                  {notchSettings.map((n, i) => {
+                    const typLabel = n.type === 'kerbe' ? 'Kerbe' : n.type === 'keine' ? 'Keine' : 'Strich'
+                    return (
+                      <option key={i} value={i}>
+                        Notch {i + 1}: {typLabel} ({n.widthMm}×{n.depthMm} mm)
+                      </option>
+                    )
+                  })}
+                </select>
+              </label>
+              {matchedPreset === null && (
+                <span style={{ fontSize: 11, color: '#c62828', maxWidth: 280 }}>
+                  Kein exakter Treffer zu den 10 Einstellungen (z. B. Doppel-Kerbe). Bitte Preset wählen.
+                </span>
+              )}
+              <button
+                type="button"
+                className="sidebar-btn"
+                style={{ fontSize: 12, padding: '4px 10px' }}
+                onClick={() => setNotchEditTarget(null)}
+              >
+                Schließen
+              </button>
+            </div>
+          )
+        })()}
       {batchSelectionTargets.length > 0 && (
         <div
           className="batch-selection-bar"
@@ -4495,20 +4628,110 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === notchPreview.pieceId)
             if (!piece) return null
             const tx = `translate(${piece.transform.x},${piece.transform.y}) rotate(${piece.transform.rotation}) scale(${piece.transform.mirrored ? -1 : 1},1)`
-            const depth = 4
-            const width = 6
-            const [a, b, c] = notchTriangleCorners(notchPreview.position, notchPreview.angle, depth, width)
-            const fillD = `M ${a.x} ${a.y} L ${b.x} ${b.y} L ${c.x} ${c.y} Z`
-            const edgesD = `M ${a.x} ${a.y} L ${c.x} ${c.y} L ${b.x} ${b.y}`
+            const previewPresetIdx = Math.max(0, Math.min(notchSettings.length - 1, activeNotchPresetIndex))
+            const previewPreset = notchSettings[previewPresetIdx] ?? { type: 'strich' as const, widthMm: 2.5, depthMm: 2 }
+            const previewFields = modelNotchFieldsFromPreset(previewPreset)
+            const depth = previewFields?.depth ?? 4
+            const width = previewFields?.width ?? 6
+            const previewNotchType: ModelNotchType =
+              previewFields?.type ?? (previewPreset.type === 'kerbe' ? 'v' : 'single')
+            /** Kerben hängen an der cutLine; bei Seam-Ansicht sind curveIndex/t auf der Naht — immer auf Schnitt projizieren. */
+            const cutNearest = nearestCurveIndexAndPoint(notchPreview.position, piece.cutLine)
+            const posOnCut = cutNearest?.point ?? notchPreview.position
+            const previewAnchor = cutNearest
+              ? { curveIndex: cutNearest.curveIndex, t: cutNearest.t ?? 0 }
+              : { curveIndex: notchPreview.curveIndex, t: notchPreview.t }
+            const angleOnCut = cutNearest
+              ? outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, cutNearest.t ?? 0) + 180
+              : notchPreview.angle
+            const PREVIEW_VERTEX_T_EPS = 0.03
+            const previewNearCutVertex =
+              previewAnchor.t <= PREVIEW_VERTEX_T_EPS || previewAnchor.t >= 1 - PREVIEW_VERTEX_T_EPS
+            const previewCutPts =
+              previewNotchType === 'single' || previewNearCutVertex
+                ? null
+                : notchCutoutPoints(
+                    posOnCut,
+                    angleOnCut,
+                    depth,
+                    width,
+                    piece.cutLine,
+                    previewAnchor,
+                    previewNotchType
+                  )
+            const { fillD, edgesD } = previewCutPts
+              ? notchCutoutSvgPaths(previewCutPts)
+              : (() => {
+                  const [a, b, c] = notchTriangleCorners(posOnCut, angleOnCut, depth, width)
+                  return {
+                    fillD: `M ${a.x} ${a.y} L ${b.x} ${b.y} L ${c.x} ${c.y} Z`,
+                    edgesD: `M ${a.x} ${a.y} L ${c.x} ${c.y} L ${b.x} ${b.y}`,
+                  }
+                })()
+            const previewNotchForSeam = {
+              id: '__preview__',
+              position: posOnCut,
+              angle: angleOnCut,
+              type: previewNotchType,
+              depth,
+              width,
+            }
+            const seamPreviewPose =
+              piece.seamLine.length >= 3
+                ? getNotchPositionAndAngleOnSeamLine(previewNotchForSeam, piece.cutLine, piece.seamLine)
+                : null
+            const seamNearest = seamPreviewPose
+              ? nearestCurveIndexAndPoint(seamPreviewPose.position, piece.seamLine)
+              : null
+            const previewNearSeamVertex =
+              seamNearest != null &&
+              ((seamNearest.t ?? 0) <= PREVIEW_VERTEX_T_EPS ||
+                (seamNearest.t ?? 0) >= 1 - PREVIEW_VERTEX_T_EPS)
+            const seamPreviewPts =
+              seamPreviewPose && !previewNearSeamVertex
+                ? notchCutoutPoints(
+                    seamPreviewPose.position,
+                    seamPreviewPose.angle,
+                    depth,
+                    width,
+                    piece.seamLine,
+                    undefined,
+                    previewNotchType
+                  )
+                : null
+            const seamPreviewPaths = seamPreviewPts ? notchCutoutSvgPaths(seamPreviewPts) : null
             const labelOffset = 14
             const fontSize = 7
+            const previewIsLine = previewCutPts?.kind === 'line'
             return (
               <g transform={tx} pointerEvents="none">
-                <path d={fillD} fill="#fff" stroke="none" />
-                <path d={edgesD} fill="none" stroke={NOTCH_STROKE} strokeWidth={0.8} strokeLinejoin="round" />
+                {seamPreviewPaths?.fillD ? (
+                  <path d={seamPreviewPaths.fillD} fill="#fff" fillOpacity={0.55} stroke="none" />
+                ) : null}
+                {seamPreviewPaths ? (
+                  <path
+                    d={seamPreviewPaths.edgesD}
+                    fill="none"
+                    stroke={NOTCH_STROKE}
+                    strokeWidth={previewIsLine ? 0.85 : 0.75}
+                    strokeLinejoin="round"
+                    strokeLinecap={previewIsLine ? 'round' : 'butt'}
+                    strokeOpacity={0.7}
+                    strokeDasharray="3 2"
+                  />
+                ) : null}
+                {fillD ? <path d={fillD} fill="#fff" stroke="none" /> : null}
+                <path
+                  d={edgesD}
+                  fill="none"
+                  stroke={NOTCH_STROKE}
+                  strokeWidth={previewIsLine ? 0.9 : 0.8}
+                  strokeLinejoin="round"
+                  strokeLinecap={previewIsLine ? 'round' : 'butt'}
+                />
                 <text
-                  x={notchPreview.position.x - labelOffset}
-                  y={notchPreview.position.y}
+                  x={posOnCut.x - labelOffset}
+                  y={posOnCut.y}
                   textAnchor="end"
                   dominantBaseline="middle"
                   fontSize={fontSize}
@@ -4519,8 +4742,8 @@ export function WorkspaceCanvas() {
                   {notchPreview.distanceMmLeft.toFixed(1)} mm
                 </text>
                 <text
-                  x={notchPreview.position.x + labelOffset}
-                  y={notchPreview.position.y}
+                  x={posOnCut.x + labelOffset}
+                  y={posOnCut.y}
                   textAnchor="start"
                   dominantBaseline="middle"
                   fontSize={fontSize}
@@ -4563,9 +4786,7 @@ export function WorkspaceCanvas() {
                 if (!piece || curvesForVertices.length === 0) return []
                 const n = curvesForVertices.length
                 const softOnMaster = masterSoftVertexIndexSet(piece)
-                const notchOnMaster = masterNotchVertexIndexSet(piece)
                 return Array.from({ length: n }, (_, vi) => {
-                  if (notchOnMaster.has(vi)) return null
                   const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
                   const w = pieceLocalToWorld(vertexPos, piece)
                   const isSoft = useSeamMaster ? softOnMaster.has(vi) : (piece.softVertices ?? []).includes(vi)
@@ -4868,26 +5089,89 @@ export function WorkspaceCanvas() {
           {dragging?.kind === 'notch' && (() => {
             const piece = pieces.find((p) => p.id === dragging.pieceId)
             if (!piece) return null
-            const { position, current, curveIndex, t } = dragging
+            const { position, current, curveIndex, t, useSeamLine } = dragging
             const dx = current.x - position.x
             const dy = current.y - position.y
             const dragDist = Math.hypot(dx, dy)
             const isDragPreview = dragDist >= 2
-            const depth = isDragPreview ? dragDist : 4
-            const angle = isDragPreview
-                ? (Math.atan2(dy, dx) * 180) / Math.PI
-                : outwardNormalAngleAt(piece.cutLine, curveIndex, t) + 180
-            const width = 6
-            const [a, b, c] = notchTriangleCorners(position, angle, depth, width)
-            const wa = pieceLocalToWorld(a, piece)
-            const wb = pieceLocalToWorld(b, piece)
-            const wc = pieceLocalToWorld(c, piece)
-            const fillD = `M ${wa.x} ${wa.y} L ${wb.x} ${wb.y} L ${wc.x} ${wc.y} Z`
-            const edgesD = `M ${wa.x} ${wa.y} L ${wc.x} ${wc.y} L ${wb.x} ${wb.y}`
+            const presetIdx = Math.max(0, Math.min(notchSettings.length - 1, activeNotchPresetIndex))
+            const notchPreset = notchSettings[presetIdx] ?? { type: 'strich' as const, widthMm: 2.5, depthMm: 2 }
+            const modelFields = modelNotchFieldsFromPreset(notchPreset)
+            if (!modelFields) return null
+            const { type: dragNotchType, depth: defaultDepth, width: defaultWidth } = modelFields
+            /** V-Kerbe: Zug bestimmt Vorschau-Tiefe; Strich: Preset-Tiefe wie beim Loslassen. */
+            const depth =
+              dragNotchType === 'single' ? defaultDepth : isDragPreview ? dragDist : defaultDepth
+            const width = defaultWidth
+            const angle =
+              dragNotchType === 'single'
+                ? (() => {
+                    if (useSeamLine && piece.seamLine.length >= 3) {
+                      const cutNearest = nearestCurveIndexAndPoint(position, piece.cutLine)
+                      if (cutNearest) {
+                        const ct = cutNearest.t ?? 0
+                        return outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
+                      }
+                    }
+                    return outwardNormalAngleAt(piece.cutLine, curveIndex, t) + 180
+                  })()
+                : isDragPreview
+                  ? (Math.atan2(dy, dx) * 180) / Math.PI
+                  : (() => {
+                      if (useSeamLine && piece.seamLine.length >= 3) {
+                        const cutNearest = nearestCurveIndexAndPoint(position, piece.cutLine)
+                        if (cutNearest) {
+                          const ct = cutNearest.t ?? 0
+                          return outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
+                        }
+                      }
+                      return outwardNormalAngleAt(piece.cutLine, curveIndex, t) + 180
+                    })()
+            let cutAnchor: { curveIndex: number; t: number } | null = null
+            if (useSeamLine && piece.seamLine.length >= 3) {
+              const cutNearest = nearestCurveIndexAndPoint(position, piece.cutLine)
+              if (cutNearest) cutAnchor = { curveIndex: cutNearest.curveIndex, t: cutNearest.t ?? 0 }
+            } else {
+              cutAnchor = { curveIndex, t }
+            }
+            const cutPts = notchCutoutPoints(position, angle, depth, width, piece.cutLine, cutAnchor, dragNotchType)
+            const toW = (p: Point) => pieceLocalToWorld(p, piece)
+            const { fillD, edgesD } = cutPts
+              ? cutPts.kind === 'line'
+                ? (() => {
+                    const s = toW(cutPts.start)
+                    const e = toW(cutPts.end)
+                    return { fillD: '', edgesD: `M ${s.x} ${s.y} L ${e.x} ${e.y}` }
+                  })()
+                : notchCutoutSvgPaths({
+                    kind: 'v',
+                    left: toW(cutPts.left),
+                    tip: toW(cutPts.tip),
+                    right: toW(cutPts.right),
+                  })
+              : (() => {
+                  const [a, b, c] = notchTriangleCorners(position, angle, depth, width)
+                  const wa = toW(a)
+                  const wb = toW(b)
+                  const wc = toW(c)
+                  return {
+                    fillD: `M ${wa.x} ${wa.y} L ${wb.x} ${wb.y} L ${wc.x} ${wc.y} Z`,
+                    edgesD: `M ${wa.x} ${wa.y} L ${wc.x} ${wc.y} L ${wb.x} ${wb.y}`,
+                  }
+                })()
+            const dragIsLine = cutPts?.kind === 'line'
             return (
               <g pointerEvents="none">
-                <path d={fillD} fill="#fff" stroke="none" />
-                <path d={edgesD} fill="none" stroke={NOTCH_STROKE} strokeWidth={0.8} strokeDasharray="4 2" strokeLinejoin="round" />
+                {fillD ? <path d={fillD} fill="#fff" stroke="none" /> : null}
+                <path
+                  d={edgesD}
+                  fill="none"
+                  stroke={NOTCH_STROKE}
+                  strokeWidth={dragIsLine ? 0.9 : 0.8}
+                  strokeDasharray="4 2"
+                  strokeLinejoin="round"
+                  strokeLinecap={dragIsLine ? 'round' : 'butt'}
+                />
               </g>
             )
           })()}

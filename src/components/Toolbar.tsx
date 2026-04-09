@@ -87,6 +87,8 @@ export function Toolbar() {
     dxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm,
     notchSettings,
+    activeNotchPresetIndex,
+    setActiveNotchPresetIndex,
     imageDigitizeSession,
     startDigitize,
     startImageSession,
@@ -944,6 +946,36 @@ export function Toolbar() {
             </span>
           )
         })()}
+        {tool === 'notch' && (
+          <label
+            className="toolbar-notch-preset"
+            style={{
+              marginLeft: 16,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 12,
+              color: '#333',
+            }}
+            title="Notch 1 ist der Standard. Werte kommen aus Einstellungen → Notches. Hier das Preset wählen, das beim Setzen einer neuen Kerbe verwendet wird."
+          >
+            <span>Aktives Notch-Preset (Notch 1 = Standard):</span>
+            <select
+              value={activeNotchPresetIndex}
+              onChange={(e) => setActiveNotchPresetIndex(Number(e.target.value))}
+              style={{ fontSize: 12, padding: '2px 6px', maxWidth: 280 }}
+            >
+              {notchSettings.map((n, i) => {
+                const typLabel = n.type === 'kerbe' ? 'Kerbe' : n.type === 'keine' ? 'Keine' : 'Strich'
+                return (
+                  <option key={i} value={i}>
+                    {i + 1}: {typLabel} ({n.widthMm}×{n.depthMm} mm)
+                  </option>
+                )
+              })}
+            </select>
+          </label>
+        )}
       </div>
       <div className="menubar-right">
         {nahtzuordnungMode !== 'idle' && (

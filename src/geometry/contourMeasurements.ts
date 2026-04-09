@@ -49,9 +49,6 @@ function notchToCurveParameterOnContour(
   measureOnSeam: boolean
 ): { curveIndex: number; t: number } | null {
   if (contour.length === 0) return null
-  if (notch.vertexIndex != null && notch.vertexIndex >= 0 && notch.vertexIndex < contour.length) {
-    return { curveIndex: notch.vertexIndex, t: 0 }
-  }
   if (measureOnSeam && piece.seamLine.length > 0 && piece.cutLine.length > 0) {
     const onSeam = getNotchPositionAndAngleOnSeamLine(notch, piece.cutLine, piece.seamLine)
     if (onSeam) {

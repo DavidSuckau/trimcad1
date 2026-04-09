@@ -108,7 +108,7 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     }
   })
 
-  it('verankerte Kerbe bleibt verankert bei erster Nahtzugabe (kein extra roter Punkt)', () => {
+  it('Kerbe bleibt auf cutLine positioniert bei erster Nahtzugabe (via sNormalized)', () => {
     const cutLine = square(120)
     useStore.setState({
       workspace: {
@@ -125,12 +125,11 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
             notches: [
               {
                 id: 'n1',
-                // Ecke vi=2 (= square[size,size]) - wir setzen bewusst vertexIndex als "verankert".
                 position: { x: 120, y: 120 },
                 angle: 0,
                 type: 'single',
                 depth: 4,
-                vertexIndex: 2,
+                sNormalized: 0.5,
               },
             ],
             drills: [],
@@ -154,12 +153,15 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     const p = useStore.getState().workspace.pieces.find((x) => x.id === 'p1')!
 
     expect(p.notches).toHaveLength(1)
-    expect(p.notches[0].vertexIndex).toBe(2)
-    // Wenn das klappt, wird diese Ecke in der UI nicht mehr als "zusätzlicher" harter roter Punkt gezeichnet.
-    expect(masterNotchVertexIndexSet(p).has(2)).toBe(true)
+    const notch = p.notches[0]
+    expect(notch.vertexIndex).toBeUndefined()
+    expect(notch.sNormalized).toBeDefined()
+    const nr = nearestCurveIndexAndPoint(notch.position, p.cutLine)
+    expect(nr).not.toBeNull()
+    expect(nr!.distance).toBeLessThan(0.5)
   })
 
-  it('verankerte Kerbe bleibt verankert auch wenn Offset die Segmentanzahl ändert', () => {
+  it('Kerbe bleibt auf cutLine positioniert auch wenn Offset die Segmentanzahl ändert (via sNormalized)', () => {
     const size = 120
     const cutLine = roundedSquareBezier(size)
     useStore.setState({
@@ -177,12 +179,11 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
             notches: [
               {
                 id: 'n1',
-                // vertexIndex 1 => Startpunkt von Segment 1 (= Ecke bei (size,0))
                 position: { x: size, y: 0 },
                 angle: 0,
                 type: 'single',
                 depth: 4,
-                vertexIndex: 1,
+                sNormalized: 0.25,
               },
             ],
             drills: [],
@@ -207,11 +208,11 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     expect(p.notches).toHaveLength(1)
 
     const notch = p.notches[0]
-    expect(notch.vertexIndex).not.toBeUndefined()
-
-    const vi = notch.vertexIndex!
-    const expectedPos = vi === 0 ? p.cutLine[0].start : p.cutLine[vi - 1].end
-    expect(Math.hypot(notch.position.x - expectedPos.x, notch.position.y - expectedPos.y)).toBeLessThan(1e-6)
+    expect(notch.vertexIndex).toBeUndefined()
+    expect(notch.sNormalized).toBeDefined()
+    const nr = nearestCurveIndexAndPoint(notch.position, p.cutLine)
+    expect(nr).not.toBeNull()
+    expect(nr!.distance).toBeLessThan(0.5)
   })
 
   it('behält weiche Punkte auf der Außenkontur nach erster Nahtzugabe (nicht rot durch Sharp-Corner-Promotion)', () => {
@@ -290,7 +291,7 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     expect(masterSoftVertexIndexSet(p).size).toBeGreaterThan(0)
   })
 
-  it('masterNotchVertexIndexSet: verankerte Kerbe mit Nahtzugabe blendet die zugehörige Naht-Ecke (kein extra roter Punkt)', () => {
+  it('masterNotchVertexIndexSet: gibt immer leeres Set zurück (kein vertexIndex-Anker mehr)', () => {
     const inner = square(100)
     const outer = square(130)
     const piece: Workspace['pieces'][0] = {
@@ -307,7 +308,6 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
           angle: 0,
           type: 'single',
           depth: 4,
-          vertexIndex: 2,
         },
       ],
       drills: [],
@@ -320,7 +320,7 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
       material: '',
       bomQuantity: 1,
     }
-    expect(masterNotchVertexIndexSet(piece).has(2)).toBe(true)
+    expect(masterNotchVertexIndexSet(piece).size).toBe(0)
   })
 
   it('mapCutVertexIndexToMasterVertexIndexForVertexDrag: bei Nahtzugabe gleiche Segmentzahl → 1:1 (trotz großem Abstand Cut↔Naht)', () => {

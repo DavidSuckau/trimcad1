@@ -236,6 +236,7 @@ export function SettingsModal() {
                             updateNotchSetting(i, { type: e.target.value as NotchType })
                           }
                         >
+                          <option value="keine">Keine Notch</option>
                           <option value="strich">Strich</option>
                           <option value="kerbe">Kerbe</option>
                         </select>
@@ -251,7 +252,7 @@ export function SettingsModal() {
                           onChange={(e) =>
                             updateNotchSetting(i, { widthMm: parseFloat(e.target.value) || 0 })
                           }
-                          disabled={notch.type === 'strich'}
+                          disabled={notch.type === 'strich' || notch.type === 'keine'}
                         />
                       </td>
                       <td>
@@ -265,6 +266,7 @@ export function SettingsModal() {
                           onChange={(e) =>
                             updateNotchSetting(i, { depthMm: parseFloat(e.target.value) || 0 })
                           }
+                          disabled={notch.type === 'keine'}
                         />
                       </td>
                     </tr>

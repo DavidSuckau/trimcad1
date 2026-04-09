@@ -6,13 +6,18 @@ import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
 
 /**
- * Kontur für Nahtzuordnung: seamLine wenn Nahtzugabe gesetzt (Master), sonst cutLine.
+ * Kontur für Nahtzuordnung und dieselbe **Master-/Editing-Kontur** wie UI/Vertex-Logik.
+ * Implementierung entspricht `useSeamLineForVertexEditing` (eine Quelle der Wahrheit).
+ *
  * Nach applyOffset ist seamLine eine Kopie der bisherigen Innenkontur (gleiche Segmentzahl/Indices);
  * cutLine ist der äußere Offset. curveIndices in SeamAssignment sind immer diese Master-Indizes.
  */
 export function getCurvesForSeamEdge(piece: PatternPiece): Curve[] {
-  return piece.seamAllowanceMm != null && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+  return useSeamLineForVertexEditing(piece) ? piece.seamLine : piece.cutLine
 }
+
+/** Alias: dieselbe Kurve wie {@link getCurvesForSeamEdge} (Editing-/Master-Kontur). */
+export const getEditingContour = getCurvesForSeamEdge
 
 function vertexPositionOnClosedCurves(curves: Curve[], vertexIndex: number): Point {
   const n = curves.length
@@ -195,21 +200,9 @@ export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   return out
 }
 
-export function masterNotchVertexIndexSet(piece: PatternPiece): Set<number> {
-  const master = getCurvesForSeamEdge(piece)
-  const cut = piece.cutLine
-  const out = new Set<number>()
-  for (const nn of piece.notches) {
-    if (nn.vertexIndex == null) continue
-    const cutVi = nn.vertexIndex
-    if (master === cut) {
-      if (cutVi >= 0 && cutVi < master.length) out.add(cutVi)
-    } else {
-      const m = mapCutVertexIndexToMasterVertexIndexForVertexDrag(piece, cutVi)
-      if (m != null) out.add(m)
-    }
-  }
-  return out
+/** @deprecated Notches sind nicht mehr an Vertices verankert; liefert immer ein leeres Set. */
+export function masterNotchVertexIndexSet(_piece: PatternPiece): Set<number> {
+  return new Set<number>()
 }
 
 /**
@@ -285,15 +278,10 @@ export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], 
   if (curveIndices.length === 0) return 0
   const curvs = curves ?? getCurvesForSeamEdge(piece)
   const ciSet = new Set(curveIndices)
-  const interiorVertices = new Set(curveIndices.slice(1))
   let count = 0
   for (const n of piece.notches) {
-    if (n.vertexIndex != null) {
-      if (interiorVertices.has(n.vertexIndex)) count++
-    } else {
-      const nr = nearestCurveIndexAndPoint(n.position, curvs)
-      if (nr && ciSet.has(nr.curveIndex)) count++
-    }
+    const nr = nearestCurveIndexAndPoint(n.position, curvs)
+    if (nr && ciSet.has(nr.curveIndex)) count++
   }
   return count
 }
@@ -366,22 +354,14 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[], curv
   for (let i = 0; i < curveIndices.length; i++) ciToIdx.set(curveIndices[i], i)
 
   const ciSet = new Set(curveIndices)
-  const interiorVertices = new Set(curveIndices.slice(1))
   const notchPositions: number[] = []
 
   for (const n of piece.notches) {
-    if (n.vertexIndex != null) {
-      if (interiorVertices.has(n.vertexIndex)) {
-        const idx = ciToIdx.get(n.vertexIndex)
-        if (idx != null) notchPositions.push(cumLengths[idx])
-      }
-    } else {
-      const ct = getNotchCurveIndexAndT(n, curvs)
-      if (ct && ciSet.has(ct.curveIndex)) {
-        const idx = ciToIdx.get(ct.curveIndex)
-        if (idx != null) {
-          notchPositions.push(cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t))
-        }
+    const ct = getNotchCurveIndexAndT(n, curvs)
+    if (ct && ciSet.has(ct.curveIndex)) {
+      const idx = ciToIdx.get(ct.curveIndex)
+      if (idx != null) {
+        notchPositions.push(cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t))
       }
     }
   }
@@ -442,22 +422,14 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
   for (let i = 0; i < curveIndices.length; i++) ciToIdx.set(curveIndices[i], i)
 
   const ciSet = new Set(curveIndices)
-  const interiorVertices = new Set(curveIndices.slice(1))
   const result: { notchId: string; arcLength: number }[] = []
 
   for (const n of piece.notches) {
-    if (n.vertexIndex != null) {
-      if (interiorVertices.has(n.vertexIndex)) {
-        const idx = ciToIdx.get(n.vertexIndex)
-        if (idx != null) result.push({ notchId: n.id, arcLength: cumLengths[idx] })
-      }
-    } else {
-      const ct = getNotchCurveIndexAndT(n, curvs)
-      if (ct && ciSet.has(ct.curveIndex)) {
-        const idx = ciToIdx.get(ct.curveIndex)
-        if (idx != null) {
-          result.push({ notchId: n.id, arcLength: cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t) })
-        }
+    const ct = getNotchCurveIndexAndT(n, curvs)
+    if (ct && ciSet.has(ct.curveIndex)) {
+      const idx = ciToIdx.get(ct.curveIndex)
+      if (idx != null) {
+        result.push({ notchId: n.id, arcLength: cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t) })
       }
     }
   }
@@ -470,6 +442,13 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
  * Liefert die Seam-Linien-Kurven für eine Eckpunkt→Eckpunkt-Kante (nur auf der Nahtlinie, nicht darüber hinaus).
  * Nutzt die echte piece.seamLine und schneidet exakt von Eckpunkt zu Eckpunkt.
  * curveIndices beziehen sich auf die Master-Kontur (seamLine bei Nahtzugabe) – hier ist das seamLine direkt.
+ *
+ * Beispiel:
+ * - Master = seamLine, curveIndices = [3, 0] (wrap-around)
+ * - Ergebnis: Ende von Segment 3 plus Anfang von Segment 0, lückenlos auf seamLine.
+ *
+ * Fallback-Pfad (master !== seamLine) bleibt aus Legacy-/Importgründen erhalten:
+ * cutLine-Edge wird auf seamLine projiziert und die plausiblere Laufrichtung über Längenvergleich gewählt.
  */
 export function getSeamEdgeCurves(piece: PatternPiece, curveIndices: number[]): Curve[] {
   if (curveIndices.length === 0 || piece.seamLine.length < 3 || piece.seamAllowanceMm == null) return []

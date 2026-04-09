@@ -1,5 +1,12 @@
-import type { Curve, Notch, Point } from '../types/model'
-import { splitBezierAt, pathLengthAt, totalPathLength, pointAtPathLength, outwardNormalAngleAt } from './curveToPath'
+import type { Curve, Notch, NotchType, Point } from '../types/model'
+import {
+  splitBezierAt,
+  bezierAt,
+  pathLengthAt,
+  totalPathLength,
+  pointAtPathLength,
+  outwardNormalAngleAt,
+} from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
 const VERTEX_T_EPS = 0.05
@@ -22,8 +29,9 @@ function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): nu
     const sx = v1.x + v2.x
     const sy = v1.y + v2.y
     const len = Math.hypot(sx, sy)
-    if (len < 1e-10) return a1
-    return toDeg(Math.atan2(sy, sx))
+    if (len < 1e-10) return Number.isFinite(a1) ? a1 : 0
+    const out = toDeg(Math.atan2(sy, sx))
+    return Number.isFinite(out) ? out : (Number.isFinite(a1) ? a1 : 0)
   }
   if (t >= 1 - VERTEX_T_EPS) {
     const nextIdx = (curveIndex + 1) % n
@@ -34,34 +42,92 @@ function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): nu
     const sx = v1.x + v2.x
     const sy = v1.y + v2.y
     const len = Math.hypot(sx, sy)
-    if (len < 1e-10) return a1
-    return toDeg(Math.atan2(sy, sx))
+    if (len < 1e-10) return Number.isFinite(a1) ? a1 : 0
+    const out = toDeg(Math.atan2(sy, sx))
+    return Number.isFinite(out) ? out : (Number.isFinite(a1) ? a1 : 0)
   }
-  return inward(curveIndex, t)
+  const direct = inward(curveIndex, t)
+  return Number.isFinite(direct) ? direct : 0
 }
 
 /**
- * **Primary anchoring auf der Schnittkontur (cutLine)** — Lesepfad für alle Geometrie:
+ * **Primary anchoring auf der Schnittkontur (cutLine)** — Lesepfad:
  *
- * 1. **Ecken-Verankerung:** `vertexIndex` gesetzt → Parameter **(curveIndex = vertexIndex, t = 0)** am
- *    Startpunkt dieses Segments (= Ecke). Lage und Normale folgen der Kontur; `position` im Objekt kann
- *    veraltet sein und wird bei Resync auf den Eckpunkt gesetzt.
- * 2. **Freie Verankerung (parametrisch implizit):** kein `vertexIndex` → Lage = **Fußpunkt** der
- *    Projektion von `notch.position` auf die aktuelle `cutLine` → effektiv **(curveIndex, t)** via
- *    `nearestCurveIndexAndPoint`. `position` ist die persistierte Näherung; nach
- *    `resyncNotchesAfterCutLineRebuilt` wird sie auf den projizierten Punkt gesetzt („re-snapped“).
- *
- * Es gibt **kein** zweites paralleles Koordinatensystem: `vertexIndex` hat **Vorrang** vor `position`
- * für die kanonische Lage (`getNotchPositionAndAngle`).
+ * 1. `sNormalized` → Bogenlänge `sNormalized * Umfang` entlang der Kontur.
+ * 2. `arcLengthMm` → absolute Bogenlänge vom Konturstart.
+ * 3. Sonst Projektion von `position` auf die `cutLine`.
  */
-export function getNotchCutLineParameter(notch: Notch, cutLine: Curve[]): { curveIndex: number; t: number } | null {
+export function resolveNotchCutLineAnchor(
+  notch: Notch,
+  cutLine: Curve[]
+): { curveIndex: number; t: number } | null {
   if (cutLine.length === 0) return null
-  const vi = notch.vertexIndex
-  if (vi != null && vi >= 0 && vi < cutLine.length) {
-    return { curveIndex: vi, t: 0 }
+
+  const total = totalPathLength(cutLine)
+  if (total <= 0) return null
+
+  const sn = notch.sNormalized
+  if (sn != null && Number.isFinite(sn)) {
+    const sClamped = Math.max(0, Math.min(1, sn))
+    const L = sClamped * total
+    const pt = pointAtPathLength(cutLine, L)
+    if (!pt) return null
+    return { curveIndex: pt.curveIndex, t: pt.t }
   }
+
+  const al = notch.arcLengthMm
+  if (al != null && Number.isFinite(al)) {
+    const L = Math.max(0, Math.min(total, al))
+    const pt = pointAtPathLength(cutLine, L)
+    if (!pt) return null
+    return { curveIndex: pt.curveIndex, t: pt.t }
+  }
+
   const r = nearestCurveIndexAndPoint(notch.position, cutLine)
   return r ? { curveIndex: r.curveIndex, t: r.t ?? 0 } : null
+}
+
+function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point | null {
+  if (curveIndex < 0 || curveIndex >= curves.length) return null
+  const c = curves[curveIndex]
+  const tt = Math.max(0, Math.min(1, t))
+  if (c.type === 'line') {
+    return {
+      x: c.start.x + tt * (c.end.x - c.start.x),
+      y: c.start.y + tt * (c.end.y - c.start.y),
+    }
+  }
+  return bezierAt(c, tt)
+}
+
+/**
+ * Setzt `sNormalized`, `arcLengthMm`, `position`, `angle` konsistent zur aktuellen **cutLine**
+ * über `resolveNotchCutLineAnchor` (freie Lage auf der Kontur). `vertexIndex` wird nicht gesetzt.
+ */
+export function materializeNotchAnchorsOnCutLine(notch: Notch, cutLine: Curve[]): Notch | null {
+  if (cutLine.length === 0) return null
+  const total = totalPathLength(cutLine)
+  if (total <= 0) return null
+
+  const anchor = resolveNotchCutLineAnchor(notch, cutLine)
+  if (!anchor) return null
+  const L = pathLengthAt(cutLine, anchor.curveIndex, anchor.t)
+  const sNorm = L / total
+  const position = pointOnCurveAt(cutLine, anchor.curveIndex, anchor.t)
+  if (!position) return null
+  const angle = inwardNormalAngleAt(cutLine, anchor.curveIndex, anchor.t)
+  return {
+    ...notch,
+    vertexIndex: undefined,
+    sNormalized: sNorm,
+    arcLengthMm: L,
+    position,
+    angle,
+  }
+}
+
+export function getNotchCutLineParameter(notch: Notch, cutLine: Curve[]): { curveIndex: number; t: number } | null {
+  return resolveNotchCutLineAnchor(notch, cutLine)
 }
 
 export function getNotchPositionAndAngle(
@@ -69,13 +135,20 @@ export function getNotchPositionAndAngle(
   cutLine: Curve[],
   _seamLine?: Curve[]
 ): { position: Point; angle: number } {
-  const vi = notch.vertexIndex
-  if (vi != null && vi >= 0 && vi < cutLine.length) {
-    const position = { ...cutLine[vi].start }
-    const angle = inwardNormalAngleAt(cutLine, vi, 0)
-    return { position, angle }
+  const fallbackPos = Number.isFinite(notch.position.x) && Number.isFinite(notch.position.y)
+    ? notch.position
+    : { x: 0, y: 0 }
+  const fallbackAngle = Number.isFinite(notch.angle) ? notch.angle : 0
+  const anchor = resolveNotchCutLineAnchor(notch, cutLine)
+  if (!anchor) {
+    return { position: fallbackPos, angle: fallbackAngle }
   }
-  return { position: notch.position, angle: notch.angle }
+  const position = pointOnCurveAt(cutLine, anchor.curveIndex, anchor.t)
+  if (!position) {
+    return { position: fallbackPos, angle: fallbackAngle }
+  }
+  const angle = inwardNormalAngleAt(cutLine, anchor.curveIndex, anchor.t)
+  return { position, angle: Number.isFinite(angle) ? angle : fallbackAngle }
 }
 
 /** Parametrische Lage auf der cutLine; siehe `getNotchCutLineParameter`. */
@@ -105,21 +178,13 @@ export function getNotchPositionAndAngleOnSeamLine(
   return { position: nearest.point, angle }
 }
 
-/**
- * Notch-Position auf der Außenkontur: Projektion von notch.position auf die cutLine.
- */
+/** Notch-Position auf der Außenkontur (gleiche Quelle wie `getNotchPositionAndAngle` auf der cutLine). */
 export function getNotchPositionAndAngleOnCutLine(
   notch: Notch,
   cutLine: Curve[],
   _seamLine: Curve[]
 ): { position: Point; angle: number } {
-  if (cutLine.length === 0) return { position: notch.position, angle: notch.angle }
-  const { position } = getNotchPositionAndAngle(notch, cutLine)
-  const nearest = nearestCurveIndexAndPoint(position, cutLine)
-  if (!nearest) return { position: notch.position, angle: notch.angle }
-  const t = nearest.t ?? 0
-  const angle = inwardNormalAngleAt(cutLine, nearest.curveIndex, t)
-  return { position: nearest.point, angle }
+  return getNotchPositionAndAngle(notch, cutLine)
 }
 
 /** Ecken der Kerbe (Basis auf Kontur, Spitze ins Teil). Nur für Vorschau/Drag-Preview. */
@@ -139,42 +204,82 @@ export function notchTriangleCorners(
   return [baseLeft, baseRight, tip]
 }
 
+/** Geometrie: V-Kerbe in der Kontur vs. Strich = eine Linie (Rand → innen, Länge = Tiefe). */
+export type NotchCutoutGeom =
+  | { kind: 'v'; left: Point; right: Point; tip: Point }
+  | { kind: 'line'; start: Point; end: Point }
+
 /**
- * Berechnet die tatsächlichen Kerb-Punkte (links, rechts, Spitze) eines Notchs
- * auf einer Kurve. Basispunkte liegen ON the curve bei ±width/2 Bogenlänge
- * vom Zentrum – identisch zur Geometrie in cutLineWithNotchCutouts.
+ * Berechnet die tatsächlichen Kerb-Punkte auf einer Kurve.
+ * - **single (Strich):** eine Linie senkrecht (Innen-Normale) von `position` mit Länge `depth` — **kein** V-Einschnitt in die Polylinie.
+ * - **v / double:** klassische V-Kerbe (links, Spitze, rechts) entlang ±width/2 Bogenlänge — wie `cutLineWithNotchCutouts`.
  */
 export function notchCutoutPoints(
   position: Point,
   angle: number,
   depth: number,
   width: number,
-  curves: Curve[]
-): { left: Point; right: Point; tip: Point } | null {
+  curves: Curve[],
+  anchor: { curveIndex: number; t: number } | null | undefined,
+  notchType: NotchType
+): NotchCutoutGeom | null {
+  const safeAngle = Number.isFinite(angle) ? angle : 0
+  const safePos: Point =
+    Number.isFinite(position.x) && Number.isFinite(position.y) ? position : { x: 0, y: 0 }
+  const fallbackLine = (): NotchCutoutGeom => {
+    const d = Math.max(1e-6, depth)
+    const rad = (safeAngle * Math.PI) / 180
+    return {
+      kind: 'line',
+      start: { ...safePos },
+      end: { x: safePos.x + d * Math.cos(rad), y: safePos.y + d * Math.sin(rad) },
+    }
+  }
+
+  if (notchType === 'single') {
+    return fallbackLine()
+  }
+
   if (curves.length === 0) return null
-  const nearest = nearestCurveIndexAndPoint(position, curves)
-  if (!nearest) return null
+
+  let curveIndex: number
+  let t: number
+  if (
+    anchor &&
+    Number.isFinite(anchor.curveIndex) &&
+    Number.isFinite(anchor.t) &&
+    anchor.curveIndex >= 0 &&
+    anchor.curveIndex < curves.length
+  ) {
+    curveIndex = anchor.curveIndex
+    t = Math.max(0, Math.min(1, anchor.t))
+  } else {
+    const nearest = nearestCurveIndexAndPoint(position, curves)
+    if (!nearest) return null
+    curveIndex = nearest.curveIndex
+    t = nearest.t ?? 0
+  }
 
   const total = totalPathLength(curves)
   if (total <= 0) return null
 
-  const Lcenter = pathLengthAt(curves, nearest.curveIndex, nearest.t ?? 0)
+  const Lcenter = pathLengthAt(curves, curveIndex, t)
   let Lleft = Lcenter - width / 2
   let Lright = Lcenter + width / 2
   if (Lleft < 0) Lleft = 0
   if (Lright > total) Lright = total
-  if (Lright - Lleft < 0.1) return null
+  if (Lright - Lleft < 0.1) return fallbackLine()
 
   const left = pointAtPathLength(curves, Lleft)
   const right = pointAtPathLength(curves, Lright)
-  if (!left || !right) return null
+  if (!left || !right) return fallbackLine()
 
-  const rad = (angle * Math.PI) / 180
+  const rad = (safeAngle * Math.PI) / 180
   const tip: Point = {
-    x: position.x + depth * Math.cos(rad),
-    y: position.y + depth * Math.sin(rad),
+    x: safePos.x + depth * Math.cos(rad),
+    y: safePos.y + depth * Math.sin(rad),
   }
-  return { left: left.point, right: right.point, tip }
+  return { kind: 'v', left: left.point, right: right.point, tip }
 }
 
 /* ------------------------------------------------------------------ */
@@ -272,16 +377,16 @@ type NotchInterval = {
   Lright: number
   leftPt: Point
   rightPt: Point
-  tip: Point
   leftCI: number
   leftT: number
   rightCI: number
   rightT: number
+  tip: Point
 }
 
 /**
- * Erzeugt eine neue Curve[], in der die Notch-V-Kerben als echte Einschnitte
- * in die Außenkontur eingearbeitet sind. Für DXF-Export und visuelle Darstellung.
+ * Erzeugt eine neue Curve[], in der **V-Kerben** als Einschnitte in die Außenkontur eingearbeitet sind.
+ * **Strich-Kerben (`single`)** bleiben außerhalb der Polylinie (eigenes LINE im DXF / Overlay in der UI).
  */
 export function cutLineWithNotchCutouts(
   cutLine: Curve[],
@@ -296,6 +401,8 @@ export function cutLineWithNotchCutouts(
   const intervals: NotchInterval[] = []
 
   for (const n of notches) {
+    if (n.type === 'single') continue
+
     const ct = getNotchCurveIndexAndT(n, cutLine, seamLine)
     if (!ct) continue
 
@@ -320,12 +427,16 @@ export function cutLineWithNotchCutouts(
       x: center.x + depth * Math.cos(rad),
       y: center.y + depth * Math.sin(rad),
     }
-
     intervals.push({
-      Lleft, Lright,
-      leftPt: left.point, rightPt: right.point, tip,
-      leftCI: left.curveIndex, leftT: left.t,
-      rightCI: right.curveIndex, rightT: right.t,
+      Lleft,
+      Lright,
+      leftPt: left.point,
+      rightPt: right.point,
+      tip,
+      leftCI: left.curveIndex,
+      leftT: left.t,
+      rightCI: right.curveIndex,
+      rightT: right.t,
     })
   }
 
@@ -368,8 +479,7 @@ export function cutLineWithNotchCutouts(
 }
 
 /**
- * Erzeugt eine neue Curve[], in der die Notch-V-Kerben als echte Einschnitte
- * in die Nahtlinie eingearbeitet sind – analog zu cutLineWithNotchCutouts.
+ * Wie `cutLineWithNotchCutouts`, aber für die Nahtlinie. **Strich-Kerben** werden übersprungen.
  */
 export function seamLineWithNotchCutouts(
   cutLine: Curve[],
@@ -384,6 +494,8 @@ export function seamLineWithNotchCutouts(
   const intervals: NotchInterval[] = []
 
   for (const n of notches) {
+    if (n.type === 'single') continue
+
     const seamPos = getNotchPositionAndAngleOnSeamLine(n, cutLine, seamLine)
     if (!seamPos) continue
 
@@ -410,12 +522,16 @@ export function seamLineWithNotchCutouts(
       x: seamPos.position.x + depth * Math.cos(rad),
       y: seamPos.position.y + depth * Math.sin(rad),
     }
-
     intervals.push({
-      Lleft, Lright,
-      leftPt: left.point, rightPt: right.point, tip,
-      leftCI: left.curveIndex, leftT: left.t,
-      rightCI: right.curveIndex, rightT: right.t,
+      Lleft,
+      Lright,
+      leftPt: left.point,
+      rightPt: right.point,
+      tip,
+      leftCI: left.curveIndex,
+      leftT: left.t,
+      rightCI: right.curveIndex,
+      rightT: right.t,
     })
   }
 

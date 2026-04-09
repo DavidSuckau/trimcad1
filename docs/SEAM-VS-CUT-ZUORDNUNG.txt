@@ -1,0 +1,124 @@
+TrimTex: seamLine vs. cutLine — welche Logik wo greift
+======================================================
+Stand: 2026-04-04. Kurzüberblick für Entwicklung; ergänzt die Regeln in
+`.cursor/rules/cutline-seamline-punkte.mdc` und `vertexMaster.ts`.
+
+Kanonische Master-Entscheid (Bearbeitung + Nahtzuordnung): vertexMaster und
+getCurvesForSeamEdge / getEditingContour sind abgestimmt (eine Bedingung).
+
+
+1) Zentrale Schalter (Master für Bearbeitung / UI)
+-------------------------------------------------
+
+A) useSeamLineForVertexEditing / useSeamLineForPointCurveEditing
+   Datei: src/geometry/vertexMaster.ts
+
+   TRUE genau wenn:
+     - seamAllowanceMm ist gesetzt UND
+     - seamLine.length >= 3
+
+   Wenn TRUE: Eckpunkte, Vertex-Ziehen, Punkt-/Kurvenpunkt-Werkzeug,
+   Einfügen auf Kontur usw. beziehen sich auf seamLine; cutLine wird
+   daraus abgeleitet (deriveCutLineFromSeam…).
+
+   Wenn FALSE: dieselben Funktionen arbeiten auf cutLine; bei gesetzter
+   Nahtzugabe wird seamLine typischerweise aus cutLine per
+   offsetCurvesInwardForSeam abgeleitet (Cut-as-Master für diese
+   Operationen).
+
+
+B) getCurvesForSeamEdge / getEditingContour (Nahtzuordnung / SeamAssignment)
+   Datei: src/geometry/seamUtils.ts
+
+   Dieselbe Logik wie (A): implementiert über useSeamLineForVertexEditing.
+
+   curveIndices in SeamAssignment beziehen sich immer auf diese
+   „Master-Kontur“ für die Naht — bei Nahtzugabe sind das seamLine-Indizes.
+
+
+2) Operationen, die primär auf der seamLine laufen (bei Seam-as-Master)
+-----------------------------------------------------------------------
+
+- updateVertex: Master-Kontur = seamLine → cutLine neu aus Nahtzugabe.
+- updateCurvePoint (Bézier-/Linienpunkte): wie oben.
+- insertPointOnCutLine (Name historisch): splittet die Master-Kontur
+  (seamLine bei seamPc), leitet cutLine ab.
+- offsetSegment (Store): verschiebt Segment auf Master-Kontur.
+- recomputeSeamLine: WIRD ÜBERSPRUNGEN, wenn useSeamLineForVertexEditing
+  true ist (sonst würde seam aus cut überschrieben).
+- Vertex-Ende in WorkspaceCanvas: bei Seam-as-Master kein
+  recomputeSeamLine nach Drag (Kommentar im Code).
+- WorkspaceCanvas / workspaceMarqueeSelection: Hover, Hit-Tests und
+  Anzeige der bearbeitbaren Vertices folgen seamLine, wenn die
+  vertexMaster-Bedingung erfüllt ist.
+- applyOffset (Nahtzugabe setzen): wenn bereits eine gültige seamLine
+  existiert, wird sie als Innenkontur übernommen und cut nach außen
+  abgeleitet (nicht nur cut skalieren).
+- applyUniformScaleToPiece (scalePieceLocal.ts): wenn seamAllowanceMm und
+  seamLine.length >= 3, wird zuerst seam skaliert, dann cut abgeleitet
+  (gleiche Naht-gültig-Prüfung wie Master-Entscheid).
+
+
+3) Operationen und Daten, die bewusst auf der cutLine bleiben
+--------------------------------------------------------------
+
+Kerben (Notches)
+- Verankerung: vertexIndex und parametrischer Lesepfad beziehen sich auf
+  cutLine (siehe notchOnCurve.ts: getNotchCutLineParameter,
+  getNotchPositionAndAngle).
+- Nach jedem Neuaufbau der Außenkontur: resyncNotchesAfterCutLineRebuilt.
+- Abstand / Kollision: notchMinSpacing, isNotchSpacingValid… entlang
+  cutLine.
+- KI-Platzierung (aiNotchPlacement): Projektion auf cutLine.
+
+Geometrie, die aus cutLine + Nahtzugabe „hochrechnet“, ohne die
+vertexMaster-Seam-Bearbeitung zu nutzen
+- Viele Pfade in removeNotch, removeNotchAnchor, toggleNotchAnchor:
+  mergen/splitten die cutLine und leiten seamLine per
+  offsetCurvesInwardForSeam ab (Cut-as-Master für diese Eingriffe).
+- toggleNotchAnchor „Frei → Verankert“: fügt auf cutLine ein.
+- updateNotch (verankerte Kerbe verschieben): der Block, der cutLine
+  geometrisch umbaut, läuft nur, wenn NICHT useSeamLineForVertexEditing
+  (seamIsMaster) — bei Seam-as-Master wird der Anker anders behandelt
+  (kein cutLine-Merge in diesem Zweig).
+
+Export / Cutter / Außenkontur
+- DXF-Writer: Außenkontur (Natline) aus cutLine; Innenkontur aus seamLine
+  falls vorhanden, sonst ggf. aus cut abgeleitet.
+
+Fadenlauf / Bounding
+- Grain-Snap beim Ziehen (WorkspaceCanvas): Tangente über cutLine.
+- grainArrowLayout, pieceTransform (Bounds): cutLine.
+
+Konturmaße (Anzeige)
+- getCutLineContourMeasurements (contourMeasurements.ts): eigener
+  Schalter useSeamLineForContourMeasurements — dort wird zusätzlich
+  seamLine.length < cutLine.length gefordert (tessellierte Außenkontur).
+  Sonst bleiben die Stationen auf cutLine. Das ist NICHT identisch mit
+  vertexMaster (absichtlich für sinnvolle Maßlabels).
+
+
+4) Warum es „nicht überall Seam-as-Master“ wirkt
+------------------------------------------------
+
+- Zwei verschiedene Konzepte: (i) bearbeitbare Kontur für Punkte
+  (vertexMaster / getCurvesForSeamEdge: seam bei Nahtzugabe + gültiger
+  seamLine), (ii) Kerben/Export, die strukturell an cutLine hängen.
+- Kerb-Operationen, die Segmente auf cut mergen/splitten, sind
+  historisch/geometrisch am Cut orientiert — auch wenn die normale
+  Konturbearbeitung seam nutzt.
+- Konturmaße können auf seam umschalten, wenn cut viel feiner tesselliert
+  ist — unabhängig von der reinen Vertex-Logik.
+
+
+5) Referenzdateien (nicht vollständig)
+--------------------------------------
+
+- Master-Entscheid: src/geometry/vertexMaster.ts
+- Nahtzuordnung / Mapping: src/geometry/seamUtils.ts
+- Store-Kern: src/store/useStore.ts (updateVertex, insertPointOnCutLine,
+  updateCurvePoint, Notch-*)
+- Canvas: src/components/WorkspaceCanvas.tsx
+- Kerben: src/geometry/notchOnCurve.ts, notchResyncCutLine.ts
+- Maße: src/geometry/contourMeasurements.ts
+- Skalierung: src/geometry/scalePieceLocal.ts

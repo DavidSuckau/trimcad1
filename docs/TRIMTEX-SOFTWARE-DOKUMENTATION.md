@@ -131,7 +131,9 @@ Alle Koordinaten sind **`number` in mm**.
 
 **Ohne Nahtzugabe:** `cutLine` ist Master; `seamLine` kann leer sein.
 
-**Vertex-Bearbeitung:** Standard bei Nahtzugabe: **seamLine** wird editiert, danach wird `cutLine` neu abgeleitet. Ausnahme: **`useSeamLineForVertexEditing`** in `vertexMaster.ts` kann **false** liefern (z. B. wenn `seamLine.length > cutLine.length`); dann beziehen sich **Eckpunkt-Zug** und zugehörige Indizes auf die **cutLine**, damit die Indexbasis zur dichten Kontur passt. **Punkt-/Kurvenpunkt-Werkzeug** folgt separat **`useSeamLineForPointCurveEditing`** (Nahtlinie sobald Nahtzugabe + gültige `seamLine`).
+**Vertex-Bearbeitung:** Standard bei Nahtzugabe: **seamLine** wird editiert, danach wird `cutLine` neu abgeleitet. **`useSeamLineForVertexEditing`** (in `vertexMaster.ts`) und **`getCurvesForSeamEdge`** / **`getEditingContour`** (in `seamUtils.ts`) nutzen **dieselbe** Master-Entscheid: `seamAllowanceMm` gesetzt und `seamLine.length >= 3` → Bearbeitungs- und SeamAssignment-Indizes beziehen sich auf **seamLine**; sonst auf **cutLine**. Es gibt keine zusätzliche Bedingung über `cutLine.length` (die Außenkontur ist abgeleitet). **Punkt-/Kurvenpunkt-Werkzeug** folgt **`useSeamLineForPointCurveEditing`** (identische Bedingung wie Eckpunkte).
+
+**Mittelfristig (optional):** Historische Namen wie `insertPointOnCutLine` können in `insertPointOnContour` o. Ä. umbenannt werden, ohne die Logik zu ändern — reine Lesbarkeit.
 
 #### Harte Regeln: Beziehung `seamLine` ↔ `cutLine` (Segmente, IDs, Zuordnung)
 
