@@ -5549,7 +5549,7 @@ export function WorkspaceCanvas() {
             const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
             if (curves.length === 0) return null
 
-            const PROFILE_LINE_OFFSET = 10
+            const PROFILE_LINE_OFFSET = 20
             const area = signedAreaCurves(masterK)
             const outSign = area >= 0 ? -1 : 1
 
@@ -5593,8 +5593,8 @@ export function WorkspaceCanvas() {
             const nxLocal = outSign * (-edgeDy / edgeLen)
             const nyLocal = outSign * (edgeDx / edgeLen)
             const labelLocal = {
-              x: midLocal.x + nxLocal * (PROFILE_LINE_OFFSET + 4),
-              y: midLocal.y + nyLocal * (PROFILE_LINE_OFFSET + 4),
+              x: midLocal.x + nxLocal * (PROFILE_LINE_OFFSET + 6),
+              y: midLocal.y + nyLocal * (PROFILE_LINE_OFFSET + 6),
             }
             const labelW = pieceLocalToWorld(labelLocal, piece)
             const startW = pieceLocalToWorld(startL, piece)
@@ -5624,7 +5624,7 @@ export function WorkspaceCanvas() {
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill="#7b1fa2"
-                  fontSize={3.5}
+                  fontSize={5}
                   fontFamily="sans-serif"
                   fontWeight={700}
                   transform={`rotate(${angleDeg},${labelW.x},${labelW.y})`}
@@ -5633,15 +5633,15 @@ export function WorkspaceCanvas() {
                 </text>
                 <text
                   x={labelW.x}
-                  y={labelW.y + 4}
+                  y={labelW.y + 5.5}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill="#7b1fa2"
-                  fontSize={2.2}
+                  fontSize={3.2}
                   fontFamily="sans-serif"
                   fontWeight={400}
                   opacity={0.8}
-                  transform={`rotate(${angleDeg},${labelW.x},${labelW.y + 4})`}
+                  transform={`rotate(${angleDeg},${labelW.x},${labelW.y + 5.5})`}
                 >
                   {detailText}
                 </text>

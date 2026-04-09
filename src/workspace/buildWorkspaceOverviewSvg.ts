@@ -108,7 +108,7 @@ export function buildWorkspaceOverviewSvgDocument(
       const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
       if (curves.length === 0) continue
 
-      const OFFSET = 10
+      const OFFSET = 20
       const area = signedAreaCurves(masterK)
       const outSign = area >= 0 ? -1 : 1
 
@@ -146,13 +146,13 @@ export function buildWorkspaceOverviewSvgDocument(
         const edgeDx = lastSeg.end.x - firstSeg.start.x
         const edgeDy = lastSeg.end.y - firstSeg.start.y
         const edgeLen = Math.hypot(edgeDx, edgeDy) || 1
-        const nx = outSign * (-edgeDy / edgeLen) * (OFFSET + 4)
-        const ny = outSign * (edgeDx / edgeLen) * (OFFSET + 4)
+        const nx = outSign * (-edgeDy / edgeLen) * (OFFSET + 6)
+        const ny = outSign * (edgeDx / edgeLen) * (OFFSET + 6)
         const lx = midX + nx
         const ly = midY + ny
         const ang = (Math.atan2(edgeDy, edgeDx) * 180) / Math.PI
         parts.push(
-          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="#7b1fa2" font-size="3.5" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
+          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="#7b1fa2" font-size="5" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
         )
       }
     }
