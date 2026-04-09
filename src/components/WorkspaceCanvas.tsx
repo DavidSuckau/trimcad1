@@ -5654,7 +5654,7 @@ export function WorkspaceCanvas() {
             const labelParts: string[] = []
             if (pa.supplierNumber) labelParts.push(pa.supplierNumber)
             if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)
-            labelParts.push(`${lengthMm.toFixed(0)} mm`)
+            labelParts.push(`${lengthMm.toFixed(1)} mm`)
             const detailText = labelParts.join(' · ')
 
             return (
