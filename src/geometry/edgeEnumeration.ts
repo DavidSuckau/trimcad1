@@ -1,6 +1,7 @@
-import type { PatternPiece, EdgeSeamAllowance } from '../types/model'
+import type { PatternPiece, EdgeSeamAllowance, ProfileAssignment, Curve, Point } from '../types/model'
 import { masterSoftVertexIndexSet, masterNotchVertexIndexSet } from './seamUtils'
 import { getCurvesForSeamEdge } from './seamUtils'
+import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
 export type EnumeratedEdge = {
   edgeIndex: number
@@ -108,38 +109,133 @@ export function hasVariableAllowance(piece: PatternPiece): boolean {
   return overrides.some(o => o.allowanceMm !== defaultMm)
 }
 
-/**
- * Passt `edgeSeamAllowances`-Indices an, nachdem ein Vertex eingefügt wurde.
- * `insertedMasterVi` = der Master-Vertex-Index an dem eingefügt wurde.
- * Wenn der eingefügte Vertex eine neue Ecke (nicht soft) wäre, verschieben sich edgeIndices.
- * Da eingefügte Punkte typischerweise soft sind, ändert sich die Edge-Enumeration nicht.
- */
-export function adjustEdgeAllowancesAfterInsert(
-  edgeSeamAllowances: EdgeSeamAllowance[] | undefined,
-  _insertedMasterVi: number,
-  isSoft: boolean
-): EdgeSeamAllowance[] | undefined {
-  if (!edgeSeamAllowances || edgeSeamAllowances.length === 0) return edgeSeamAllowances
-  if (isSoft) return edgeSeamAllowances
-  // Hard-Corner wurde eingefügt → eine bestehende Kante wird gesplittet.
-  // Da wir nicht wissen welche Kante, re-enumerieren wir: der Aufrufer muss
-  // nach dem Insert die Stücke vergleichen und die Allowance der alten Kante auf beide Hälften übertragen.
-  // Für den Moment: bei Hard-Insert Overrides löschen (konservativer Fallback).
-  return undefined
+// ---------------------------------------------------------------------------
+// Geometrisches Remap von edgeSeamAllowances nach Topologie-Änderungen
+// ---------------------------------------------------------------------------
+
+function curveMidpoint(c: Curve): Point {
+  if (c.type === 'line') {
+    return { x: (c.start.x + c.end.x) / 2, y: (c.start.y + c.end.y) / 2 }
+  }
+  const t = 0.5, mt = 0.5
+  return {
+    x: mt * mt * mt * c.start.x + 3 * mt * mt * t * c.cp1.x + 3 * mt * t * t * c.cp2.x + t * t * t * c.end.x,
+    y: mt * mt * mt * c.start.y + 3 * mt * mt * t * c.cp1.y + 3 * mt * t * t * c.cp2.y + t * t * t * c.end.y,
+  }
 }
 
 /**
- * Passt `edgeSeamAllowances`-Indices an, nachdem ein Vertex entfernt wurde.
- * Wenn ein harter Eckpunkt gelöscht wird, werden zwei Kanten zu einer → die Allowance
- * der verbleibenden Kante wird die der Kante mit dem niedrigeren edgeIndex.
+ * Robustes, geometrie-basiertes Remap von `edgeSeamAllowances` zwischen
+ * zwei Piece-Zuständen (vor/nach einer Topologie-Änderung).
+ *
+ * Funktionsweise:
+ * 1. Expandiert die alten Per-Edge-Overrides zu Per-Curve-Allowances (alte Enumeration)
+ * 2. Projiziert jede neue Kurve geometrisch auf die nächstgelegene alte Kurve
+ * 3. Überträgt die Allowance und rekonstruiert Per-Edge-Overrides (neue Enumeration)
+ *
+ * Funktioniert bei: Vertex-Insert/Remove, Soft↔Hard-Toggle, Segment-Split, etc.
  */
-export function adjustEdgeAllowancesAfterRemove(
-  edgeSeamAllowances: EdgeSeamAllowance[] | undefined,
-  _removedMasterVi: number,
-  wasSoft: boolean
+export function remapEdgeSeamAllowances(
+  oldPiece: PatternPiece,
+  newPiece: PatternPiece,
 ): EdgeSeamAllowance[] | undefined {
-  if (!edgeSeamAllowances || edgeSeamAllowances.length === 0) return edgeSeamAllowances
-  if (wasSoft) return edgeSeamAllowances
-  // Hard-Corner gelöscht → konservativer Fallback: Overrides löschen.
-  return undefined
+  const overrides = oldPiece.edgeSeamAllowances
+  if (!overrides || overrides.length === 0) return undefined
+
+  const defaultMm = newPiece.seamAllowanceMm ?? oldPiece.seamAllowanceMm ?? 0
+
+  const oldCurves = getCurvesForSeamEdge(oldPiece)
+  const newCurves = getCurvesForSeamEdge(newPiece)
+
+  if (oldCurves.length === 0 || newCurves.length === 0) return undefined
+
+  const oldCurveAllowance = buildCurveIndexAllowanceMap(oldPiece)
+
+  // Für jede neue Kurve: geometrisch nächste alte Kurve finden, Allowance übertragen
+  const newCurveAllowance = new Map<number, number>()
+  for (let ni = 0; ni < newCurves.length; ni++) {
+    const mid = curveMidpoint(newCurves[ni])
+    const nearest = nearestCurveIndexAndPoint(mid, oldCurves)
+    if (nearest) {
+      const mm = oldCurveAllowance.get(nearest.curveIndex)
+      if (mm != null) newCurveAllowance.set(ni, mm)
+    }
+  }
+
+  // Neue Kanten aufbauen und Per-Edge-Overrides rekonstruieren
+  const newEdges = enumerateEdges(newPiece)
+  const result: EdgeSeamAllowance[] = []
+
+  for (const edge of newEdges) {
+    const counts = new Map<number, number>()
+    for (const ci of edge.curveIndices) {
+      const mm = newCurveAllowance.get(ci)
+      if (mm != null && mm !== defaultMm) {
+        counts.set(mm, (counts.get(mm) ?? 0) + 1)
+      }
+    }
+    if (counts.size === 0) continue
+
+    let bestMm = defaultMm
+    let bestCount = 0
+    for (const [mm, count] of counts) {
+      if (count > bestCount) { bestMm = mm; bestCount = count }
+    }
+    if (bestMm !== defaultMm) {
+      result.push({ edgeIndex: edge.edgeIndex, allowanceMm: bestMm })
+    }
+  }
+
+  return result.length > 0 ? result : undefined
+}
+
+/**
+ * Remapt `ProfileAssignment.edgeIndex` nach Topologie-Änderungen (Vertex-Insert/Remove).
+ * Strategie: Mittelpunkt der alten Kante geometrisch auf die nächste neue Kante projizieren.
+ */
+export function remapProfileAssignmentsForPiece(
+  oldPiece: PatternPiece,
+  newPiece: PatternPiece,
+  assignments: ProfileAssignment[],
+): ProfileAssignment[] {
+  const pieceId = oldPiece.id
+  const relevant = assignments.filter((pa) => pa.pieceId === pieceId)
+  if (relevant.length === 0) return assignments
+
+  const oldEdges = enumerateEdges(oldPiece)
+  const newEdges = enumerateEdges(newPiece)
+  if (oldEdges.length === 0 || newEdges.length === 0) {
+    return assignments.filter((pa) => pa.pieceId !== pieceId)
+  }
+
+  const oldCurves = getCurvesForSeamEdge(oldPiece)
+  const newCurves = getCurvesForSeamEdge(newPiece)
+
+  const edgeMidpoint = (edges: EnumeratedEdge, curves: Curve[]): Point => {
+    const cis = edges.curveIndices
+    if (cis.length === 0) return { x: 0, y: 0 }
+    const mid = Math.floor(cis.length / 2)
+    return curveMidpoint(curves[cis[mid]])
+  }
+
+  const mapping = new Map<number, number>()
+  for (const oldEdge of oldEdges) {
+    const mp = edgeMidpoint(oldEdge, oldCurves)
+    const near = nearestCurveIndexAndPoint(mp, newCurves)
+    if (!near) continue
+    for (const ne of newEdges) {
+      if (ne.curveIndices.includes(near.curveIndex)) {
+        mapping.set(oldEdge.edgeIndex, ne.edgeIndex)
+        break
+      }
+    }
+  }
+
+  return assignments.map((pa) => {
+    if (pa.pieceId !== pieceId) return pa
+    const newIdx = mapping.get(pa.edgeIndex)
+    if (newIdx == null) return pa
+    if (newIdx === pa.edgeIndex) return pa
+    return { ...pa, edgeIndex: newIdx }
+  })
 }

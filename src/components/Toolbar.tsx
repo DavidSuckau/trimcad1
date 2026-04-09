@@ -19,6 +19,7 @@ import { MassstabModal } from './MassstabModal'
 import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { StuecklisteModal } from './StuecklisteModal'
+import { ProfileAssignmentDialog } from './ProfileAssignmentDialog'
 
 type ToolId =
   | 'select'
@@ -30,7 +31,7 @@ type ToolId =
   | 'rectangle'
   | 'massstab'
   | 'note'
-type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
+type MenuId = 'datei' | 'erzeugen' | 'bearbeiten' | 'naht' | 'profil' | 'material' | 'stueckliste' | 'pruefen' | 'hilfe' | null
 
 const NAHTZUGABE_MM = 5
 
@@ -43,6 +44,7 @@ const TOOL_DISPLAY: Record<string, { label: string; shortcut?: string }> = {
   notch: { label: 'Notch', shortcut: 'N' },
   kante: { label: 'Kante', shortcut: 'K' },
   massstab: { label: 'Maßstab', shortcut: 'M' },
+  profil: { label: 'Profil' },
   digitize: { label: 'Digitalisieren', shortcut: 'D' },
   rectangle: { label: 'Rechteck' },
   line: { label: 'Linie' },
@@ -846,6 +848,31 @@ export function Toolbar() {
           <button
             type="button"
             className="menubar-item"
+            aria-expanded={openMenu === 'profil'}
+            onClick={() => setOpenMenu(openMenu === 'profil' ? null : 'profil')}
+          >
+            Profil
+          </button>
+          {openMenu === 'profil' && (
+            <ul className="menubar-dropdown">
+              <li>
+                <button
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setTool('profil')
+                    closeMenu()
+                  }}
+                >
+                  Profil zuordnen
+                </button>
+              </li>
+            </ul>
+          )}
+        </div>
+        <div className="menubar-item-wrap">
+          <button
+            type="button"
+            className="menubar-item"
             aria-expanded={openMenu === 'material'}
             onClick={() => setOpenMenu(openMenu === 'material' ? null : 'material')}
           >
@@ -1004,6 +1031,18 @@ export function Toolbar() {
             </button>
           </span>
         )}
+        {tool === 'profil' && (
+          <span className="nahtzuordnung-hint">
+            Kante anklicken, um Profil zuzuordnen
+            <button
+              type="button"
+              className="nahtzuordnung-abbrechen"
+              onClick={() => setTool('select')}
+            >
+              Abbrechen
+            </button>
+          </span>
+        )}
         <div className="menubar-item-wrap toolbar-export-wrap" ref={exportMenuRef}>
           <button
             type="button"
@@ -1065,6 +1104,7 @@ export function Toolbar() {
       </div>
       <SettingsModal />
       <StuecklisteModal />
+      <ProfileAssignmentDialog />
       <SeamAdjustmentModal />
       <SeamAssignmentMetaModal />
       <MassstabModal />

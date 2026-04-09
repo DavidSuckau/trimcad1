@@ -8,6 +8,7 @@ import {
 } from '../bom/pieceBomStats'
 import { buildNaehplanRows } from '../bom/naehplan'
 import { computeMaterialAreaShares } from '../bom/materialAreaShare'
+import { aggregateProfileBom } from '../bom/profileBomStats'
 import { StuecklisteMaterialPie } from './StuecklisteMaterialPie'
 import { WorkspaceOverviewPreview } from './WorkspaceOverviewPreview'
 
@@ -61,6 +62,11 @@ export function StuecklisteModal() {
   }, [pieces])
 
   const naehplanRows = useMemo(() => buildNaehplanRows(workspace), [workspace])
+
+  const profileBomRows = useMemo(
+    () => aggregateProfileBom(workspace.profileAssignments ?? [], pieces),
+    [workspace.profileAssignments, pieces],
+  )
 
   const materialAreaShares = useMemo(
     () => computeMaterialAreaShares(aggregate.byMaterial, aggregate.grand.totalAreaM2),
@@ -256,6 +262,36 @@ export function StuecklisteModal() {
                     <li key={`${row.stepNr}-${row.line}`}>{row.line}</li>
                   ))}
                 </ul>
+              </div>
+            ) : null}
+
+            {profileBomRows.length > 0 ? (
+              <div className="stueckliste-naehplan-section">
+                <h4>Komponenten / Profile</h4>
+                <table className="stueckliste-summary-table">
+                  <thead>
+                    <tr>
+                      <th>Kennung</th>
+                      <th>Bezeichnung</th>
+                      <th>Artikelnr.</th>
+                      <th>Lieferant</th>
+                      <th>Σ Länge (mm)</th>
+                      <th>Anzahl</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {profileBomRows.map((row) => (
+                      <tr key={`${row.profileKey}-${row.internalArticleNumber ?? ''}`}>
+                        <td style={{ fontWeight: 700 }}>{row.profileKey}</td>
+                        <td>{row.profileName}</td>
+                        <td>{row.internalArticleNumber ?? '—'}</td>
+                        <td>{row.supplierNumber ?? '—'}</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums' }}>{row.totalLengthMm.toFixed(1)}</td>
+                        <td style={{ textAlign: 'center' }}>{row.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : null}
           </div>

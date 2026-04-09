@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Curve, PatternPiece } from '../types/model'
 import { offsetClosedPolygonVariable, deriveCutLineFromSeamWithVariableAllowance, deriveCutLineFromSeamWithValidation } from './offset'
 import { signedAreaCurves } from './curveToPath'
-import { enumerateEdges, buildCurveIndexAllowanceMap, hasVariableAllowance } from './edgeEnumeration'
+import { enumerateEdges, buildCurveIndexAllowanceMap, hasVariableAllowance, remapEdgeSeamAllowances } from './edgeEnumeration'
 
 function square(size: number): Curve[] {
   return [
@@ -273,5 +273,118 @@ describe('deriveCutLineFromSeamWithVariableAllowance', () => {
       // Areas should be similar (within 5%)
       expect(Math.abs(varArea - uniArea) / uniArea).toBeLessThan(0.05)
     }
+  })
+})
+
+describe('remapEdgeSeamAllowances', () => {
+  it('preserves allowances when nothing changes', () => {
+    const piece = makePiece(square(100), {
+      seamAllowanceMm: 10,
+      edgeSeamAllowances: [{ edgeIndex: 1, allowanceMm: 5 }],
+    })
+    const result = remapEdgeSeamAllowances(piece, piece)
+    expect(result).toEqual([{ edgeIndex: 1, allowanceMm: 5 }])
+  })
+
+  it('preserves allowances when vertex is moved (same topology)', () => {
+    const curves = square(100)
+    const old = makePiece(curves, {
+      seamAllowanceMm: 10,
+      edgeSeamAllowances: [{ edgeIndex: 0, allowanceMm: 3 }, { edgeIndex: 2, allowanceMm: 7 }],
+    })
+    const movedCurves: Curve[] = [
+      { type: 'line', start: { x: 5, y: 5 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 5, y: 5 } },
+    ]
+    const moved = makePiece(movedCurves, {
+      seamAllowanceMm: 10,
+      edgeSeamAllowances: old.edgeSeamAllowances,
+    })
+    const result = remapEdgeSeamAllowances(old, moved)
+    expect(result).toEqual([{ edgeIndex: 0, allowanceMm: 3 }, { edgeIndex: 2, allowanceMm: 7 }])
+  })
+
+  it('transfers allowance to both halves when edge splits (soft→hard)', () => {
+    const curves: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 50, y: 0 } },
+      { type: 'line', start: { x: 50, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 0, y: 0 } },
+    ]
+    const old = makePiece(curves, { seamAllowanceMm: 10 })
+    old.softVertices = [1]
+    old.edgeSeamAllowances = [{ edgeIndex: 0, allowanceMm: 5 }]
+
+    const newPiece = { ...old, softVertices: [] as number[] }
+
+    const result = remapEdgeSeamAllowances(old, newPiece)
+    expect(result).toBeDefined()
+    const overrideMap = new Map(result!.map((o) => [o.edgeIndex, o.allowanceMm]))
+    const newEdges = enumerateEdges(newPiece)
+    const edgeForCurve0 = newEdges.find((e) => e.curveIndices.includes(0))
+    const edgeForCurve1 = newEdges.find((e) => e.curveIndices.includes(1))
+    expect(overrideMap.get(edgeForCurve0!.edgeIndex)).toBe(5)
+    expect(overrideMap.get(edgeForCurve1!.edgeIndex)).toBe(5)
+  })
+
+  it('merges allowances when edges merge (hard→soft)', () => {
+    const curves: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 50, y: 0 } },
+      { type: 'line', start: { x: 50, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 0, y: 0 } },
+    ]
+    const old = makePiece(curves, { seamAllowanceMm: 10 })
+    old.softVertices = []
+    old.edgeSeamAllowances = [
+      { edgeIndex: 0, allowanceMm: 5 },
+      { edgeIndex: 1, allowanceMm: 5 },
+    ]
+
+    const newPiece = { ...old, softVertices: [1] }
+
+    const result = remapEdgeSeamAllowances(old, newPiece)
+    expect(result).toBeDefined()
+    const overrideMap = new Map(result!.map((o) => [o.edgeIndex, o.allowanceMm]))
+    const newEdges = enumerateEdges(newPiece)
+    const mergedEdge = newEdges.find((e) => e.curveIndices.includes(0) && e.curveIndices.includes(1))
+    expect(mergedEdge).toBeDefined()
+    expect(overrideMap.get(mergedEdge!.edgeIndex)).toBe(5)
+  })
+
+  it('returns undefined when no overrides exist', () => {
+    const piece = makePiece(square(100), { seamAllowanceMm: 10 })
+    const result = remapEdgeSeamAllowances(piece, piece)
+    expect(result).toBeUndefined()
+  })
+
+  it('drops override that matches new default', () => {
+    const piece = makePiece(square(100), {
+      seamAllowanceMm: 10,
+      edgeSeamAllowances: [{ edgeIndex: 1, allowanceMm: 10 }],
+    })
+    const result = remapEdgeSeamAllowances(piece, piece)
+    expect(result).toBeUndefined()
+  })
+
+  it('preserves multiple overrides on different edges', () => {
+    const piece = makePiece(square(100), {
+      seamAllowanceMm: 10,
+      edgeSeamAllowances: [
+        { edgeIndex: 0, allowanceMm: 3 },
+        { edgeIndex: 1, allowanceMm: 0 },
+        { edgeIndex: 3, allowanceMm: 15 },
+      ],
+    })
+    const result = remapEdgeSeamAllowances(piece, piece)
+    expect(result).toEqual([
+      { edgeIndex: 0, allowanceMm: 3 },
+      { edgeIndex: 1, allowanceMm: 0 },
+      { edgeIndex: 3, allowanceMm: 15 },
+    ])
   })
 })

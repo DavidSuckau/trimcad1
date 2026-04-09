@@ -1378,9 +1378,12 @@ export function WorkspaceCanvas() {
     addWorkspaceNote,
     updateWorkspaceNote,
     removeWorkspaceNote,
+    addProfileAssignment,
+    setProfileDialogAssignmentId,
   } = useStore()
   const { pieces, view, notes: workspaceNotesList } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
+  const profileAssignments = workspace.profileAssignments ?? []
   const [grainFlipHover, setGrainFlipHover] = useState<{
     pieceId: string
     clientX: number
@@ -1485,6 +1488,11 @@ export function WorkspaceCanvas() {
     curveIndices: number[]
   } | null>(null)
   const [hoveredSeamAssignmentId, setHoveredSeamAssignmentId] = useState<string | null>(null)
+  const [hoveredProfileEdge, setHoveredProfileEdge] = useState<{
+    pieceId: string
+    edgeIndex: number
+    curveIndices: number[]
+  } | null>(null)
   const [hoveredEdgePicking, setHoveredEdgePicking] = useState<{
     pieceId: string
     edgeIndex: number
@@ -1708,6 +1716,28 @@ export function WorkspaceCanvas() {
         return
       }
       if (edgeSeamPickingActive && edgeAllowancePopover) {
+        return
+      }
+      if (tool === 'profil' && hoveredProfileEdge) {
+        const existing = profileAssignments.find(
+          (pa) => pa.pieceId === hoveredProfileEdge.pieceId && pa.edgeIndex === hoveredProfileEdge.edgeIndex
+        )
+        if (existing) {
+          setProfileDialogAssignmentId(existing.id)
+        } else {
+          const usedKeys = new Set(profileAssignments.map((pa) => pa.profileKey))
+          let nextKey = 'A'
+          for (let c = 65; c <= 90; c++) {
+            if (!usedKeys.has(String.fromCharCode(c))) { nextKey = String.fromCharCode(c); break }
+          }
+          const newId = addProfileAssignment({
+            pieceId: hoveredProfileEdge.pieceId,
+            edgeIndex: hoveredProfileEdge.edgeIndex,
+            profileName: '',
+            profileKey: nextKey,
+          })
+          setProfileDialogAssignmentId(newId)
+        }
         return
       }
       if (pendingNahtzugabeClick) {
@@ -2423,6 +2453,29 @@ export function WorkspaceCanvas() {
           setHoveredEdgePicking(bestEdge)
         } else if (!edgeSeamPickingActive) {
           setHoveredEdgePicking(null)
+        }
+        if (tool === 'profil') {
+          const world = toWorld(e.clientX, e.clientY)
+          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+          for (const p of pieces) {
+            const masterK = getCurvesForSeamEdge(p)
+            if (masterK.length < 3) continue
+            const local = worldToPieceLocal(world, p)
+            const nearest = nearestCurveIndexAndPoint(local, masterK)
+            if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+            const edges = enumerateEdges(p)
+            for (const edge of edges) {
+              if (edge.curveIndices.includes(nearest.curveIndex)) {
+                if (!bestEdge || nearest.distance < bestEdge.distance) {
+                  bestEdge = { pieceId: p.id, edgeIndex: edge.edgeIndex, curveIndices: edge.curveIndices, distance: nearest.distance }
+                }
+                break
+              }
+            }
+          }
+          setHoveredProfileEdge(bestEdge)
+        } else {
+          setHoveredProfileEdge(null)
         }
         if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
           const world = toWorld(e.clientX, e.clientY)
@@ -3201,6 +3254,12 @@ export function WorkspaceCanvas() {
         setEdgeAllowancePopover(null)
         setHoveredEdgePicking(null)
         setEdgeSeamPickingActive(false)
+        return
+      }
+      if (!inInput && e.key === 'Escape' && tool === 'profil') {
+        e.preventDefault()
+        setHoveredProfileEdge(null)
+        setTool('select')
         return
       }
       if (!inInput && e.key === 'Escape') {
@@ -5444,6 +5503,123 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
+          {tool === 'profil' && hoveredProfileEdge && (() => {
+            const piece = pieces.find((p) => p.id === hoveredProfileEdge.pieceId)
+            if (!piece) return null
+            const masterK = getCurvesForSeamEdge(piece)
+            const curves = hoveredProfileEdge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+            let d = ''
+            for (const seg of curves) {
+              if (!seg) continue
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              if (seg.type === 'line') {
+                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+              } else {
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+              }
+            }
+            if (!d) return null
+            return (
+              <path
+                key="profile-edge-hover"
+                d={d}
+                fill="none"
+                stroke="#7b1fa2"
+                strokeWidth={3.5}
+                strokeOpacity={0.9}
+                pointerEvents="none"
+              />
+            )
+          })()}
+          {profileAssignments.length > 0 && profileAssignments.map((pa) => {
+            const piece = pieces.find((p) => p.id === pa.pieceId)
+            if (!piece) return null
+            const masterK = getCurvesForSeamEdge(piece)
+            const edges = enumerateEdges(piece)
+            const edge = edges.find((e) => e.edgeIndex === pa.edgeIndex)
+            if (!edge) return null
+            const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+            if (curves.length === 0) return null
+
+            let d = ''
+            for (const seg of curves) {
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              if (seg.type === 'line') {
+                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+              } else {
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+              }
+            }
+            if (!d) return null
+
+            const firstSeg = curves[0]
+            const lastSeg = curves[curves.length - 1]
+            const startW = pieceLocalToWorld(firstSeg.start, piece)
+            const endW = pieceLocalToWorld(lastSeg.end, piece)
+            const midW = { x: (startW.x + endW.x) / 2, y: (startW.y + endW.y) / 2 }
+            const dx = endW.x - startW.x
+            const dy = endW.y - startW.y
+            const len = Math.hypot(dx, dy) || 1
+            const nx = -dy / len
+            const ny = dx / len
+            const offsetMm = 4
+            const labelX = midW.x + nx * offsetMm
+            const labelY = midW.y + ny * offsetMm
+            const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI
+
+            const lengthMm = edgeTotalLength(piece, edge.curveIndices)
+            const labelParts: string[] = []
+            if (pa.supplierNumber) labelParts.push(pa.supplierNumber)
+            if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)
+            labelParts.push(`${lengthMm.toFixed(0)} mm`)
+            const detailText = labelParts.join(' · ')
+
+            return (
+              <g key={`profile-${pa.id}`} pointerEvents="none">
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#7b1fa2"
+                  strokeWidth={2}
+                  strokeOpacity={0.7}
+                  strokeDasharray="6 3"
+                />
+                <text
+                  x={labelX}
+                  y={labelY}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="#7b1fa2"
+                  fontSize={3.5}
+                  fontFamily="sans-serif"
+                  fontWeight={700}
+                  transform={`rotate(${angleDeg},${labelX},${labelY})`}
+                >
+                  {pa.profileKey}
+                </text>
+                <text
+                  x={labelX}
+                  y={labelY + 4}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="#7b1fa2"
+                  fontSize={2.2}
+                  fontFamily="sans-serif"
+                  fontWeight={400}
+                  opacity={0.8}
+                  transform={`rotate(${angleDeg},${labelX},${labelY + 4})`}
+                >
+                  {detailText}
+                </text>
+              </g>
+            )
+          })}
           {seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
               const pieceA = pieces.find((p) => p.id === a.pieceIdA)

@@ -157,6 +157,26 @@ export type SeamAssignment = {
   seamKind?: SeamAssignmentKindId | null
 }
 
+/** Profilzuordnung an einer Kante (Ecke-zu-Ecke). Nur Visualisierung/Stückliste, nicht im DXF-Export. */
+export type ProfileAssignment = {
+  id: string
+  pieceId: string
+  /** 0-basierte Kantennummer (Ecke-zu-Ecke auf Master-Kontur, analog EdgeSeamAllowance). */
+  edgeIndex: number
+  /** Nahtzugabe in mm entlang dieser Kante (optional, visuell dargestellt). */
+  seamAllowanceMm?: number
+  /** Lieferantennummer. */
+  supplierNumber?: string
+  /** Interne Artikelnummer. */
+  internalArticleNumber?: string
+  /** Profilbezeichnung (Pflicht). */
+  profileName: string
+  /** Eindeutige Kennung, z. B. A, B, C (Pflicht). */
+  profileKey: string
+  /** Pfad/URL zu hinterlegtem PDF-Dokument. */
+  pdfDocumentUrl?: string
+}
+
 /** Editor-Notiz am Schnittteil (Teilkoordinaten, mm); bewegt sich mit dem Teil; kein DXF-Export. */
 export type WorkspaceNote = {
   id: string
@@ -175,6 +195,8 @@ export type Workspace = {
   seamAssignments: SeamAssignment[]
   /** Freie Notizzettel (nur Editor, nicht DXF-Export). */
   notes?: WorkspaceNote[]
+  /** Profilzuordnungen an Kanten (nur Visualisierung/Stückliste, nicht DXF-Export). */
+  profileAssignments?: ProfileAssignment[]
   /** Zuletzt gespeicherter oder geladener Projektdateiname (Anzeige Stückliste). */
   projectFileName?: string
   /** Stückliste: Dokumentversion (frei). */

@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf'
 import { autoTable } from 'jspdf-autotable'
 import type { Workspace } from '../types/model'
 import { aggregateBomByMaterial, getCutLineAreaMm2, getCutLinePerimeterMm, materialLabelForBom } from './pieceBomStats'
+import { aggregateProfileBom } from './profileBomStats'
 import { buildMaterialPieSvgDocument } from './buildMaterialPieSvg'
 import { computeMaterialAreaShares } from './materialAreaShare'
 import { buildNaehplanRows } from './naehplan'
@@ -369,6 +370,37 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
       doc.text(lines, margin, y)
       y += lines.length * 4.5 + 1
     }
+  }
+
+  const profileRows = aggregateProfileBom(workspace.profileAssignments ?? [], pieces)
+  if (profileRows.length > 0) {
+    if (y > pageH - margin - 40) {
+      doc.addPage()
+      y = margin
+    }
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(11)
+    doc.text('Komponenten / Profile', margin, y)
+    y += 6
+
+    autoTable(doc, {
+      startY: y,
+      head: [['Kennung', 'Bezeichnung', 'Artikelnr.', 'Lieferant', 'Σ Länge (mm)', 'Anzahl']],
+      body: profileRows.map((r) => [
+        r.profileKey,
+        r.profileName,
+        r.internalArticleNumber ?? '—',
+        r.supplierNumber ?? '—',
+        r.totalLengthMm.toFixed(1),
+        r.count,
+      ]),
+      styles: { fontSize: 8, cellPadding: 1.2 },
+      headStyles: { fillColor: [230, 230, 233], fontStyle: 'bold', fontSize: 8 },
+      margin: { left: margin, right: margin },
+      tableWidth: Math.min(contentW, 200),
+      theme: 'grid',
+    })
+    y = (docExt.lastAutoTable?.finalY ?? y) + 10
   }
 
   const svg = buildWorkspaceOverviewSvgDocument(pieces, imageSession, imageDataUrl)

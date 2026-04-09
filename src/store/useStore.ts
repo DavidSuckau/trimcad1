@@ -15,6 +15,7 @@ import type {
   DigitizeState,
   BatchSelectionFilter,
   BatchSelectionTarget,
+  ProfileAssignment,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import {
@@ -25,7 +26,7 @@ import {
   validateContourAfterVertexMove,
 } from '../geometry/offset'
 import type { DeriveCutLineFromSeamResult } from '../geometry/offset'
-import { hasVariableAllowance, buildCurveIndexAllowanceMap, adjustEdgeAllowancesAfterRemove } from '../geometry/edgeEnumeration'
+import { hasVariableAllowance, buildCurveIndexAllowanceMap, remapEdgeSeamAllowances, remapProfileAssignmentsForPiece } from '../geometry/edgeEnumeration'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import {
   getSubSegments,
@@ -247,6 +248,7 @@ type Tool =
   | 'massstab'
   | 'digitize'
   | 'note'
+  | 'profil'
 
 /** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
 type ImageDigitizeSession = {
@@ -299,6 +301,8 @@ type Store = {
   /** Nahtzuordnung: 'first' = erste Naht anklicken, 'second' = zweite Naht (anderes Teil) anklicken */
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
+  /** Profil-Dialog: ID der aktuell bearbeiteten ProfileAssignment (null = geschlossen). */
+  profileDialogAssignmentId: string | null
   showSettingsModal: boolean
   showStuecklisteModal: boolean
   showHelpModal: boolean
@@ -400,6 +404,11 @@ type Store = {
     vertexIndex: number,
     options?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }
   ) => void
+
+  addProfileAssignment: (assignment: Omit<ProfileAssignment, 'id'>) => string
+  updateProfileAssignment: (id: string, updates: Partial<Omit<ProfileAssignment, 'id'>>) => void
+  removeProfileAssignment: (id: string) => void
+  setProfileDialogAssignmentId: (v: string | null) => void
 
   /** Legacy-Name: fügt auf der Master-Kontur ein (bei Nahtzugabe faktisch seamLine). */
   addCurveToCutLine: (pieceId: string, curve: Curve) => void
@@ -630,6 +639,7 @@ export const useStore = create<Store>((set, get) => ({
     view: defaultView,
     seamAssignments: [],
     notes: [],
+    profileAssignments: [],
   },
   selectedPieceIds: ['p1'],
   selectedPoint: null,
@@ -651,6 +661,7 @@ export const useStore = create<Store>((set, get) => ({
   edgeSeamPickingActive: false,
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
+  profileDialogAssignmentId: null,
   showSettingsModal: false,
   showStuecklisteModal: false,
   showHelpModal: false,
@@ -746,6 +757,7 @@ export const useStore = create<Store>((set, get) => ({
         } else {
           next.seamLine = []
           next.softVerticesMaster = []
+          next.edgeSeamAllowances = undefined
         }
         return applySharpCornerPromotion(next)
       })
@@ -761,6 +773,7 @@ export const useStore = create<Store>((set, get) => ({
         ...s.workspace,
         pieces: s.workspace.pieces.filter((p) => p.id !== id),
         notes: (s.workspace.notes ?? []).filter((n) => n.pieceId !== id),
+        profileAssignments: (s.workspace.profileAssignments ?? []).filter((pa) => pa.pieceId !== id),
       },
       selectedPieceIds: s.selectedPieceIds.filter((x) => x !== id),
       piecePropertiesDialogPieceId: s.piecePropertiesDialogPieceId === id ? null : s.piecePropertiesDialogPieceId,
@@ -1084,6 +1097,37 @@ export const useStore = create<Store>((set, get) => ({
         seamAssignments: s.workspace.seamAssignments.filter((a) => a.id !== id),
       },
     })),
+
+  addProfileAssignment: (assignment) => {
+    const id = generateId()
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        profileAssignments: [...(s.workspace.profileAssignments ?? []), { ...assignment, id }],
+      },
+    }))
+    return id
+  },
+  updateProfileAssignment: (id, updates) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        profileAssignments: (s.workspace.profileAssignments ?? []).map((pa) =>
+          pa.id === id ? { ...pa, ...updates, id: pa.id } : pa
+        ),
+      },
+    })),
+  removeProfileAssignment: (id) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        profileAssignments: (s.workspace.profileAssignments ?? []).filter((pa) => pa.id !== id),
+      },
+      profileDialogAssignmentId:
+        s.profileDialogAssignmentId === id ? null : s.profileDialogAssignmentId,
+    })),
+  setProfileDialogAssignmentId: (v) => set({ profileDialogAssignmentId: v }),
+
   setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v }),
   setSeamAssignmentMetaDialogId: (v) => set({ seamAssignmentMetaDialogId: v }),
   updateSeamAssignmentMeta: (assignmentId, patch) => {
@@ -1718,7 +1762,13 @@ export const useStore = create<Store>((set, get) => ({
 
             if (seamPc && p.seamAllowanceMm != null) {
               const seamLine = newMaster
-              const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
+              const newMasterVi = curveIndex + 1
+              const softVerticesMaster = [
+                ...(p.softVerticesMaster ?? []).map((vi) => (vi >= newMasterVi ? vi + 1 : vi)),
+                newMasterVi,
+              ].sort((a, b) => a - b)
+              const tempPiece = { ...p, seamLine, softVerticesMaster }
+              const derived = deriveCutLineForPiece(tempPiece, seamLine, p.seamAllowanceMm)
               if (!derived.ok) {
                 toastMessage = `warn:${derived.message}`
                 return p
@@ -1730,11 +1780,6 @@ export const useStore = create<Store>((set, get) => ({
               const softSet = new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < cutLine.length))
               if (insertedCutVi != null) softSet.add(insertedCutVi)
               const softVertices = [...softSet].sort((a, b) => a - b)
-              const newMasterVi = curveIndex + 1
-              const softVerticesMaster = [
-                ...(p.softVerticesMaster ?? []).map((vi) => (vi >= newMasterVi ? vi + 1 : vi)),
-                newMasterVi,
-              ].sort((a, b) => a - b)
               inserted = true
               if (insertedCutVi == null) {
                 return { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster }
@@ -1974,66 +2019,79 @@ export const useStore = create<Store>((set, get) => ({
       if (piece && useSeamMaster && piece.seamAllowanceMm != null && master.length > 3) {
         const merged = mergeContourRemoveVertex(master, vertexIndex)
         if (merged) {
-          const derived = deriveCutLineForPiece(piece, merged, piece.seamAllowanceMm)
+          const tempSoftM = (piece.softVerticesMaster ?? [])
+            .filter((vi: number) => vi !== vertexIndex)
+            .map((vi: number) => (vi > vertexIndex ? vi - 1 : vi))
+          const tempPiece = { ...piece, seamLine: merged, softVerticesMaster: tempSoftM }
+          tempPiece.edgeSeamAllowances = remapEdgeSeamAllowances(piece, tempPiece)
+          const derived = deriveCutLineForPiece(tempPiece, merged, piece.seamAllowanceMm)
           if (!derived.ok) {
             return { ...s, toastMessage: `warn:${derived.message}` }
           }
         }
       }
 
+      const newPieces = s.workspace.pieces.map((p) => {
+        const seamAllowance = p.seamAllowanceMm
+        const seamMaster = useSeamLineForVertexEditing(p)
+        const curves = seamMaster ? p.seamLine : p.cutLine
+        if (p.id !== pieceId || curves.length <= 3 || vertexIndex < 0 || vertexIndex >= curves.length) return p
+        const merged = mergeContourRemoveVertex(curves, vertexIndex)
+        if (!merged) return p
+        const softVerticesMaster = (p.softVerticesMaster ?? [])
+          .filter((vi) => vi !== vertexIndex)
+          .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
+
+        let cutLine = p.cutLine
+        let seamLine = p.seamLine
+        if (seamMaster && seamAllowance != null) {
+          seamLine = merged
+          const tempPiece = { ...p, seamLine, softVerticesMaster }
+          const edgeSeamAllowances = remapEdgeSeamAllowances(p, tempPiece)
+          const derived = deriveCutLineForPiece({ ...tempPiece, edgeSeamAllowances }, seamLine, seamAllowance)
+          if (!derived.ok) return p
+          cutLine = derived.cutLine
+        } else {
+          cutLine = merged
+          seamLine =
+            seamAllowance != null && cutLine.length >= 3
+              ? offsetCurvesInwardForSeam(cutLine, seamAllowance)
+              : p.seamLine
+        }
+
+        const cutCheck = validateContourAfterVertexMove(cutLine)
+        if (!cutCheck.ok) {
+          toastMessage = `warn:${cutCheck.message}`
+          return p
+        }
+        const seamCheck =
+          seamAllowance != null && seamLine.length >= 3 ? validateContourAfterVertexMove(seamLine) : { ok: true as const }
+        if (!seamCheck.ok) {
+          toastMessage = `warn:${seamCheck.message}`
+          return p
+        }
+        const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+        const oldCut = p.cutLine
+        const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
+
+        const newPiece = { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster }
+        newPiece.edgeSeamAllowances = remapEdgeSeamAllowances(p, newPiece)
+        return applySharpCornerPromotion(newPiece)
+      })
+
+      const oldP = s.workspace.pieces.find((p) => p.id === pieceId)
+      const newP = newPieces.find((p) => p.id === pieceId)
+      let profileAssignments = s.workspace.profileAssignments ?? []
+      if (oldP && newP && oldP !== newP) {
+        profileAssignments = remapProfileAssignmentsForPiece(oldP, newP, profileAssignments)
+      }
+
       return {
         workspace: {
           ...s.workspace,
           seamAssignments: oldN > 3 ? adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vertexIndex, oldN) : s.workspace.seamAssignments,
-          pieces: s.workspace.pieces.map((p) => {
-            const seamAllowance = p.seamAllowanceMm
-            const seamMaster = useSeamLineForVertexEditing(p)
-            const curves = seamMaster ? p.seamLine : p.cutLine
-            if (p.id !== pieceId || curves.length <= 3 || vertexIndex < 0 || vertexIndex >= curves.length) return p
-            const merged = mergeContourRemoveVertex(curves, vertexIndex)
-            if (!merged) return p
-            let cutLine = p.cutLine
-            let seamLine = p.seamLine
-            if (seamMaster && seamAllowance != null) {
-              const derived = deriveCutLineForPiece(p, merged, seamAllowance)
-              if (!derived.ok) return p
-              seamLine = merged
-              cutLine = derived.cutLine
-            } else {
-              cutLine = merged
-              seamLine =
-                seamAllowance != null && cutLine.length >= 3
-                  ? offsetCurvesInwardForSeam(cutLine, seamAllowance)
-                  : p.seamLine
-            }
-
-            // Schutzlogik: Entfernen eines Vertex darf die Kontur nicht zerstören.
-            const cutCheck = validateContourAfterVertexMove(cutLine)
-            if (!cutCheck.ok) {
-              toastMessage = `warn:${cutCheck.message}`
-              return p
-            }
-            const seamCheck =
-              seamAllowance != null && seamLine.length >= 3 ? validateContourAfterVertexMove(seamLine) : { ok: true as const }
-            if (!seamCheck.ok) {
-              toastMessage = `warn:${seamCheck.message}`
-              return p
-            }
-            const notches =
-              seamMaster && seamAllowance != null
-                ? resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-                : resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-            const oldCut = p.cutLine
-            const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
-            const softVerticesMaster = (p.softVerticesMaster ?? [])
-              .filter((vi) => vi !== vertexIndex)
-              .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
-            const wasSoft = seamMaster
-              ? (p.softVerticesMaster ?? []).includes(vertexIndex)
-              : (p.softVertices ?? []).includes(vertexIndex)
-            const edgeSeamAllowances = adjustEdgeAllowancesAfterRemove(p.edgeSeamAllowances, vertexIndex, wasSoft)
-            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster, edgeSeamAllowances })
-          }),
+          pieces: newPieces,
+          profileAssignments,
         },
         ...(toastMessage ? { toastMessage } : {}),
       }
@@ -2077,39 +2135,48 @@ export const useStore = create<Store>((set, get) => ({
     }),
 
   setVertexSoft: (pieceId, vertexIndex, soft) =>
-    set((s) => ({
-      workspace: {
-        ...s.workspace,
-        pieces: s.workspace.pieces.map((p) => {
-          if (p.id !== pieceId) return p
-          const useSeamMaster = useSeamLineForVertexEditing(p)
-          const curves = useSeamMaster ? p.seamLine : p.cutLine
-          const n = curves.length
-          if (n <= 3 || vertexIndex < 0 || vertexIndex >= n) return p
-          if (useSeamMaster) {
-            const masterSet = new Set(p.softVerticesMaster ?? [])
-            if (soft) masterSet.add(vertexIndex)
-            else masterSet.delete(vertexIndex)
-            const cutVi = mapMasterVertexIndexToCutVertexIndex(p, vertexIndex)
-            const softCut = new Set(p.softVertices ?? [])
-            if (cutVi != null) softCut.delete(cutVi)
-            const nextP = {
-              ...p,
-              softVerticesMaster: [...masterSet].sort((a, b) => a - b),
-              softVertices: [...softCut].sort((a, b) => a - b),
-            }
-            if (soft) return nextP
-            return applySharpCornerPromotion(nextP)
+    set((s) => {
+      const oldPiece = s.workspace.pieces.find((p) => p.id === pieceId)
+      const newPieces = s.workspace.pieces.map((p) => {
+        if (p.id !== pieceId) return p
+        const useSeamMaster = useSeamLineForVertexEditing(p)
+        const curves = useSeamMaster ? p.seamLine : p.cutLine
+        const n = curves.length
+        if (n <= 3 || vertexIndex < 0 || vertexIndex >= n) return p
+        if (useSeamMaster) {
+          const masterSet = new Set(p.softVerticesMaster ?? [])
+          if (soft) masterSet.add(vertexIndex)
+          else masterSet.delete(vertexIndex)
+          const cutVi = mapMasterVertexIndexToCutVertexIndex(p, vertexIndex)
+          const softCut = new Set(p.softVertices ?? [])
+          if (cutVi != null) softCut.delete(cutVi)
+          const nextP = {
+            ...p,
+            softVerticesMaster: [...masterSet].sort((a, b) => a - b),
+            softVertices: [...softCut].sort((a, b) => a - b),
           }
-          const set = new Set(p.softVertices ?? [])
-          if (soft) set.add(vertexIndex)
-          else set.delete(vertexIndex)
-          const softVertices = [...set].sort((a, b) => a - b)
-          if (soft) return { ...p, softVertices }
-          return applySharpCornerPromotion({ ...p, softVertices })
-        }),
-      },
-    })),
+          nextP.edgeSeamAllowances = remapEdgeSeamAllowances(p, nextP)
+          if (soft) return nextP
+          return applySharpCornerPromotion(nextP)
+        }
+        const sSet = new Set(p.softVertices ?? [])
+        if (soft) sSet.add(vertexIndex)
+        else sSet.delete(vertexIndex)
+        const softVertices = [...sSet].sort((a, b) => a - b)
+        const nextCut = { ...p, softVertices }
+        nextCut.edgeSeamAllowances = remapEdgeSeamAllowances(p, nextCut)
+        if (soft) return nextCut
+        return applySharpCornerPromotion(nextCut)
+      })
+      const newPiece = newPieces.find((p) => p.id === pieceId)
+      let profileAssignments = s.workspace.profileAssignments ?? []
+      if (oldPiece && newPiece && oldPiece !== newPiece) {
+        profileAssignments = remapProfileAssignmentsForPiece(oldPiece, newPiece, profileAssignments)
+      }
+      return {
+        workspace: { ...s.workspace, pieces: newPieces, profileAssignments },
+      }
+    }),
 
   offsetSegment: (pieceId, curveIndex, deltaMm) =>
     set((s) => {
@@ -2362,6 +2429,7 @@ export const useStore = create<Store>((set, get) => ({
       edgeSeamPickingActive: false,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
+      profileDialogAssignmentId: null,
       rulerMode: false,
       rulerLine: null,
       seamAdjustmentDialog: null,
@@ -2507,7 +2575,7 @@ export const useStore = create<Store>((set, get) => ({
         ? { ...project.workspace, projectFileName: opts.projectFileName }
         : project.workspace
     set({
-      workspace: { ...ws, notes: ws.notes ?? [] },
+      workspace: { ...ws, notes: ws.notes ?? [], profileAssignments: ws.profileAssignments ?? [] },
       dxfExportScale: project.dxfExportScale,
       dxfImportExtraCutLayers: project.dxfImportExtraCutLayers,
       dxfImportScale: project.dxfImportScale,

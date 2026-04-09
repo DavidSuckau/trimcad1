@@ -10,6 +10,7 @@ import type {
   Notch,
   NotchType,
   EdgeSeamAllowance,
+  ProfileAssignment,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
@@ -285,6 +286,39 @@ function normalizeWorkspaceNotes(raw: unknown, pieces: PatternPiece[]): Workspac
   return out
 }
 
+function normalizeProfileAssignments(raw: unknown, pieces: PatternPiece[]): ProfileAssignment[] {
+  if (!Array.isArray(raw)) return []
+  const pieceIds = new Set(pieces.map((p) => p.id))
+  const out: ProfileAssignment[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue
+    const o = item as Record<string, unknown>
+    if (typeof o.id !== 'string') continue
+    if (typeof o.pieceId !== 'string' || !pieceIds.has(o.pieceId)) continue
+    const edgeIndex = Number(o.edgeIndex)
+    if (!Number.isFinite(edgeIndex) || edgeIndex < 0) continue
+    const profileName = typeof o.profileName === 'string' ? o.profileName : ''
+    const profileKey = typeof o.profileKey === 'string' ? o.profileKey : ''
+    if (!profileName || !profileKey) continue
+    out.push({
+      id: o.id,
+      pieceId: o.pieceId,
+      edgeIndex: Math.floor(edgeIndex),
+      profileName,
+      profileKey,
+      ...(typeof o.seamAllowanceMm === 'number' && Number.isFinite(o.seamAllowanceMm)
+        ? { seamAllowanceMm: o.seamAllowanceMm }
+        : {}),
+      ...(typeof o.supplierNumber === 'string' && o.supplierNumber ? { supplierNumber: o.supplierNumber } : {}),
+      ...(typeof o.internalArticleNumber === 'string' && o.internalArticleNumber
+        ? { internalArticleNumber: o.internalArticleNumber }
+        : {}),
+      ...(typeof o.pdfDocumentUrl === 'string' && o.pdfDocumentUrl ? { pdfDocumentUrl: o.pdfDocumentUrl } : {}),
+    })
+  }
+  return out
+}
+
 export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
   const pieces = Array.isArray(w.pieces) ? w.pieces.map((p) => normalizePiece(p as PatternPiece)) : []
   const view = isViewState(w.view) ? w.view : { zoom: 1, panX: 0, panY: 0 }
@@ -295,6 +329,7 @@ export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
     view,
     seamAssignments: normalizeSeamAssignments(w.seamAssignments),
     notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes, pieces),
+    profileAssignments: normalizeProfileAssignments((w as { profileAssignments?: unknown }).profileAssignments, pieces),
     ...(typeof w.projectFileName === 'string' ? { projectFileName: w.projectFileName } : {}),
     ...(typeof w.bomDocumentVersion === 'string' ? { bomDocumentVersion: w.bomDocumentVersion } : {}),
     ...(typeof w.bomDeveloperName === 'string' ? { bomDeveloperName: w.bomDeveloperName } : {}),
