@@ -190,8 +190,12 @@ export function remapEdgeSeamAllowances(
 }
 
 /**
- * Remapt `ProfileAssignment.edgeIndex` nach Topologie-Änderungen (Vertex-Insert/Remove).
- * Strategie: Mittelpunkt der alten Kante geometrisch auf die nächste neue Kante projizieren.
+ * Remapt `ProfileAssignment.edgeIndex` nach Topologie-Änderungen (Vertex-Insert/Remove,
+ * Soft/Hard-Toggle).
+ *
+ * Strategie: Für jede Kurve der alten Kante wird per Majority-Vote ermittelt, welche
+ * neue Kante die meisten Kurven enthält. So bleibt die Zuordnung stabil, auch wenn eine
+ * Kante durch einen neuen Corner gesplittet wird.
  */
 export function remapProfileAssignmentsForPiece(
   oldPiece: PatternPiece,
@@ -211,24 +215,26 @@ export function remapProfileAssignmentsForPiece(
   const oldCurves = getCurvesForSeamEdge(oldPiece)
   const newCurves = getCurvesForSeamEdge(newPiece)
 
-  const edgeMidpoint = (edges: EnumeratedEdge, curves: Curve[]): Point => {
-    const cis = edges.curveIndices
-    if (cis.length === 0) return { x: 0, y: 0 }
-    const mid = Math.floor(cis.length / 2)
-    return curveMidpoint(curves[cis[mid]])
+  const newEdgeForCurveIndex = new Map<number, number>()
+  for (const ne of newEdges) {
+    for (const ci of ne.curveIndices) newEdgeForCurveIndex.set(ci, ne.edgeIndex)
   }
 
   const mapping = new Map<number, number>()
   for (const oldEdge of oldEdges) {
-    const mp = edgeMidpoint(oldEdge, oldCurves)
-    const near = nearestCurveIndexAndPoint(mp, newCurves)
-    if (!near) continue
-    for (const ne of newEdges) {
-      if (ne.curveIndices.includes(near.curveIndex)) {
-        mapping.set(oldEdge.edgeIndex, ne.edgeIndex)
-        break
-      }
+    const votes = new Map<number, number>()
+    for (const ci of oldEdge.curveIndices) {
+      const mp = curveMidpoint(oldCurves[ci])
+      const near = nearestCurveIndexAndPoint(mp, newCurves)
+      if (!near) continue
+      const newEI = newEdgeForCurveIndex.get(near.curveIndex)
+      if (newEI != null) votes.set(newEI, (votes.get(newEI) ?? 0) + 1)
     }
+    let bestEdge = -1, bestCount = 0
+    for (const [ei, cnt] of votes) {
+      if (cnt > bestCount) { bestEdge = ei; bestCount = cnt }
+    }
+    if (bestEdge >= 0) mapping.set(oldEdge.edgeIndex, bestEdge)
   }
 
   return assignments.map((pa) => {

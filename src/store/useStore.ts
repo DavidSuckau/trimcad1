@@ -286,6 +286,7 @@ type Store = {
   showDrills: boolean
   showInternalLines: boolean
   showPieceNames: boolean
+  showProfiles: boolean
   /** Bogenlängen entlang der Schnittkontur (Ecke↔Ecke, Kerbe↔Kerbe, …) auf allen Teilen. */
   showContourMeasurements: boolean
   /** Workspace-Notizzettel ein-/ausblenden (Daten bleiben erhalten). */
@@ -351,6 +352,7 @@ type Store = {
   setShowDrills: (v: boolean) => void
   setShowInternalLines: (v: boolean) => void
   setShowPieceNames: (v: boolean) => void
+  setShowProfiles: (v: boolean) => void
   setShowContourMeasurements: (v: boolean) => void
   setShowWorkspaceNotes: (v: boolean) => void
   setRulerMode: (v: boolean) => void
@@ -651,6 +653,7 @@ export const useStore = create<Store>((set, get) => ({
   showDrills: true,
   showInternalLines: true,
   showPieceNames: true,
+  showProfiles: true,
   showContourMeasurements: false,
   showWorkspaceNotes: true,
   rulerMode: false,
@@ -920,6 +923,7 @@ export const useStore = create<Store>((set, get) => ({
   setShowDrills: (v) => set({ showDrills: v }),
   setShowInternalLines: (v) => set({ showInternalLines: v }),
   setShowPieceNames: (v) => set({ showPieceNames: v }),
+  setShowProfiles: (v) => set({ showProfiles: v }),
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
   setRulerMode: (v) => set({ rulerMode: v }),

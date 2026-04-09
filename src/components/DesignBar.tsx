@@ -9,6 +9,7 @@ export function DesignBar() {
     showDrills, setShowDrills,
     showInternalLines, setShowInternalLines,
     showPieceNames, setShowPieceNames,
+    showProfiles, setShowProfiles,
     showContourMeasurements, setShowContourMeasurements,
     showWorkspaceNotes, setShowWorkspaceNotes,
   } = useStore()
@@ -21,6 +22,7 @@ export function DesignBar() {
     { label: 'Bohrungen', checked: showDrills, toggle: setShowDrills },
     { label: 'Interne Linien', checked: showInternalLines, toggle: setShowInternalLines },
     { label: 'Teilnamen', checked: showPieceNames, toggle: setShowPieceNames },
+    { label: 'Profile', checked: showProfiles, toggle: setShowProfiles },
     { label: 'Konturmaße', checked: showContourMeasurements, toggle: setShowContourMeasurements },
     { label: 'Notizen', checked: showWorkspaceNotes, toggle: setShowWorkspaceNotes },
   ]

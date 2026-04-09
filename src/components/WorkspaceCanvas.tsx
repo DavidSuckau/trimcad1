@@ -1291,6 +1291,7 @@ export function WorkspaceCanvas() {
     showDrills,
     showInternalLines,
     showPieceNames,
+    showProfiles,
     showContourMeasurements,
     showWorkspaceNotes,
     rulerMode,
@@ -1591,10 +1592,14 @@ export function WorkspaceCanvas() {
       if (e.target instanceof Element && e.target.closest('.batch-selection-bar')) {
         return
       }
-      /** Mittelklick: nur globaler Abbruch, kein Ziehen/Keine Punkte ändern (Propagation kommt i. d. R. nicht bis hier). */
       if (e.button === 1) {
         e.preventDefault()
         e.stopPropagation()
+        if (edgeSeamPickingActive || edgeAllowancePopover) {
+          setEdgeAllowancePopover(null)
+          setHoveredEdgePicking(null)
+          setEdgeSeamPickingActive(false)
+        }
         return
       }
       e.preventDefault()
@@ -1776,6 +1781,42 @@ export function WorkspaceCanvas() {
             })
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
             return
+          }
+        }
+      }
+
+      if (showProfiles && (tool === 'select' || tool === 'profil') && profileAssignments.length > 0) {
+        const PROFILE_HIT_MM = 8
+        const PROFILE_LINE_OFF = 20
+        for (const pa of profileAssignments) {
+          const pp = pieces.find((p) => p.id === pa.pieceId)
+          if (!pp) continue
+          const masterK = getCurvesForSeamEdge(pp)
+          const edges = enumerateEdges(pp)
+          const edge = edges.find((ed) => ed.edgeIndex === pa.edgeIndex)
+          if (!edge) continue
+          const area = signedAreaCurves(masterK)
+          const outSign = area >= 0 ? -1 : 1
+          const local = worldToPieceLocal(world, pp)
+          for (const ci of edge.curveIndices) {
+            const seg = masterK[ci]
+            if (!seg) continue
+            const tdx = seg.end.x - seg.start.x
+            const tdy = seg.end.y - seg.start.y
+            const tlen = Math.hypot(tdx, tdy) || 1
+            const ox = outSign * (-tdy / tlen) * PROFILE_LINE_OFF
+            const oy = outSign * (tdx / tlen) * PROFILE_LINE_OFF
+            const offStart = { x: seg.start.x + ox, y: seg.start.y + oy }
+            const offEnd = { x: seg.end.x + ox, y: seg.end.y + oy }
+            const dx = offEnd.x - offStart.x, dy = offEnd.y - offStart.y
+            const len2 = dx * dx + dy * dy
+            const t = len2 > 0 ? Math.max(0, Math.min(1, ((local.x - offStart.x) * dx + (local.y - offStart.y) * dy) / len2)) : 0
+            const closest = { x: offStart.x + t * dx, y: offStart.y + t * dy }
+            const dist = Math.hypot(local.x - closest.x, local.y - closest.y)
+            if (dist < PROFILE_HIT_MM) {
+              setProfileDialogAssignmentId(pa.id)
+              return
+            }
           }
         }
       }
@@ -2325,6 +2366,7 @@ export function WorkspaceCanvas() {
       profileAssignments,
       addProfileAssignment,
       setProfileDialogAssignmentId,
+      showProfiles,
     ]
   )
 
@@ -5539,7 +5581,7 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
-          {profileAssignments.length > 0 && profileAssignments.map((pa) => {
+          {showProfiles && profileAssignments.length > 0 && profileAssignments.map((pa) => {
             const piece = pieces.find((p) => p.id === pa.pieceId)
             if (!piece) return null
             const masterK = getCurvesForSeamEdge(piece)
