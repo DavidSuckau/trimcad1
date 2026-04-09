@@ -23,6 +23,7 @@ export function isPointInPolygon(p: Point, pts: Point[]): boolean {
     const yi = pts[i].y
     const xj = pts[j].x
     const yj = pts[j].y
+    if (yi === yj) continue
     const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi
     if (intersect) inside = !inside
   }

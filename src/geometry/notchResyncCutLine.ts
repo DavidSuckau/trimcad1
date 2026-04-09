@@ -1,4 +1,4 @@
-import type { Curve, Notch, PatternPiece, Point } from '../types/model'
+import type { Curve, Notch, Point } from '../types/model'
 import { outwardNormalAngleAt, totalPathLength, pointAtPathLength } from './curveToPath'
 import {
   getNotchPositionAndAngle,
@@ -6,6 +6,7 @@ import {
   materializeNotchAnchorsOnCutLine,
 } from './notchOnCurve'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
+import { ENDPOINT_EPS_MM, CORNER_T_EPS } from './geometryConstants'
 
 type Nr = { point: Point; curveIndex: number; t: number }
 
@@ -16,8 +17,6 @@ function isTopologyCompatibleForIndexT(oldCutLine: Curve[], newCutLine: Curve[])
   }
   return true
 }
-
-const ENDPOINT_EPS_MM = 1.0
 
 /**
  * Prüft ob altes und neues Segment mindestens einen gemeinsamen Endpunkt haben.
@@ -206,8 +205,6 @@ function finalizeNotch(notch: Notch, nr: Nr, cutLine: Curve[]): Notch {
   return materializeNotchAnchorsOnCutLine(nextFree, cutLine) ?? nextFree
 }
 
-const CORNER_T_EPS = 0.01
-
 /**
  * Prüft ob eine Konturänderung (z. B. Vertex-Drag) eine Kerbe an einen Eckpunkt geschoben hat.
  * Gibt `true` zurück, wenn mindestens eine Kerbe NEU an einer Ecke liegt (t < ε oder t > 1−ε),
@@ -229,28 +226,6 @@ export function notchPushedToCorner(
       if (op && (op.t < CORNER_T_EPS || op.t > 1 - CORNER_T_EPS)) continue
     }
     return true
-  }
-  return false
-}
-
-/**
- * @deprecated Nicht mehr für Treffer/Eckpunkt-Logik verwenden: jede freie Kerbe in Projektionsnähe
- * blockierte fälschlich Ecken. Stattdessen `masterNotchVertexIndexSet` (nur verankerte Kerben).
- * Behalten für Referenz / ggf. Debug.
- */
-export function seamVertexNearProjectedNotch(piece: PatternPiece, seamVertexIndex: number): boolean {
-  const seam = piece.seamLine
-  if (seam.length < 3) return false
-  const n = seam.length
-  const vi = ((seamVertexIndex % n) + n) % n
-  const seamPos = vi === 0 ? seam[0].start : seam[vi - 1].end
-  for (const notch of piece.notches) {
-    const cutPos = getNotchPositionAndAngle(notch, piece.cutLine).position
-    const nrr = nearestCurveIndexAndPoint(cutPos, seam)
-    if (!nrr) continue
-    if (Math.hypot(nrr.point.x - seamPos.x, nrr.point.y - seamPos.y) <= 5.5) {
-      return true
-    }
   }
   return false
 }

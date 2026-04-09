@@ -8,13 +8,13 @@ import {
   outwardNormalAngleAt,
 } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
-
-const VERTEX_T_EPS = 0.05
+import { VERTEX_T_EPS, lerpPt } from './geometryConstants'
 
 /** Innen-Normalenwinkel (Grad) an (curveIndex, t). An Vertices (t≈0 oder t≈1) Winkelhalbierende der beiden Segmente. */
 function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): number {
   const n = curves.length
   if (n === 0) return 0
+  curveIndex = Math.max(0, Math.min(curveIndex, n - 1))
   const toRad = (deg: number) => (deg * Math.PI) / 180
   const toDeg = (rad: number) => (rad * 180) / Math.PI
   const toVector = (deg: number) => ({ x: Math.cos(toRad(deg)), y: Math.sin(toRad(deg)) })
@@ -286,10 +286,6 @@ export function notchCutoutPoints(
 /*  Cut-Line mit eingearbeiteten Notch-V-Kerben                       */
 /* ------------------------------------------------------------------ */
 
-function lerpPt(a: Point, b: Point, t: number): Point {
-  return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) }
-}
-
 function copyCurve(c: Curve): Curve {
   if (c.type === 'line') return { type: 'line', start: { ...c.start }, end: { ...c.end } }
   return { type: 'bezier', start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
@@ -307,6 +303,9 @@ export function extractCurvePortion(
   toT: number
 ): Curve[] {
   const result: Curve[] = []
+  if (curves.length === 0) return result
+  fromCI = Math.max(0, Math.min(fromCI, curves.length - 1))
+  toCI = Math.max(0, Math.min(toCI, curves.length - 1))
   fromT = Math.max(0, Math.min(1, fromT))
   toT = Math.max(0, Math.min(1, toT))
 

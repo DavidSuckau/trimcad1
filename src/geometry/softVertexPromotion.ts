@@ -1,11 +1,6 @@
 import type { Curve, PatternPiece, Point } from '../types/model'
 import { bezierDerivativeAt } from './curveToPath'
-
-function vertexPos(curves: Curve[], vertexIndex: number): Point {
-  const n = curves.length
-  const i = ((vertexIndex % n) + n) % n
-  return i === 0 ? { ...curves[0].start } : { ...curves[i - 1].end }
-}
+import { vertexPosition as vertexPos } from './geometryConstants'
 
 function unit(dx: number, dy: number): Point | null {
   const len = Math.hypot(dx, dy)

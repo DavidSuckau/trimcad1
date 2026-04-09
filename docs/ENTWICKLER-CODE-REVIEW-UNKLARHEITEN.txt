@@ -10,8 +10,10 @@
   • LOP-009, LOP-010, LOP-014, LOP-016: Technik / Code-Review (konkrete
     Codepfade, Doku-Lücken, Seam-as-Master vs. cutLine).
   • LOP-020–041: Produkt, UX, Import/Export-Roadmap, Vision.
+  • LOP-042–056: Code-Qualität, Architektur, Performance, Tooling
+    (aus systematischer Code-Review April 2026).
   Neue Funktionen, Erweiterungen und größere Refactorings: immer als **neuer**
-  LOP-Punkt mit der **nächsten freien ID** (nach 041 fortführen) eintragen;
+  LOP-Punkt mit der **nächsten freien ID** (nach 056 fortführen) eintragen;
   bei Überschneidung mit technischen LOP-Punkten **„Siehe auch LOP-xxx“** setzen.
 
   Legende
@@ -64,6 +66,27 @@
 
 
 ================================================================================
+  LOP-PUNKTE – Übersicht Code-Qualität / Architektur (LOP-042–056)
+================================================================================
+
+  ID        Kategorie              Kurztitel                           Status
+  --------  ---------------------  ----------------------------------  ----------
+  LOP-043   Architektur            WorkspaceCanvas: 6300-Zeilen-Monolith [ ]
+  LOP-044   Architektur            useStore: 2620-Zeilen-Monolith      [ ]
+  LOP-045   Performance    [!]     Breite Store-Subscriptions, kein memo [ ] [!]
+  LOP-050   Qualität               Fehlende Tests für kritische Flows   [ ]
+  LOP-051   Accessibility          A11y-Mängel (Modals, Sidebar, Canvas) [ ]
+  LOP-052   Tooling                ESLint/Prettier einrichten           [~]
+  LOP-053   Performance            Keyboard-useEffect: Listener-Churn   [ ]
+  LOP-055   Performance            Batch-Actions: Mehrfach-set() statt gebündelt [ ]
+  LOP-056   React-Patterns         Index-Keys, Popover-Sync, Viewbox-Konst. [~]
+
+  Erledigt (April 2026): LOP-042 (ErrorBoundary), LOP-046 (deletePiece),
+  LOP-047 (loadProject UI-Reset), LOP-048 (Geometry-Duplikate → geometryConstants.ts),
+  LOP-049 (Input-Guards), LOP-054 (Epsilon-Konstanten zentralisiert).
+
+
+================================================================================
   OFFEN – Technik, nach Dringlichkeit sortiert
 ================================================================================
 
@@ -77,10 +100,24 @@
   LOP-009, LOP-010, LOP-014
   (Schneidet mit Produkt: LOP-020, LOP-021, LOP-030)
 
-  Priorität C (UX-Test oder Lesbarkeit/Wartung)
-  ----------------------------------------------
-  –
+  Priorität B+ (Performance / Nutzererlebnis)
+  --------------------------------------------
+  LOP-045 Store-Subscriptions + fehlende Memoization → unnötige Re-Renders
+  LOP-053 Keyboard-useEffect Listener-Churn bei jeder Interaktion
+  LOP-055 Batch-Actions: viele separate set()-Aufrufe statt gebündelt
+
+  Priorität C (Wartbarkeit / Architektur / Tooling)
+  --------------------------------------------------
+  LOP-043 WorkspaceCanvas aufteilen
+  LOP-044 useStore in Slices aufteilen
+  LOP-050 Fehlende Tests (deletePiece, loadProject, Batch, …)
+  LOP-052 ESLint/Prettier einrichten (tsconfig + engines bereits erledigt)
   (Digitalisierung-Code: auch LOP-022)
+
+  Priorität D (UX-Test / Accessibility / Kosmetik)
+  -------------------------------------------------
+  LOP-051 Accessibility (Modals, Sidebar, Canvas)
+  LOP-056 React-Patterns (Index-Keys, Popover-Sync, Viewbox-Konstanten)
 
 
 ================================================================================
@@ -283,15 +320,209 @@
 
 
 ================================================================================
+  Code-Qualität / Architektur – Detail (LOP-042 … LOP-056)
+  (Quelle: Systematische Code-Review April 2026)
+================================================================================
+
+--- LOP-043 [ ] WorkspaceCanvas: 6.300-Zeilen-Monolith ---------------------
+
+  Kategorie: Architektur / Wartbarkeit
+  Problem:
+  WorkspaceCanvas.tsx (~6.292 Zeilen) enthält: Domain-Mathematik, Hit-Testing,
+  Koordinaten-Transforms, komplette Editor-UX, SVG-Rendering, Pointer-Events,
+  Keyboard-Handling, Overlays/Popover, PieceGroup-Komponente.
+  • Testbarkeit nahezu null (keine Unit-Tests für Canvas-Logik)
+  • Review/Merge extrem aufwändig
+  • HMR und Bundle-Size leiden
+  • PieceGroup (~500 Zeilen) ist intern definiert, nicht memo-isiert
+  • Schwere Nutzung von IIFEs in JSX (z. B. ~Zeile 1114–1200, 4852+)
+
+  Empfehlung:
+  Schrittweise aufteilen: PieceGroup → eigene Datei; Pointer-Hooks → eigene
+  Hooks; Hit-Testing/Koordinaten → utility; Keyboard-Handler → eigener Hook.
+  Aufwand: hoch. Impact: langfristig Wartbarkeit, Testbarkeit.
+
+
+--- LOP-044 [ ] useStore: 2.620-Zeilen-Monolith ----------------------------
+
+  Kategorie: Architektur / Wartbarkeit
+  Problem:
+  Alle Actions, State-Felder, Hilfsfunktionen in einer Datei (~2.620 Zeilen).
+  Store-Interface (~Zeile 276–516), freie Helpers (~65–634), Implementierung
+  (~636–2619).
+
+  Empfehlung:
+  In Zustand-Slices aufteilen (z. B. workspaceSlice, pieceGeometrySlice,
+  seamSlice, uiSlice, digitizeSlice). Pure Helpers (deriveCutLineForPiece,
+  adjustSeamAfterInsert, mergeAdjacentSegments, digitizeNodesToCurves) in
+  eigene Module auslagern. Store-Interface exportieren.
+  Aufwand: hoch. Impact: Wartbarkeit, Review, Merge-Konflikte.
+
+
+--- LOP-045 [ ] [!] Performance: Breite Store-Subscriptions + kein memo -----
+
+  Kategorie: Performance
+  Problem:
+  WorkspaceCanvas (~1283–1385), Sidebar (~4), DesignBar (~4–15), Toolbar (~61+)
+  ziehen viele Felder ohne Selektoren aus dem Store (useStore() statt
+  useStore(s => s.field)). Jede Store-Änderung triggert Re-Renders dieser
+  großen Komponenten.
+  Zusätzlich: PieceGroup hat kein React.memo; Inline-Handler in pieces.map
+  (~4769–4831) erzeugen bei jedem Render neue Funktions-Instanzen.
+  handlePointerMove useCallback (~2979–3107) hat große Dependency-Liste,
+  Identity wechselt häufig.
+
+  Empfehlung:
+  1. Granulare Selektoren einführen (useStore(s => s.pieces) etc.)
+  2. PieceGroup mit React.memo wrappen
+  3. Inline-Handler durch useCallback oder stabile Referenzen ersetzen
+  Aufwand: mittel. Impact: massive Performance-Verbesserung.
+
+
+--- LOP-050 [ ] Fehlende Tests für kritische Store-Flows --------------------
+
+  Kategorie: Qualität / Vertrauen
+  Problem:
+  Vorhanden und gut: setVertexSoft, batchDeleteFiltered (Soft-Vertex),
+  recomputeSeamLine, adjustSeamNotches, removeVertex, insertPointOnCutLine,
+  notchResync, updatePiece/applyOffset.
+  NICHT getestet:
+  • deletePiece (insbes. verwaiste seamAssignments, LOP-046)
+  • loadProjectFromFile (UI-Residue, Konfigurator-State, LOP-047)
+  • addSeamAssignment, checkSeamAdjustment, updateSeamAssignmentMeta
+  • applyMassstab
+  • batchDeleteFiltered / batchDeleteMarqueeCompletePieces (Multi-Piece)
+  • updateVertex (kein eigener dedizierter Test)
+  • exitAllModes
+
+  Empfehlung:
+  Schrittweise Tests ergänzen, priorisiert nach Bug-Risiko (deletePiece,
+  loadProject zuerst).
+
+
+--- LOP-051 [ ] Accessibility-Mängel (Modals, Sidebar, Canvas) --------------
+
+  Kategorie: Accessibility / UX
+  Problem:
+  • Canvas (WorkspaceCanvas): kein role, kein aria-label, keine
+    Focus-Verwaltung für Screen-Reader.
+  • Sidebar (~12–16): <li onClick> ohne tabIndex / role="button" → nicht
+    per Tastatur bedienbar.
+  • Context-Menus: role="menu" aber Buttons ohne role="menuitem", keine
+    Pfeiltasten-Navigation.
+  • Modale: inkonsistent – HelpModal hat korrektes role="dialog" + aria-modal,
+    aber MassstabModal, SeamAssignmentMetaModal, ConfiguratorModal fehlen diese.
+  • DesignBar: kein aria auf dem footer-Gruppencontainer.
+
+  Empfehlung:
+  Langfristig ARIA-Pattern für Modals, Menüs und Sidebar vereinheitlichen.
+  Kurzfristig: Sidebar-Rows focusbar machen, Modal-role konsistent setzen.
+  Aufwand: mittel. Impact: Barrierefreiheit, ggf. gesetzliche Anforderungen.
+
+
+--- LOP-052 [~] Tooling: ESLint/Prettier einrichten ------------------------
+
+  Kategorie: Tooling / Developer Experience
+
+  Erledigt (April 2026):
+  ✓ tsconfig.app.json entfernt (war identische Kopie, nirgends referenziert)
+  ✓ engines-Feld in package.json ergänzt (node >= 20)
+
+  Noch offen:
+  1. Kein ESLint oder Prettier im Repo konfiguriert → Code-Style-Konsistenz
+     nicht erzwungen.
+  2. Build-Script nutzt tsc -b (Project-Build-Mode), aber tsconfig hat weder
+     composite noch references → nicht der vorgesehene Anwendungsfall.
+
+  Empfehlung:
+  ESLint + Prettier einrichten (auch schrittweise mit wenigen Regeln).
+  Aufwand: gering–mittel.
+
+
+--- LOP-053 [ ] Performance: Keyboard-useEffect + Listener-Churn -----------
+
+  Kategorie: Performance
+  Problem:
+  WorkspaceCanvas Global-Keyboard-Handler (~Zeile 3222–3690): sehr großes
+  Dependency-Array mit häufig wechselnden Werten (pieces, hovered*, dragging,
+  cutSeamSwappedSet etc.). Der document-Listener wird bei fast jeder
+  Interaktion neu registriert (remove + add).
+  Mehrere separate useEffects registrieren document-Level-Listener
+  (pointerdown, auxclick, keydown) → hohe Gesamt-Listener-Anzahl.
+
+  Empfehlung:
+  Refs für aktuellen State statt Dependencies; oder ein einzelner stabiler
+  Dispatcher mit Ref-basiertem Zugriff. Listener-Konsolidierung.
+  Aufwand: mittel. Impact: weniger Event-Churn bei aktiver Nutzung.
+
+
+--- LOP-055 [ ] Batch-Actions: Mehrfach-set() statt gebündelt ---------------
+
+  Kategorie: Performance / Korrektheit
+  Problem:
+  batchSetVerticesSoft (~827–832), batchDeleteFiltered (~835–889),
+  batchDeleteMarqueeCompletePieces (~892–915), snapSeamEdgeToMatch (~1401),
+  rotatePiece90 (~2339–2340), alignPieceToGrain (~2352–2388),
+  regenerateConfiguratorPart (~995–1023) – alle feuern mehrere separate
+  set()/get().action()-Aufrufe. Logisch eine User-Operation, aber:
+  • N Subscriber-Notifications / React-Re-Renders
+  • Zwischenstände existieren (inkonsistenter State zwischen Iterations)
+  • Fragil bei zukünftiger Middleware oder Async
+
+  Empfehlung:
+  Zusammenfassende set()-Aufrufe wo möglich; oder Zustand batch-Middleware.
+  Aufwand: mittel.
+
+
+--- LOP-056 [~] React-Patterns: Index-Keys, Popover-Sync, Viewbox-Konst. ---
+
+  Kategorie: React-Patterns / Kosmetik
+
+  Erledigt (April 2026):
+  ✓ Toter Code _projectOntoSegment + void-Silencer aus WorkspaceCanvas entfernt
+  ✓ Deprecated seamVertexNearProjectedNotch aus notchResyncCutLine entfernt
+
+  Noch offen:
+  1. Index-Keys wo Listen sich ändern können: Digitize-Preview
+     key={`dig-pt-${i}`}, NotchSettings key={i},
+     RockGeneratorModal dart lines key={idx}.
+  2. EdgeAllowancePopover: useEffect(…, []) läuft nur bei Mount; wenn Popover
+     gemountet bleibt und popover.currentMm wechselt, kann lokaler value-State
+     veraltet sein.
+  3. Doppelte Viewbox-Konstanten: VIEWBOX_CX/CY in Toolbar.tsx getrennt von
+     VIEWBOX_WIDTH/HEIGHT in WorkspaceCanvas → zwei Quellen der Wahrheit.
+  4. @ts-expect-error in offset.ts für clipper-lib umgeht TS-Safety.
+
+  Empfehlung:
+  Keys auf stabile IDs umstellen; Popover key von pieceId+edgeIndex;
+  Viewbox-Konstanten zentralisieren.
+  Aufwand: gering–mittel.
+
+
+================================================================================
   ANHANG B: Empfohlene Maßnahmen (Technik, konsolidiert)
 ================================================================================
 
-  Nächste sinnvolle Schritte (offen):
-  1. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
-  2. LOP-009/010 Notch-Modell-/Verankerung weiter konsolidieren
-  3. LOP-010 / LOP-009 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
-  4. LOP-014 DXF-Doku/Writer-Abgrenzung (mit LOP-020/030)
-  5. LOP-041 UX-Feintuning
+  Nächste sinnvolle Schritte (offen, nach Aufwand/Impact sortiert):
+
+  Mittlerer Aufwand, hoher Impact:
+  1. LOP-045 Store-Selektoren in WorkspaceCanvas, Toolbar, Sidebar einführen
+  2. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
+  3. LOP-050 Tests für deletePiece, loadProject, Batch ergänzen
+
+  Bestehende Technik-LOP (weiterhin offen):
+  4. LOP-009/010 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
+  5. LOP-014 DXF-Doku/Writer-Abgrenzung (mit LOP-020/030)
+
+  Langfristige Architektur:
+  6. LOP-043 WorkspaceCanvas aufteilen
+  7. LOP-044 useStore in Slices aufteilen
+  8. LOP-053 Keyboard-Handler stabilisieren
+  9. LOP-052 ESLint/Prettier einrichten
+  10. LOP-055 Batch-Actions gebündelt
+  11. LOP-051 Accessibility verbessern
+  12. LOP-056 React-Patterns (Index-Keys, Popover, Viewbox)
+  13. LOP-041 UX-Feintuning
 
 
 ================================================================================
@@ -309,12 +540,39 @@
   • LOP-021 Notch-System
   • LOP-028 Nahtlogik
   • LOP-025 Kurvenbearbeitung (Rest v. a. Produkt)
+  • LOP-045 Performance: Store-Subscriptions + Memoization
+  • LOP-050 Fehlende Tests für kritische Flows
+
+  Architektur / Wartbarkeit (mittelfristig)
+  ------------------------------------------
+  • LOP-043 WorkspaceCanvas aufteilen
+  • LOP-044 useStore in Slices
+  • LOP-052 Tooling (ESLint/Prettier)
+  • LOP-053 Keyboard-Handler Performance
+  • LOP-055 Batch-Actions gebündelt
 
   Erweiterung / später
   --------------------
   • LOP-034 Automatisierungen, LOP-035 Konfiguratoren
   • LOP-038 Materialdatenbank, LOP-039 Produktionsintegration
   • LOP-030–032, LOP-036–037, LOP-040–041 je nach Roadmap
+  • LOP-051 Accessibility
+  • LOP-056 React-Patterns (Kosmetik)
+
+  Erledigt (April 2026, Code-Review-Runde)
+  -----------------------------------------
+  ✓ LOP-042 Error Boundary (ErrorBoundary.tsx + App.tsx)
+  ✓ LOP-046 deletePiece: seamAssignments bereinigt
+  ✓ LOP-047 loadProjectFromFile: fehlende UI-Resets ergänzt
+  ✓ LOP-048 Geometry-Duplikate → geometryConstants.ts (samePoint, lerpPt,
+    vertexPosition, bezierAt, curveMidpoint, ptEq)
+  ✓ LOP-049 Input-Guards (pointInPolygon, pathLengthAt, outwardNormalAngleAt,
+    extractCurvePortion, inwardNormalAngleAt)
+  ✓ LOP-054 Epsilon-Konstanten zentralisiert (VERTEX_T_EPS, CORNER_T_EPS,
+    ENDPOINT_EPS_MM, POINT_EPS_MM in geometryConstants.ts)
+  ✓ LOP-052 teilw. (tsconfig.app.json entfernt, engines in package.json)
+  ✓ LOP-056 teilw. (toter Code entfernt: _projectOntoSegment,
+    seamVertexNearProjectedNotch)
 
 
 ================================================================================

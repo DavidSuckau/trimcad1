@@ -17,6 +17,7 @@ import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 import { applySharpCornerPromotion } from './softVertexPromotion'
 import { getCurvesForSeamEdge } from './seamUtils'
 import { pieceLocalToWorld } from './pieceTransform'
+import { samePoint as samePointDefault, vertexPosition as vertexAt } from './geometryConstants'
 
 export const SEAM_ASSIGNMENT_CUT_TRIM_ENABLED = true
 
@@ -29,13 +30,7 @@ const CUT_VERTEX_MATCH_MM = 22
 const EPS = 1e-9
 
 function samePoint(a: Point, b: Point, eps = 1e-4): boolean {
-  return Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps
-}
-
-function vertexAt(curves: Curve[], vi: number): Point {
-  const n = curves.length
-  const i = ((vi % n) + n) % n
-  return i === 0 ? { ...curves[0].start } : { ...curves[i - 1].end }
+  return samePointDefault(a, b, eps)
 }
 
 function allLineSegments(curves: Curve[]): boolean {

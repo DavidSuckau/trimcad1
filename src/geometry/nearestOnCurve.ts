@@ -1,4 +1,5 @@
 import type { Point, Curve, BezierCurve } from '../types/model'
+import { bezierAt } from './curveToPath'
 
 /** Nächster Punkt auf einer Strecke (Start–Ende), beschränkt auf die Strecke; t in [0,1]. */
 function nearestPointOnSegment(
@@ -15,19 +16,6 @@ function nearestPointOnSegment(
   const q = { x: start.x + t * dx, y: start.y + t * dy }
   const distSq = (p.x - q.x) ** 2 + (p.y - q.y) ** 2
   return { point: q, distSq, t }
-}
-
-/** Kubische Bézier auswerten: B(t) = (1-t)³P0 + 3(1-t)²t P1 + 3(1-t)t² P2 + t³ P3 */
-function bezierAt(b: BezierCurve, t: number): Point {
-  const u = 1 - t
-  const u2 = u * u
-  const u3 = u2 * u
-  const t2 = t * t
-  const t3 = t2 * t
-  return {
-    x: u3 * b.start.x + 3 * u2 * t * b.cp1.x + 3 * u * t2 * b.cp2.x + t3 * b.end.x,
-    y: u3 * b.start.y + 3 * u2 * t * b.cp1.y + 3 * u * t2 * b.cp2.y + t3 * b.end.y,
-  }
 }
 
 /** Nächster Punkt auf einer kubischen Bézier-Kurve (Stichproben + Verfeinerung); liefert Punkt und Parameter t. */

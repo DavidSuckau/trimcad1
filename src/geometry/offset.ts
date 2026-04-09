@@ -1,5 +1,6 @@
 import type { Curve, Point } from '../types/model'
 import { bezierAt, outwardNormalAngleAt, signedAreaCurves, curvesBounds } from './curveToPath'
+import { samePoint } from './geometryConstants'
 // @ts-expect-error clipper-lib has no types
 import ClipperLib from 'clipper-lib'
 
@@ -33,10 +34,6 @@ export type OffsetOptions = {
   miterLimit?: number
   /** Douglas-Peucker Toleranz (mm); kleiner = Eckpunkte bleiben erhalten */
   simplifyTolerance?: number
-}
-
-function samePoint(a: Point, b: Point, eps = 1e-6): boolean {
-  return Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps
 }
 
 /** Kurven in Punktliste umwandeln; Bézier wird fein abgetastet, damit die Naht oben der Kurve folgt. */
@@ -818,9 +815,7 @@ export function offsetClosedPolygonVariable(
   return { lineCurves: segs, success: true }
 }
 
-function ptEq(a: Point, b: Point, eps = 1e-6): boolean {
-  return Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps
-}
+const ptEq = samePoint
 
 /** Prüft ob Nahtzugabe für die Kontur gültig ist. */
 export function validateSeamAllowance(

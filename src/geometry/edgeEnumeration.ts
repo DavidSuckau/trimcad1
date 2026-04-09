@@ -1,4 +1,5 @@
 import type { PatternPiece, EdgeSeamAllowance, ProfileAssignment, Curve, Point } from '../types/model'
+import { bezierAt } from './curveToPath'
 import { masterSoftVertexIndexSet, masterNotchVertexIndexSet } from './seamUtils'
 import { getCurvesForSeamEdge } from './seamUtils'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
@@ -117,11 +118,7 @@ function curveMidpoint(c: Curve): Point {
   if (c.type === 'line') {
     return { x: (c.start.x + c.end.x) / 2, y: (c.start.y + c.end.y) / 2 }
   }
-  const t = 0.5, mt = 0.5
-  return {
-    x: mt * mt * mt * c.start.x + 3 * mt * mt * t * c.cp1.x + 3 * mt * t * t * c.cp2.x + t * t * t * c.end.x,
-    y: mt * mt * mt * c.start.y + 3 * mt * mt * t * c.cp1.y + 3 * mt * t * t * c.cp2.y + t * t * t * c.end.y,
-  }
+  return bezierAt(c, 0.5)
 }
 
 /**

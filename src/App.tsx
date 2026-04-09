@@ -6,22 +6,27 @@ import { DesignBar } from './components/DesignBar'
 import { HelpModal } from './components/HelpModal'
 import { ShortcutListModal } from './components/ShortcutListModal'
 import { PiecePropertiesModal } from './components/PiecePropertiesModal'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 export default function App() {
   return (
-    <div className="app">
-      <Toolbar />
-      <div className="app-body">
-        <Sidebar />
-        <main className="workspace-wrap">
-          <WorkspaceCanvas />
-          <WorkspaceAiChatPanel />
-        </main>
+    <ErrorBoundary>
+      <div className="app">
+        <Toolbar />
+        <div className="app-body">
+          <Sidebar />
+          <main className="workspace-wrap">
+            <ErrorBoundary>
+              <WorkspaceCanvas />
+            </ErrorBoundary>
+            <WorkspaceAiChatPanel />
+          </main>
+        </div>
+        <DesignBar />
+        <HelpModal />
+        <ShortcutListModal />
+        <PiecePropertiesModal />
       </div>
-      <DesignBar />
-      <HelpModal />
-      <ShortcutListModal />
-      <PiecePropertiesModal />
-    </div>
+    </ErrorBoundary>
   )
 }

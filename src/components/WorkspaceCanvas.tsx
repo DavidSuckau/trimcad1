@@ -478,18 +478,6 @@ function curveMidpoint(c: Curve): Point {
   return bezierAt(c, 0.5)
 }
 
-/** Projektion von p auf die Strecke [a, b]; Ergebnis bleibt auf der Linie. */
-function _projectOntoSegment(p: Point, a: Point, b: Point): Point {
-  const dx = b.x - a.x
-  const dy = b.y - a.y
-  const lenSq = dx * dx + dy * dy
-  if (lenSq < 1e-12) return { ...a }
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq
-  t = Math.max(0, Math.min(1, t))
-  return { x: a.x + t * dx, y: a.y + t * dy }
-}
-void _projectOntoSegment
-
 /** Snap-Distanz für Linial (mm); Eckpunkte, normale Punkte, Kurvenpunkte */
 const RULER_SNAP_DISTANCE = 18
 

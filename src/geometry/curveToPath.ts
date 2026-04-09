@@ -1,8 +1,5 @@
 import type { Curve, BezierCurve, Point } from '../types/model'
-
-function lerp(a: Point, b: Point, t: number): Point {
-  return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) }
-}
+import { lerpPt as lerp } from './geometryConstants'
 
 /** Kubische Bézier bei t auswerten: B(t). */
 export function bezierAt(b: BezierCurve, t: number): Point {
@@ -241,11 +238,13 @@ function bezierToD(c: {
 
 /** Bogenlänge vom Konturstart bis zu (curveIndex, t) in mm. */
 export function pathLengthAt(curves: Curve[], curveIndex: number, t: number): number {
+  if (curves.length === 0) return 0
+  const ci = Math.max(0, Math.min(curveIndex, curves.length - 1))
   let acc = 0
-  for (let i = 0; i < curveIndex; i++) {
+  for (let i = 0; i < ci; i++) {
     acc += curveSegmentArcLength(curves[i], 0, 1)
   }
-  acc += curveSegmentArcLength(curves[curveIndex], 0, t)
+  acc += curveSegmentArcLength(curves[ci], 0, Math.max(0, Math.min(1, t)))
   return acc
 }
 
@@ -391,7 +390,9 @@ export function signedAreaCurves(curves: Curve[]): number {
 
 /** Außen-Normalenwinkel in Grad – bestimmt Richtung über Umlaufsinn (Winding) statt Centroid. */
 export function outwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): number {
-  const c = curves[curveIndex]
+  if (curves.length === 0) return 0
+  const ci = Math.max(0, Math.min(curveIndex, curves.length - 1))
+  const c = curves[ci]
   let tx: number
   let ty: number
   if (c.type === 'line') {

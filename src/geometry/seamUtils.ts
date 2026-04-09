@@ -4,6 +4,7 @@ import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion } from './notchOnCurve'
 import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
+import { vertexPosition as vertexPositionOnClosedCurves } from './geometryConstants'
 
 /**
  * Kontur für Nahtzuordnung und dieselbe **Master-/Editing-Kontur** wie UI/Vertex-Logik.
@@ -18,12 +19,6 @@ export function getCurvesForSeamEdge(piece: PatternPiece): Curve[] {
 
 /** Alias: dieselbe Kurve wie {@link getCurvesForSeamEdge} (Editing-/Master-Kontur). */
 export const getEditingContour = getCurvesForSeamEdge
-
-function vertexPositionOnClosedCurves(curves: Curve[], vertexIndex: number): Point {
-  const n = curves.length
-  const vi = ((vertexIndex % n) + n) % n
-  return vi === 0 ? { ...curves[0].start } : { ...curves[vi - 1].end }
-}
 
 /** Toleranz Cut→Master: gleiche „logische Ecke“ trotz Offset (mm). */
 const MAP_CUT_TO_MASTER_EPS_MM = 8
