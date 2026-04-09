@@ -386,7 +386,7 @@ export function RockGeneratorModal() {
     measures.rocklaengeCm > 10
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={() => setShowRockGeneratorModal(false)} role="presentation">
+    <div className="nahtzugabe-dialog-overlay" onClick={() => setShowRockGeneratorModal(false)} role="dialog" aria-modal="true" aria-label="Rock-Konfigurator">
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 820 }}>
         <h3 className="nahtzugabe-dialog-title">Rock-Konfigurator (Generator)</h3>
 

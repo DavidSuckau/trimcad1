@@ -35,7 +35,7 @@ export function SettingsModal() {
   if (!showSettingsModal) return null
 
   return (
-    <div className="settings-overlay" onClick={() => setShowSettingsModal(false)}>
+    <div className="settings-overlay" onClick={() => setShowSettingsModal(false)} role="dialog" aria-modal="true" aria-label="Einstellungen">
       <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h2 className="settings-title">Einstellungen</h2>

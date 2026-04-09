@@ -28,7 +28,7 @@ export function DesignBar() {
   ]
 
   return (
-    <footer className="design-bar">
+    <footer className="design-bar" role="toolbar" aria-label="Anzeige-Optionen">
       {items.map((item) => (
         <label key={item.label} className="design-bar-item">
           <input

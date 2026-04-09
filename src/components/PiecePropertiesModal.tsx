@@ -32,7 +32,9 @@ export function PiecePropertiesModal() {
     <div
       className="nahtzugabe-dialog-overlay"
       onClick={() => setPiecePropertiesDialogPieceId(null)}
-      role="presentation"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Teil-Eigenschaften"
     >
       <div className="nahtzugabe-dialog" style={{ minWidth: 320 }} onClick={(e) => e.stopPropagation()}>
         <h3 className="nahtzugabe-dialog-title">Teil-Eigenschaften</h3>

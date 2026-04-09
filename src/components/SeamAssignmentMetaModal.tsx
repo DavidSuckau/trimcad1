@@ -55,7 +55,7 @@ export function SeamAssignmentMetaModal() {
   }
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={() => setSeamAssignmentMetaDialogId(null)}>
+    <div className="nahtzugabe-dialog-overlay" onClick={() => setSeamAssignmentMetaDialogId(null)} role="dialog" aria-modal="true" aria-label="Nahtzuordnung">
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 340 }}>
         <h3 className="nahtzugabe-dialog-title">Nahtzuordnung</h3>
         <p className="nahtzugabe-dialog-hint" style={{ marginBottom: '0.75rem' }}>

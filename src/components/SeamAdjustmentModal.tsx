@@ -48,7 +48,7 @@ export function SeamAdjustmentModal() {
   const canAdjust = !notchMismatch && ncA >= 1 && diffs.length > 0
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={() => setSeamAdjustmentDialog(null)}>
+    <div className="nahtzugabe-dialog-overlay" onClick={() => setSeamAdjustmentDialog(null)} role="dialog" aria-modal="true" aria-label="Nahtanpassung">
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 320 }}>
         <h3 className="nahtzugabe-dialog-title">Nahtanpassung</h3>
 

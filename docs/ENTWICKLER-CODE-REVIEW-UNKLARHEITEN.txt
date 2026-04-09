@@ -29,7 +29,7 @@
 
  ID        Kurztitel                                    Status
  --------  -------------------------------------------  ----------
- LOP-009   NotchType: strich/kerbe vs. single/double/v  [ ]
+ LOP-009   NotchType: strich/kerbe vs. single/double/v  [~]
  LOP-010   Notch vertexIndex: cutLine vs. Master        [~]
  LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [ ]
  LOP-016   removeNotch/toggleNotch/addCurve, flipGrain  [~] [!]
@@ -73,17 +73,18 @@
   --------  ---------------------  ----------------------------------  ----------
   LOP-043   Architektur            WorkspaceCanvas: 6300-Zeilen-Monolith [ ]
   LOP-044   Architektur            useStore: 2620-Zeilen-Monolith      [ ]
-  LOP-045   Performance    [!]     Breite Store-Subscriptions, kein memo [ ] [!]
-  LOP-050   Qualität               Fehlende Tests für kritische Flows   [ ]
-  LOP-051   Accessibility          A11y-Mängel (Modals, Sidebar, Canvas) [ ]
+  LOP-045   Performance    [!]     Breite Store-Subscriptions, kein memo [~] [!]
+  LOP-050   Qualität               Fehlende Tests für kritische Flows   [~]
+  LOP-051   Accessibility          A11y-Mängel (Modals, Sidebar, Canvas) [~]
   LOP-052   Tooling                ESLint/Prettier einrichten           [~]
-  LOP-053   Performance            Keyboard-useEffect: Listener-Churn   [ ]
-  LOP-055   Performance            Batch-Actions: Mehrfach-set() statt gebündelt [ ]
-  LOP-056   React-Patterns         Index-Keys, Popover-Sync, Viewbox-Konst. [~]
+  LOP-055   Performance            Batch-Actions: Mehrfach-set() statt gebündelt [~]
+  LOP-057   Bug [!]                Harte Vertices → soft bei Seam-CutLine-Rebuild [✓]
 
   Erledigt (April 2026): LOP-042 (ErrorBoundary), LOP-046 (deletePiece),
   LOP-047 (loadProject UI-Reset), LOP-048 (Geometry-Duplikate → geometryConstants.ts),
-  LOP-049 (Input-Guards), LOP-054 (Epsilon-Konstanten zentralisiert).
+  LOP-049 (Input-Guards), LOP-053 (Keyboard-Listener-Churn → Ref-Pattern),
+  LOP-054 (Epsilon-Konstanten zentralisiert),
+  LOP-056 (Viewbox-Konstanten, Popover-Key, Index-Keys geprüft, toter Code).
 
 
 ================================================================================
@@ -103,7 +104,6 @@
   Priorität B+ (Performance / Nutzererlebnis)
   --------------------------------------------
   LOP-045 Store-Subscriptions + fehlende Memoization → unnötige Re-Renders
-  LOP-053 Keyboard-useEffect Listener-Churn bei jeder Interaktion
   LOP-055 Batch-Actions: viele separate set()-Aufrufe statt gebündelt
 
   Priorität C (Wartbarkeit / Architektur / Tooling)
@@ -117,21 +117,34 @@
   Priorität D (UX-Test / Accessibility / Kosmetik)
   -------------------------------------------------
   LOP-051 Accessibility (Modals, Sidebar, Canvas)
-  LOP-056 React-Patterns (Index-Keys, Popover-Sync, Viewbox-Konstanten)
 
 
 ================================================================================
  OFFEN – Detail je technischem LOP-Punkt (LOP-009 … LOP-016)
 ================================================================================
 
---- LOP-009 [ ] NotchType: zwei Typ-Systeme -------------------------------
+--- LOP-009 [~] NotchType: zwei Typ-Systeme (Mapping dokumentiert) ---------
 
   Problem:
   model.ts: 'single' | 'double' | 'v' vs. useStore NotchSetting: 'strich' | 'kerbe'.
   Mapping nicht auf einen Blick ersichtlich.
 
+  Dokumentiertes Mapping (April 2026):
+  ┌─────────────────────────────┬──────────────────────────────┐
+  │ UI-Preset (NotchSetting)    │ Modell (model.ts NotchType)  │
+  ├─────────────────────────────┼──────────────────────────────┤
+  │ 'strich'                    │ 'single'  (Linie, kein V)    │
+  │ 'kerbe'                     │ 'v'       (V-Einschnitt)     │
+  │ 'keine'                     │ (kein Notch erzeugt)         │
+  └─────────────────────────────┴──────────────────────────────┘
+  Konvertierung: modelNotchFieldsFromPreset() in WorkspaceCanvas.tsx (Zeile ~88).
+  Rückrichtung: findMatchingNotchPresetIndex() in WorkspaceCanvas.tsx (Zeile ~146).
+  'double' existiert im Modell, wird aber aktuell von keinem UI-Preset erzeugt
+  (reserviert für LOP-021: erweiterte Notch-Typen).
+
   Empfehlung:
-  Mapping dokumentieren oder einheitliches Typsystem.
+  Bei Erweiterung (LOP-021) einheitliches Typsystem oder explizite Mapping-
+  Tabelle in eigener Datei. Aktuell reicht die Doku oben.
   Siehe auch LOP-021 (Produkt: mehrere Notch-Typen / Nutzerwahl).
 
 
@@ -359,65 +372,74 @@
   Aufwand: hoch. Impact: Wartbarkeit, Review, Merge-Konflikte.
 
 
---- LOP-045 [ ] [!] Performance: Breite Store-Subscriptions + kein memo -----
+--- LOP-045 [~] [!] Performance: Breite Store-Subscriptions + kein memo -----
 
   Kategorie: Performance
-  Problem:
-  WorkspaceCanvas (~1283–1385), Sidebar (~4), DesignBar (~4–15), Toolbar (~61+)
-  ziehen viele Felder ohne Selektoren aus dem Store (useStore() statt
-  useStore(s => s.field)). Jede Store-Änderung triggert Re-Renders dieser
-  großen Komponenten.
-  Zusätzlich: PieceGroup hat kein React.memo; Inline-Handler in pieces.map
-  (~4769–4831) erzeugen bei jedem Render neue Funktions-Instanzen.
-  handlePointerMove useCallback (~2979–3107) hat große Dependency-Liste,
-  Identity wechselt häufig.
 
-  Empfehlung:
+  Erledigt (April 2026):
+  ✓ PieceGroup mit React.memo gewrapped (memo(function PieceGroup(...)))
+
+  Noch offen:
+  • WorkspaceCanvas (~1283–1385), Sidebar (~4), DesignBar (~4–15), Toolbar (~61+)
+    ziehen viele Felder ohne Selektoren aus dem Store (useStore() statt
+    useStore(s => s.field)). Jede Store-Änderung triggert Re-Renders dieser
+    großen Komponenten.
+  • Inline-Handler in pieces.map erzeugen bei jedem Render neue Funktions-Instanzen.
+  • handlePointerMove useCallback hat große Dependency-Liste, Identity wechselt
+    häufig.
+
+  Empfehlung (Rest):
   1. Granulare Selektoren einführen (useStore(s => s.pieces) etc.)
-  2. PieceGroup mit React.memo wrappen
-  3. Inline-Handler durch useCallback oder stabile Referenzen ersetzen
-  Aufwand: mittel. Impact: massive Performance-Verbesserung.
+  2. Inline-Handler durch useCallback oder stabile Referenzen ersetzen
+  Aufwand: mittel. Impact: weitere Performance-Verbesserung.
 
 
---- LOP-050 [ ] Fehlende Tests für kritische Store-Flows --------------------
+--- LOP-050 [~] Fehlende Tests für kritische Store-Flows --------------------
 
   Kategorie: Qualität / Vertrauen
-  Problem:
-  Vorhanden und gut: setVertexSoft, batchDeleteFiltered (Soft-Vertex),
-  recomputeSeamLine, adjustSeamNotches, removeVertex, insertPointOnCutLine,
-  notchResync, updatePiece/applyOffset.
-  NICHT getestet:
-  • deletePiece (insbes. verwaiste seamAssignments, LOP-046)
-  • loadProjectFromFile (UI-Residue, Konfigurator-State, LOP-047)
+
+  Erledigt (April 2026):
+  ✓ deletePiece.test.ts (8 Tests: verwaiste seamAssignments, Notizen, Profile,
+    selectedPieceIds, Dialog-IDs)
+  ✓ loadProject.test.ts (10 Tests: configuratorModal, rockGenerator,
+    profileDialog, seamAdjustment, Modals, Toasts, Teile-Selektion)
+  ✓ exitAllModes.test.ts (5 Tests: tool, Dialog-IDs, Modals, Batch, UI-Flags)
+  ✓ updateVertex.test.ts (4 Tests: Vertex 0, innerer Vertex, unbekannte ID,
+    ungültiger Index)
+  ✓ applyMassstab.test.ts (4 Tests: Skalierung, Fehler bei ungültiger Länge,
+    kein Dialog, tool-Reset)
+  ✓ softVertexStability.test.ts (3 Tests: harte Vertices bleiben hart)
+
+  Noch nicht getestet:
   • addSeamAssignment, checkSeamAdjustment, updateSeamAssignmentMeta
-  • applyMassstab
-  • batchDeleteFiltered / batchDeleteMarqueeCompletePieces (Multi-Piece)
-  • updateVertex (kein eigener dedizierter Test)
-  • exitAllModes
+  • batchDeleteMarqueeCompletePieces (Multi-Piece)
 
   Empfehlung:
-  Schrittweise Tests ergänzen, priorisiert nach Bug-Risiko (deletePiece,
-  loadProject zuerst).
+  SeamAssignment-Tests bei Bedarf ergänzen (derzeit geringeres Bug-Risiko).
 
 
---- LOP-051 [ ] Accessibility-Mängel (Modals, Sidebar, Canvas) --------------
+--- LOP-051 [~] Accessibility-Mängel (Modals, Sidebar, Canvas) --------------
 
   Kategorie: Accessibility / UX
-  Problem:
-  • Canvas (WorkspaceCanvas): kein role, kein aria-label, keine
-    Focus-Verwaltung für Screen-Reader.
-  • Sidebar (~12–16): <li onClick> ohne tabIndex / role="button" → nicht
-    per Tastatur bedienbar.
-  • Context-Menus: role="menu" aber Buttons ohne role="menuitem", keine
-    Pfeiltasten-Navigation.
-  • Modale: inkonsistent – HelpModal hat korrektes role="dialog" + aria-modal,
-    aber MassstabModal, SeamAssignmentMetaModal, ConfiguratorModal fehlen diese.
-  • DesignBar: kein aria auf dem footer-Gruppencontainer.
 
-  Empfehlung:
-  Langfristig ARIA-Pattern für Modals, Menüs und Sidebar vereinheitlichen.
-  Kurzfristig: Sidebar-Rows focusbar machen, Modal-role konsistent setzen.
-  Aufwand: mittel. Impact: Barrierefreiheit, ggf. gesetzliche Anforderungen.
+  Erledigt (April 2026):
+  ✓ Canvas SVG: role="img" + aria-label="Schnittmuster-Arbeitsfläche"
+  ✓ Sidebar: <li> mit role="button", tabIndex={0}, onKeyDown (Enter/Space),
+    aria-selected
+  ✓ Alle 8 Modals ohne role="dialog": jetzt konsistent role="dialog" +
+    aria-modal="true" + aria-label (SettingsModal, MassstabModal,
+    PiecePropertiesModal, StuecklisteModal, ConfiguratorModal,
+    RockGeneratorModal, SeamAssignmentMetaModal, SeamAdjustmentModal)
+
+  ✓ DesignBar: role="toolbar" + aria-label="Anzeige-Optionen" auf footer
+  ✓ Context-Menus: grainContextMenu und pieceContextMenu mit role="menu" +
+    aria-label; workspaceImageQuickMenu hatte role="menu" bereits
+
+  Noch offen:
+  • Focus-Trap in Modals (Tab-Reihenfolge bleibt aktuell nicht im Modal).
+  • Pfeiltasten-Navigation innerhalb Context-Menus.
+
+  Aufwand (Rest): mittel. Impact: Barrierefreiheit.
 
 
 --- LOP-052 [~] Tooling: ESLint/Prettier einrichten ------------------------
@@ -428,75 +450,106 @@
   ✓ tsconfig.app.json entfernt (war identische Kopie, nirgends referenziert)
   ✓ engines-Feld in package.json ergänzt (node >= 20)
 
+  ✓ Build-Script: tsc -b → tsc korrigiert (kein composite/references vorhanden)
+
   Noch offen:
   1. Kein ESLint oder Prettier im Repo konfiguriert → Code-Style-Konsistenz
      nicht erzwungen.
-  2. Build-Script nutzt tsc -b (Project-Build-Mode), aber tsconfig hat weder
-     composite noch references → nicht der vorgesehene Anwendungsfall.
 
   Empfehlung:
   ESLint + Prettier einrichten (auch schrittweise mit wenigen Regeln).
   Aufwand: gering–mittel.
 
 
---- LOP-053 [ ] Performance: Keyboard-useEffect + Listener-Churn -----------
+--- LOP-053 [✓] Performance: Keyboard-useEffect + Listener-Churn -----ERLEDIGT
 
   Kategorie: Performance
-  Problem:
-  WorkspaceCanvas Global-Keyboard-Handler (~Zeile 3222–3690): sehr großes
-  Dependency-Array mit häufig wechselnden Werten (pieces, hovered*, dragging,
-  cutSeamSwappedSet etc.). Der document-Listener wird bei fast jeder
-  Interaktion neu registriert (remove + add).
-  Mehrere separate useEffects registrieren document-Level-Listener
-  (pointerdown, auxclick, keydown) → hohe Gesamt-Listener-Anzahl.
-
-  Empfehlung:
-  Refs für aktuellen State statt Dependencies; oder ein einzelner stabiler
-  Dispatcher mit Ref-basiertem Zugriff. Listener-Konsolidierung.
-  Aufwand: mittel. Impact: weniger Event-Churn bei aktiver Nutzung.
+  Status: ERLEDIGT (April 2026)
+  Lösung: Hauptkeyboard-Handler (document keydown) auf useRef-Callback-Pattern
+  umgestellt. Der Listener wird nur einmal registriert (mount) und nie gewechselt.
+  Der Handler liest immer den aktuellen State über die Ref. ~55 Dependencies
+  aus dem useEffect-Array entfernt → kein Listener-Churn mehr.
 
 
---- LOP-055 [ ] Batch-Actions: Mehrfach-set() statt gebündelt ---------------
+--- LOP-055 [~] Batch-Actions: Mehrfach-set() statt gebündelt ---------------
 
   Kategorie: Performance / Korrektheit
-  Problem:
-  batchSetVerticesSoft (~827–832), batchDeleteFiltered (~835–889),
-  batchDeleteMarqueeCompletePieces (~892–915), snapSeamEdgeToMatch (~1401),
-  rotatePiece90 (~2339–2340), alignPieceToGrain (~2352–2388),
-  regenerateConfiguratorPart (~995–1023) – alle feuern mehrere separate
-  set()/get().action()-Aufrufe. Logisch eine User-Operation, aber:
-  • N Subscriber-Notifications / React-Re-Renders
-  • Zwischenstände existieren (inkonsistenter State zwischen Iterations)
-  • Fragil bei zukünftiger Middleware oder Async
+
+  Erledigt (April 2026):
+  ✓ batchSetVerticesSoft: von N × get().setVertexSoft() zu einem einzigen
+    set()-Aufruf konsolidiert (alle Vertices pro Piece in einer Map sammeln,
+    dann einmalig pieces.map mit Set-Operationen). Kein Listener-Churn mehr.
+  ✓ rotatePiece90 / alignPieceToGrain: waren bereits single-set via
+    setPieceRotation-Delegation (kein Multi-set-Problem).
+
+  Noch offen:
+  • batchDeleteFiltered (~839–889): ruft deletePiece() pro Teil in Schleife;
+    konsolidierung aufwändiger (deletePiece bereinigt seamAssignments etc.)
+  • batchDeleteMarqueeCompletePieces (~892–915): analog
+  • snapSeamEdgeToMatch (~1401): mehrere set()-Aufrufe
+  • regenerateConfiguratorPart (~995–1023): mehrere set()-Aufrufe
 
   Empfehlung:
   Zusammenfassende set()-Aufrufe wo möglich; oder Zustand batch-Middleware.
   Aufwand: mittel.
 
 
---- LOP-056 [~] React-Patterns: Index-Keys, Popover-Sync, Viewbox-Konst. ---
+--- LOP-056 [✓] React-Patterns: Index-Keys, Popover-Sync, Viewbox-Konst. -ERLEDIGT
 
   Kategorie: React-Patterns / Kosmetik
+  Status: ERLEDIGT (April 2026)
+  ✓ Toter Code entfernt (_projectOntoSegment, seamVertexNearProjectedNotch)
+  ✓ Viewbox-Konstanten zentralisiert (workspaceConstants.ts → 3 Dateien)
+  ✓ EdgeAllowancePopover: key={pieceId-edgeIndex} für korrekten Remount
+  ✓ Index-Keys geprüft: alle betroffenen Listen sind stabil (Presets, Preview)
+  Offen: @ts-expect-error in offset.ts für clipper-lib (minor, keine Lösung
+  ohne eigene Type-Defs).
 
-  Erledigt (April 2026):
-  ✓ Toter Code _projectOntoSegment + void-Silencer aus WorkspaceCanvas entfernt
-  ✓ Deprecated seamVertexNearProjectedNotch aus notchResyncCutLine entfernt
 
-  Noch offen:
-  1. Index-Keys wo Listen sich ändern können: Digitize-Preview
-     key={`dig-pt-${i}`}, NotchSettings key={i},
-     RockGeneratorModal dart lines key={idx}.
-  2. EdgeAllowancePopover: useEffect(…, []) läuft nur bei Mount; wenn Popover
-     gemountet bleibt und popover.currentMm wechselt, kann lokaler value-State
-     veraltet sein.
-  3. Doppelte Viewbox-Konstanten: VIEWBOX_CX/CY in Toolbar.tsx getrennt von
-     VIEWBOX_WIDTH/HEIGHT in WorkspaceCanvas → zwei Quellen der Wahrheit.
-  4. @ts-expect-error in offset.ts für clipper-lib umgeht TS-Safety.
+--- LOP-057 [✓] Bug: Harte Vertices → soft bei Seam-CutLine-Rebuild ----ERLEDIGT
 
-  Empfehlung:
-  Keys auf stabile IDs umstellen; Popover key von pieceId+edgeIndex;
-  Viewbox-Konstanten zentralisieren.
-  Aufwand: gering–mittel.
+  Kategorie: Bug / Datenintegrität [!]
+  Status: ERLEDIGT (April 2026)
+
+  Problem:
+  Bei Seam-as-Master wird die cutLine per Offset aus der seamLine abgeleitet.
+  Die neue cutLine hat ggf. andere Vertex-Positionen (Clipper-Offset). An 6
+  Stellen im Store wurde die alte softVertices-Liste per Index-Range-Filter
+  (.filter(vi < cutLine.length)) auf die neue cutLine übertragen – ohne
+  geometrisches Remapping. Index i auf der alten cutLine ≠ Index i auf der
+  neuen cutLine → harte Vertices (rot) landeten an falschen Indizes und
+  wurden als soft (blau) interpretiert.
+
+  Betroffene Store-Aktionen:
+  1. updateCurveSegment (Seam-as-Master-Zweig)
+  2. insertPointOnCutLine (Seam-as-Master-Zweig)
+  3. replaceSegmentWithBezier (Seam-as-Master-Zweig)
+  4. movePointOnCurve (Seam-as-Master-Zweig)
+  5. convertBezierSegmentToLine (Seam-as-Master-Zweig)
+  6. offsetSegment (Seam-as-Master-Zweig)
+
+  Lösung (Phase 1 – Store-Remap):
+  Alle 6 Stellen: .filter() ersetzt durch remapSoftVerticesToNewCutLine(),
+  das per Positions-Matching (nearestCutVertexIndex) die soft-Indizes
+  korrekt auf die neue cutLine überträgt.
+
+  Lösung (Phase 2 – Display-Mapping + Threshold):
+  Problem war noch nicht vollständig gelöst: masterSoftVertexIndexSet() in
+  seamUtils.ts hatte einen Fallback (Cut-Soft → nächster Master) OHNE
+  Distanzschwelle. Orphane Cut-Soft-Indizes wurden auf beliebige harte
+  Master-Vertices projiziert → harte Eckpunkte erschienen blau.
+  Zusätzlich: nearestCutVertexIndex in remapSoftVerticesToNewCutLine hatte
+  ebenfalls keine Schwelle → bei Topologie-Änderung durch Clipper konnten
+  alte Soft-Positionen auf beliebige neue Vertices gemappt werden.
+
+  Fix Phase 2:
+  ✓ masterSoftVertexIndexSet: Fallback nutzt jetzt Schwelle
+    max(seamAllowanceMm×3, MAP_CUT_TO_MASTER_EPS_MM×2)
+  ✓ nearestCutVertexIndex: optionaler maxDistMm-Parameter
+  ✓ remapSoftVerticesToNewCutLine: nutzt REMAP_MAX_DIST_MM = 50mm
+
+  Test: softVertexStability.test.ts (5 Tests, inkl. masterSoftVertexIndexSet-
+  Prüfung nach Punkt-Einfügen und nach mehrfachem Einfügen).
 
 
 ================================================================================
@@ -517,12 +570,10 @@
   Langfristige Architektur:
   6. LOP-043 WorkspaceCanvas aufteilen
   7. LOP-044 useStore in Slices aufteilen
-  8. LOP-053 Keyboard-Handler stabilisieren
-  9. LOP-052 ESLint/Prettier einrichten
-  10. LOP-055 Batch-Actions gebündelt
-  11. LOP-051 Accessibility verbessern
-  12. LOP-056 React-Patterns (Index-Keys, Popover, Viewbox)
-  13. LOP-041 UX-Feintuning
+  8. LOP-052 ESLint/Prettier einrichten
+  9. LOP-055 Batch-Actions gebündelt
+  10. LOP-051 Accessibility verbessern
+  11. LOP-041 UX-Feintuning
 
 
 ================================================================================
@@ -548,7 +599,6 @@
   • LOP-043 WorkspaceCanvas aufteilen
   • LOP-044 useStore in Slices
   • LOP-052 Tooling (ESLint/Prettier)
-  • LOP-053 Keyboard-Handler Performance
   • LOP-055 Batch-Actions gebündelt
 
   Erweiterung / später
@@ -557,7 +607,6 @@
   • LOP-038 Materialdatenbank, LOP-039 Produktionsintegration
   • LOP-030–032, LOP-036–037, LOP-040–041 je nach Roadmap
   • LOP-051 Accessibility
-  • LOP-056 React-Patterns (Kosmetik)
 
   Erledigt (April 2026, Code-Review-Runde)
   -----------------------------------------
@@ -570,9 +619,84 @@
     extractCurvePortion, inwardNormalAngleAt)
   ✓ LOP-054 Epsilon-Konstanten zentralisiert (VERTEX_T_EPS, CORNER_T_EPS,
     ENDPOINT_EPS_MM, POINT_EPS_MM in geometryConstants.ts)
-  ✓ LOP-052 teilw. (tsconfig.app.json entfernt, engines in package.json)
-  ✓ LOP-056 teilw. (toter Code entfernt: _projectOntoSegment,
-    seamVertexNearProjectedNotch)
+  ✓ LOP-050 teilw. (Tests: deletePiece 8, loadProject 10, exitAllModes 5,
+    updateVertex 4, applyMassstab 4, softVertexStability 3 = 34 neue Tests)
+  ✓ LOP-052 teilw. (tsconfig.app.json entfernt, engines in package.json,
+    tsc -b → tsc im Build-Script korrigiert)
+  ✓ LOP-053 Keyboard-Handler: Ref-Pattern (kein Listener-Churn mehr)
+  ✓ LOP-051 teilw. (role="dialog" für 8 Modals, Sidebar focusbar, Canvas aria,
+    DesignBar role="toolbar", Context-Menus role="menu"+aria-label)
+  ✓ LOP-056 (Viewbox-Konstanten zentralisiert, Popover-Key fix,
+    Index-Keys geprüft, toter Code entfernt)
+  ✓ LOP-057 Harte Vertices werden nicht mehr ungewollt soft bei
+    Seam-CutLine-Rebuild (6 Stellen: remapSoftVerticesToNewCutLine;
+    Phase 2: masterSoftVertexIndexSet Fallback-Schwelle,
+    nearestCutVertexIndex maxDistMm, remapSoft REMAP_MAX_DIST_MM=50)
+  ✓ LOP-045 teilw. (PieceGroup mit React.memo gewrapped)
+  ✓ LOP-055 teilw. (batchSetVerticesSoft zu single-set konsolidiert)
+  ✓ LOP-009 teilw. (NotchType-Mapping UI↔Modell dokumentiert)
+
+
+================================================================================
+  IDEEN / BACKLOG: Profil-Feature Erweiterungen
+================================================================================
+
+Gesammelt am 09.04.2026 – nach Fertigstellung der Basis-Implementierung
+(Profilzuordnung an Kanten, Visualisierung, Stückliste, PDF-Export).
+
+PRIO-A (hoher Nutzen, überschaubarer Aufwand)
+──────────────────────────────────────────────
+  □ PROF-001  Profilbibliothek / Vorlagen
+    - Häufig genutzte Profile als wiederverwendbare Vorlagen speichern
+    - Beim Zuordnen aus Bibliothek wählen statt Felder neu einzutippen
+    - Import/Export der Bibliothek als JSON
+
+  □ PROF-002  Profilfarben
+    - Jedes Profil bekommt eine eigene Farbe (statt immer violett)
+    - Farbkodierung in der Legende / Stückliste
+    - Sofortige visuelle Unterscheidung bei mehreren Profilen
+
+  □ PROF-003  Profil-Übersichtstabelle im Editor
+    - Kleines Sidebar-Panel mit allen zugeordneten Profilen
+    - Klick auf Eintrag → springt zum Teil / hebt Kante hervor
+    - Schneller Überblick ohne Stückliste öffnen zu müssen
+
+  □ PROF-004  Multi-Select / Batch-Zuordnung
+    - Mehrere Kanten auf einmal auswählen, gleiches Profil zuweisen
+    - Beschleunigt Arbeit bei Teilen mit vielen gleichen Profilen
+
+PRIO-B (nützlich, mittlerer Aufwand)
+──────────────────────────────────────
+  □ PROF-005  Stücklisten-Erweiterungen
+    - Kosten-Spalte: Preis pro Meter + autom. Gesamtkostenberechnung
+    - Material: Profilmaterial (Gummi, Kunststoff, Alu) als Filter
+    - Verschnitt/Zugabe: optionaler Zuschlag auf Profillänge
+      (z. B. +10mm pro Stück für Überlappung)
+
+  □ PROF-006  Profil-Richtung / Orientierung
+    - Pfeil auf der Profillinie für Montagerichtung
+    - Relevant bei asymmetrischen Profilen (z. B. Kantenschutz)
+
+  □ PROF-007  PDF-Datenblatt pro Profil
+    - Feld pdfDocumentUrl existiert bereits im Datenmodell
+    - Tatsächliches Hochladen / Anzeigen im Dialog implementieren
+    - Hinterlegtes PDF in den BOM-PDF-Export einbetten
+
+  □ PROF-008  Profil-Warnung bei Kantenlängenänderung
+    - Toast-Warnung wenn Kante mit Profil unter Minimum fällt
+    - Hinweis wenn Kantenlänge sich um >X% ändert
+
+PRIO-C (nice to have, Phase 2)
+───────────────────────────────
+  □ PROF-009  Visuelle Profilform (Querschnitt)
+    - Kleines Icon/SVG für den Profilquerschnitt (L, U, Rund, etc.)
+    - Wird neben dem Buchstaben an der Kante angezeigt
+    - Hilft in der Produktion, sofort den Profiltyp zu erkennen
+
+  □ PROF-010  DXF-Annotations-Layer (optional)
+    - Separater Annotations-Layer im DXF mit Profil-Markierungen
+    - Nur für interne Dokumentation, nicht für den Cutter
+    - Konform mit AAMA/ASTM-Zielformat beachten
 
 
 ================================================================================

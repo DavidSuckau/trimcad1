@@ -76,7 +76,7 @@ export function StuecklisteModal() {
   if (!showStuecklisteModal) return null
 
   return (
-    <div className="settings-overlay" onClick={() => setShowStuecklisteModal(false)}>
+    <div className="settings-overlay" onClick={() => setShowStuecklisteModal(false)} role="dialog" aria-modal="true" aria-label="Stückliste">
       <div className="settings-modal stueckliste-modal" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h2 className="settings-title">Stückliste</h2>

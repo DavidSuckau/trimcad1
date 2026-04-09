@@ -178,7 +178,8 @@ export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
       out.add(mapped)
       continue
     }
-    // Nach Offset o. Ä.: Cut-Ecke kann > EPS von der Naht liegen – dann nächster Master (ein Eintrag pro Cut-Index).
+    // Fallback: nur wenn Cut-Ecke innerhalb einer großzügigen Schwelle zum nächsten Master liegt.
+    // Ohne Schwelle würden orphane Cut-Soft-Indizes auf beliebige harte Master-Vertices projiziert → Bug.
     const cutPt = vertexPositionOnClosedCurves(cut, cutVi)
     let bestMasterVi = -1
     let bestD = Infinity
@@ -190,7 +191,8 @@ export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
         bestMasterVi = mvi
       }
     }
-    if (bestMasterVi >= 0) out.add(bestMasterVi)
+    const maxFallbackMm = Math.max((piece.seamAllowanceMm ?? 0) * 3, MAP_CUT_TO_MASTER_EPS_MM * 2)
+    if (bestMasterVi >= 0 && bestD <= maxFallbackMm) out.add(bestMasterVi)
   }
   return out
 }

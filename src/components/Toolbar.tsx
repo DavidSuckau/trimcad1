@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../store/useStore'
+import { VIEWBOX_CX, VIEWBOX_CY } from '../workspaceConstants'
 import { downloadDxf } from '../dxf/dxfWriter'
 import { downloadAamaDxf } from '../dxf/aamaWriter'
 import { downloadAstmDxf } from '../dxf/astmWriter'
@@ -54,9 +55,6 @@ const TOOL_DISPLAY: Record<string, { label: string; shortcut?: string }> = {
   internalCircle: { label: 'Kreis' },
   bezier: { label: 'Bézier' },
 }
-const VIEWBOX_CX = 400
-const VIEWBOX_CY = 300
-
 export function Toolbar() {
   const {
     tool,

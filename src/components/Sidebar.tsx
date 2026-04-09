@@ -13,7 +13,11 @@ export function Sidebar() {
             <li
               key={p.id}
               className={`piece-item ${selectedPieceIds.includes(p.id) ? 'selected' : ''}`}
+              role="button"
+              tabIndex={0}
+              aria-selected={selectedPieceIds.includes(p.id)}
               onClick={() => selectPiece(p.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectPiece(p.id) } }}
             >
               <span className="piece-number">{p.number}</span>
               <span

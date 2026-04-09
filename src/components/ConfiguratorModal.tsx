@@ -123,7 +123,7 @@ export function ConfiguratorModal() {
     : false
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={close} role="presentation">
+    <div className="nahtzugabe-dialog-overlay" onClick={close} role="dialog" aria-modal="true" aria-label="Konfigurator bearbeiten">
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 520 }}>
         <h3 className="nahtzugabe-dialog-title">Konfigurator bearbeiten</h3>
 

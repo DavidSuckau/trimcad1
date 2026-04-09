@@ -1,6 +1,7 @@
-import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
+import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import type { NotchSetting } from '../store/useStore'
 import {
   closedPathD,
@@ -511,9 +512,6 @@ function snapRulerToNearestPoint(world: Point, pieces: PatternPiece[]): Point {
   return best
 }
 
-const VIEWBOX_WIDTH = 800
-const VIEWBOX_HEIGHT = 600
-
 /** Treffer-/Hover-Distanz (mm) für Nahtzuordnung: Klick oder Zeiger auf Konturlinie (Kante von Punkt zu Punkt) */
 const SEAM_HIT_MM = 18
 
@@ -762,7 +760,7 @@ function worldToClientPoint(
   return { x: rect.left + svgUserX, y: rect.top + svgUserY }
 }
 
-function PieceGroup({
+const PieceGroup = memo(function PieceGroup({
   piece,
   isSelected,
   isHovered,
@@ -1263,7 +1261,7 @@ function PieceGroup({
       })()}
     </g>
   )
-}
+})
 
 export function WorkspaceCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -3207,8 +3205,8 @@ export function WorkspaceCanvas() {
     }
   }, [exitAllModes, resetCanvasTransientState])
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
+  const keydownHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null)
+  keydownHandlerRef.current = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
       if (workspaceNoteEditor && e.key === 'Escape') {
@@ -3616,66 +3614,12 @@ export function WorkspaceCanvas() {
         convertBezierSegmentToLine(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.curveIndex)
       }
       setHoveredDeletablePoint(null)
-    }
+  }
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => keydownHandlerRef.current?.(e)
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [
-    hoveredDeletablePoint,
-    hoveredDeletableNotch,
-    hoveredInternalLine,
-    hoveredSeamAssignmentId,
-    seamAssignmentMetaDialogId,
-    setSeamAssignmentMetaDialogId,
-    hoveredSegment,
-    segmentMenuPinned,
-    pinnedSegment,
-    segmentMenuMm,
-    pieces,
-    selectedPieceIds,
-    removeVertex,
-    setVertexSoft,
-    replaceSegmentWithBezier,
-    convertBezierSegmentToLine,
-    removeNotch,
-    removeInternalLine,
-    toggleNotchAnchor,
-    removeSeamAssignment,
-    setTool,
-    offsetSegment,
-    addInternalLine,
-    addCurveToCutLine,
-    dragging,
-    lineLengthEditor,
-    rotatePiece90,
-    alignPieceToGrain,
-    closeSegmentMenu,
-    hoveredPieceId,
-    setPendingNahtzugabeClick,
-    grainFlipHover,
-    grainContextMenu,
-    pieceContextMenu,
-    setPieceContextMenu,
-    workspaceNoteEditor,
-    digitizeState,
-    cancelDigitize,
-    startDigitize,
-    setShowHelpModal,
-    workspaceImageSelected,
-    imageDigitizeSession,
-    cancelImageSession,
-    setWorkspaceImageSelected,
-    hoveredWorkspaceImage,
-    workspaceImageQuickMenu,
-    setPiecePivot,
-    setToastMessage,
-    tool,
-    setDragging,
-    toWorld,
-    batchSelectionTargets,
-    clearBatchSelection,
-    batchDeleteFiltered,
-    notchEditTarget,
-  ])
+  }, [])
 
   const handlePointerUp = useCallback((_e?: React.PointerEvent) => {
     if (dragging?.kind === 'digitizeDrag') {
@@ -4335,6 +4279,8 @@ export function WorkspaceCanvas() {
       )}
       {grainContextMenu && (
         <div
+          role="menu"
+          aria-label="Laufrichtung"
           style={{
             position: 'fixed',
             left: grainContextMenu.clientX,
@@ -4459,6 +4405,8 @@ export function WorkspaceCanvas() {
       )}
       {pieceContextMenu && (
         <div
+          role="menu"
+          aria-label="Teil-Aktionen"
           style={{
             position: 'fixed',
             left: pieceContextMenu.clientX,
@@ -4667,6 +4615,8 @@ export function WorkspaceCanvas() {
       )}
       <svg
         ref={svgRef}
+        role="img"
+        aria-label="Schnittmuster-Arbeitsfläche"
         width="100%"
         height="100%"
         viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
@@ -6173,6 +6123,7 @@ export function WorkspaceCanvas() {
         </div>
       )}
       {edgeAllowancePopover && <EdgeAllowancePopover
+        key={`${edgeAllowancePopover.pieceId}-${edgeAllowancePopover.edgeIndex}`}
         popover={edgeAllowancePopover}
         onConfirm={(mm) => {
           setEdgeSeamAllowance(edgeAllowancePopover.pieceId, edgeAllowancePopover.edgeIndex, mm)

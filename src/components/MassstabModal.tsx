@@ -25,7 +25,7 @@ export function MassstabModal() {
   const { currentLengthMm } = massstabDialog
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={() => setMassstabDialog(null)}>
+    <div className="nahtzugabe-dialog-overlay" onClick={() => setMassstabDialog(null)} role="dialog" aria-modal="true" aria-label="Maßstab">
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 300 }}>
         <h3 className="nahtzugabe-dialog-title">Maßstab (Referenzkante)</h3>
         <div style={{ fontSize: '0.8125rem', color: '#333', marginBottom: '0.75rem', lineHeight: 1.5 }}>
