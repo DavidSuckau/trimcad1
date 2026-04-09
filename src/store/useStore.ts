@@ -482,48 +482,61 @@ function generateId(): string {
   return Math.random().toString(36).slice(2, 12)
 }
 
+/**
+ * Bestimmt ob zwei Nahtkanten physisch gegenläufig verlaufen (Start A ↔ Ende B),
+ * indem die Kantenendpunkte in Weltkoordinaten verglichen werden.
+ */
+function detectEdgeReverseOrientation(
+  refCurves: Curve[],
+  refTransform: PatternPiece['transform'],
+  tgtCurves: Curve[],
+  tgtTransform: PatternPiece['transform']
+): boolean {
+  if (refCurves.length === 0 || tgtCurves.length === 0) return false
+  const toWorld = (p: Point, t: PatternPiece['transform']): Point => {
+    let xx = p.x
+    let yy = p.y
+    if (t.mirrored) xx = -xx
+    const rad = (t.rotation * Math.PI) / 180
+    const cos = Math.cos(rad)
+    const sin = Math.sin(rad)
+    return { x: xx * cos - yy * sin + t.x, y: xx * sin + yy * cos + t.y }
+  }
+  const rS = toWorld(refCurves[0].start, refTransform)
+  const rE = toWorld(refCurves[refCurves.length - 1].end, refTransform)
+  const tS = toWorld(tgtCurves[0].start, tgtTransform)
+  const tE = toWorld(tgtCurves[tgtCurves.length - 1].end, tgtTransform)
+  const dSame = Math.hypot(rS.x - tS.x, rS.y - tS.y) + Math.hypot(rE.x - tE.x, rE.y - tE.y)
+  const dRev = Math.hypot(rS.x - tE.x, rS.y - tE.y) + Math.hypot(rE.x - tS.x, rE.y - tS.y)
+  return dRev < dSame
+}
+
+/**
+ * Berechnet Ziel-Bogenpositionen auf der Zielkante aus der Referenzkante.
+ * `reverse`: physische Orientierung — true wenn die Kanten gegenläufig sind
+ * (Start der Ref-Kante nahe am Ende der Zielkante).
+ */
 function buildNotchTargetArcPositions(
   refArcs: number[],
   refTotalLen: number,
-  tgtArcs: number[],
-  tgtTotalLen: number
+  _tgtArcs: number[],
+  tgtTotalLen: number,
+  reverse: boolean
 ): number[] | null {
   const n = refArcs.length
-  if (n === 0 || n !== tgtArcs.length) return null
+  if (n === 0 || n !== _tgtArcs.length) return null
   if (refTotalLen <= 1e-9 || tgtTotalLen <= 1e-9) return null
 
   const refNorm = refArcs.map((v) => Math.max(0, Math.min(1, v / refTotalLen)))
-  const tgtNorm = tgtArcs.map((v) => Math.max(0, Math.min(1, v / tgtTotalLen)))
-  const circularDistance = (a: number, b: number) => {
-    const d = Math.abs(a - b)
-    return Math.min(d, 1 - d)
+
+  let mapped: number[]
+  if (reverse) {
+    mapped = refNorm.map((v) => Math.max(0, Math.min(1, 1 - v))).reverse()
+  } else {
+    mapped = [...refNorm]
   }
-  const shift = (arr: number[], k: number): number[] => {
-    const out: number[] = []
-    for (let i = 0; i < arr.length; i++) out.push(arr[(i + k) % arr.length])
-    return out
-  }
-  const evalOrientation = (reverse: boolean): { score: number; mapped: number[] } => {
-    const base = reverse
-      ? refNorm.map((v) => ((1 - v) % 1 + 1) % 1).reverse()
-      : [...refNorm]
-    let bestScore = Number.POSITIVE_INFINITY
-    let best = base
-    for (let k = 0; k < n; k++) {
-      const cand = shift(base, k)
-      let err = 0
-      for (let i = 0; i < n; i++) err += circularDistance(cand[i], tgtNorm[i])
-      if (err < bestScore) {
-        bestScore = err
-        best = cand
-      }
-    }
-    return { score: bestScore, mapped: best }
-  }
-  const same = evalOrientation(false)
-  const rev = evalOrientation(true)
-  const chosen = rev.score + 1e-9 < same.score ? rev : same
-  return chosen.mapped.map((v) => v * tgtTotalLen)
+
+  return mapped.map((v) => v * tgtTotalLen)
 }
 
 function curvesBounds(curves: Curve[]): { minX: number; maxX: number } | null {
@@ -1162,10 +1175,16 @@ export const useStore = create<Store>((set, get) => ({
     const refTotalLen = edgeTotalLength(refPiece, refIndices)
     const tgtTotalLen = edgeTotalLength(tgtPiece, tgtIndices)
 
-    // curveIndices in SeamAssignment beziehen sich auf die Master-Kontur (seamLine bei Nahtzugabe), nicht blind auf cutLine.
+    const refMasterCurves = getCurvesForSeamEdge(refPiece)
     const tgtMasterCurves = getCurvesForSeamEdge(tgtPiece)
+    const refSubCurves = refIndices.map((ci) => refMasterCurves[ci]).filter(Boolean)
     const tgtSubCurves = tgtIndices.map((ci) => tgtMasterCurves[ci]).filter(Boolean)
-    if (tgtSubCurves.length === 0) { set({ seamAdjustmentDialog: null }); return }
+    if (tgtSubCurves.length === 0 || refSubCurves.length === 0) { set({ seamAdjustmentDialog: null }); return }
+
+    const reverseOrientation = detectEdgeReverseOrientation(
+      refSubCurves, refPiece.transform,
+      tgtSubCurves, tgtPiece.transform
+    )
 
     const refNotches = getNotchesOnEdge(refPiece, refIndices)
     const tgtNotches = getNotchesOnEdge(tgtPiece, tgtIndices)
@@ -1173,12 +1192,12 @@ export const useStore = create<Store>((set, get) => ({
       set({ seamAdjustmentDialog: null })
       return
     }
-    // Orientierung + Start-Offset robust bestimmen (gleich/gegenläufig + zyklischer Shift).
     const targetArcPositions = buildNotchTargetArcPositions(
       refNotches.map((x) => x.arcLength),
       refTotalLen,
       tgtNotches.map((x) => x.arcLength),
-      tgtTotalLen
+      tgtTotalLen,
+      reverseOrientation
     )
     if (!targetArcPositions || targetArcPositions.length !== tgtNotches.length) {
       set({ seamAdjustmentDialog: null })
