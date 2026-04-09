@@ -5592,11 +5592,18 @@ export function WorkspaceCanvas() {
             const midLocal = { x: (startL.x + endL.x) / 2, y: (startL.y + endL.y) / 2 }
             const nxLocal = outSign * (-edgeDy / edgeLen)
             const nyLocal = outSign * (edgeDx / edgeLen)
-            const labelLocal = {
-              x: midLocal.x + nxLocal * (PROFILE_LINE_OFFSET + 12),
-              y: midLocal.y + nyLocal * (PROFILE_LINE_OFFSET + 12),
+            const keyOffsetMm = PROFILE_LINE_OFFSET + 10
+            const detailOffsetMm = PROFILE_LINE_OFFSET + 16
+            const keyLocal = {
+              x: midLocal.x + nxLocal * keyOffsetMm,
+              y: midLocal.y + nyLocal * keyOffsetMm,
             }
-            const labelW = pieceLocalToWorld(labelLocal, piece)
+            const detailLocal = {
+              x: midLocal.x + nxLocal * detailOffsetMm,
+              y: midLocal.y + nyLocal * detailOffsetMm,
+            }
+            const keyW = pieceLocalToWorld(keyLocal, piece)
+            const detailW = pieceLocalToWorld(detailLocal, piece)
             const startW = pieceLocalToWorld(startL, piece)
             const endW = pieceLocalToWorld(endL, piece)
             const angleDeg = (Math.atan2(endW.y - startW.y, endW.x - startW.x) * 180) / Math.PI
@@ -5619,21 +5626,21 @@ export function WorkspaceCanvas() {
                   strokeDasharray="6 3"
                 />
                 <text
-                  x={labelW.x}
-                  y={labelW.y}
+                  x={keyW.x}
+                  y={keyW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill="#7b1fa2"
                   fontSize={5}
                   fontFamily="sans-serif"
                   fontWeight={700}
-                  transform={`rotate(${angleDeg},${labelW.x},${labelW.y})`}
+                  transform={`rotate(${angleDeg},${keyW.x},${keyW.y})`}
                 >
                   {pa.profileKey}
                 </text>
                 <text
-                  x={labelW.x}
-                  y={labelW.y + 5.5}
+                  x={detailW.x}
+                  y={detailW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill="#7b1fa2"
@@ -5641,7 +5648,7 @@ export function WorkspaceCanvas() {
                   fontFamily="sans-serif"
                   fontWeight={400}
                   opacity={0.8}
-                  transform={`rotate(${angleDeg},${labelW.x},${labelW.y + 5.5})`}
+                  transform={`rotate(${angleDeg},${detailW.x},${detailW.y})`}
                 >
                   {detailText}
                 </text>
