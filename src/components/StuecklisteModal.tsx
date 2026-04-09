@@ -248,6 +248,7 @@ export function StuecklisteModal() {
                 pieces={pieces}
                 imageSession={imageDigitizeSession}
                 imageDataUrl={imageDigitizeSession?.imageDataUrl ?? null}
+                profileAssignments={workspace.profileAssignments}
               />
             </div>
 

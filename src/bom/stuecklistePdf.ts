@@ -403,7 +403,7 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
     y = (docExt.lastAutoTable?.finalY ?? y) + 10
   }
 
-  const svg = buildWorkspaceOverviewSvgDocument(pieces, imageSession, imageDataUrl)
+  const svg = buildWorkspaceOverviewSvgDocument(pieces, imageSession, imageDataUrl, workspace.profileAssignments)
   if (svg) {
     const maxPreviewPx = 1600
     const png = await svgDocumentToPngDataUrl(svg, maxPreviewPx)

@@ -10,6 +10,7 @@ import {
   curveSegmentArcLength,
   curvesBounds,
   outwardNormalAngleAt,
+  signedAreaCurves,
   pointAtPathLength,
   pathLengthAt,
   totalPathLength,
@@ -5548,15 +5549,34 @@ export function WorkspaceCanvas() {
             const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
             if (curves.length === 0) return null
 
+            const PROFILE_LINE_OFFSET = 10
+            const area = signedAreaCurves(masterK)
+            const outSign = area >= 0 ? -1 : 1
+
             let d = ''
             for (const seg of curves) {
-              const ws = pieceLocalToWorld(seg.start, piece)
-              const we = pieceLocalToWorld(seg.end, piece)
               if (seg.type === 'line') {
+                const tdx = seg.end.x - seg.start.x
+                const tdy = seg.end.y - seg.start.y
+                const tlen = Math.hypot(tdx, tdy) || 1
+                const ox = outSign * (-tdy / tlen) * PROFILE_LINE_OFFSET
+                const oy = outSign * (tdx / tlen) * PROFILE_LINE_OFFSET
+                const ws = pieceLocalToWorld({ x: seg.start.x + ox, y: seg.start.y + oy }, piece)
+                const we = pieceLocalToWorld({ x: seg.end.x + ox, y: seg.end.y + oy }, piece)
                 d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
               } else {
-                const wc1 = pieceLocalToWorld(seg.cp1, piece)
-                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                const d0 = bezierDerivativeAt(seg, 0)
+                const d1 = bezierDerivativeAt(seg, 1)
+                const len0 = Math.hypot(d0.x, d0.y) || 1
+                const len1 = Math.hypot(d1.x, d1.y) || 1
+                const o0x = outSign * (-d0.y / len0) * PROFILE_LINE_OFFSET
+                const o0y = outSign * (d0.x / len0) * PROFILE_LINE_OFFSET
+                const o1x = outSign * (-d1.y / len1) * PROFILE_LINE_OFFSET
+                const o1y = outSign * (d1.x / len1) * PROFILE_LINE_OFFSET
+                const ws = pieceLocalToWorld({ x: seg.start.x + o0x, y: seg.start.y + o0y }, piece)
+                const wc1 = pieceLocalToWorld({ x: seg.cp1.x + o0x, y: seg.cp1.y + o0y }, piece)
+                const wc2 = pieceLocalToWorld({ x: seg.cp2.x + o1x, y: seg.cp2.y + o1y }, piece)
+                const we = pieceLocalToWorld({ x: seg.end.x + o1x, y: seg.end.y + o1y }, piece)
                 d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
               }
             }
@@ -5564,18 +5584,22 @@ export function WorkspaceCanvas() {
 
             const firstSeg = curves[0]
             const lastSeg = curves[curves.length - 1]
-            const startW = pieceLocalToWorld(firstSeg.start, piece)
-            const endW = pieceLocalToWorld(lastSeg.end, piece)
-            const midW = { x: (startW.x + endW.x) / 2, y: (startW.y + endW.y) / 2 }
-            const dx = endW.x - startW.x
-            const dy = endW.y - startW.y
-            const len = Math.hypot(dx, dy) || 1
-            const nx = -dy / len
-            const ny = dx / len
-            const offsetMm = 4
-            const labelX = midW.x + nx * offsetMm
-            const labelY = midW.y + ny * offsetMm
-            const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI
+            const startL = firstSeg.start
+            const endL = lastSeg.end
+            const edgeDx = endL.x - startL.x
+            const edgeDy = endL.y - startL.y
+            const edgeLen = Math.hypot(edgeDx, edgeDy) || 1
+            const midLocal = { x: (startL.x + endL.x) / 2, y: (startL.y + endL.y) / 2 }
+            const nxLocal = outSign * (-edgeDy / edgeLen)
+            const nyLocal = outSign * (edgeDx / edgeLen)
+            const labelLocal = {
+              x: midLocal.x + nxLocal * (PROFILE_LINE_OFFSET + 4),
+              y: midLocal.y + nyLocal * (PROFILE_LINE_OFFSET + 4),
+            }
+            const labelW = pieceLocalToWorld(labelLocal, piece)
+            const startW = pieceLocalToWorld(startL, piece)
+            const endW = pieceLocalToWorld(endL, piece)
+            const angleDeg = (Math.atan2(endW.y - startW.y, endW.x - startW.x) * 180) / Math.PI
 
             const lengthMm = edgeTotalLength(piece, edge.curveIndices)
             const labelParts: string[] = []
@@ -5595,21 +5619,21 @@ export function WorkspaceCanvas() {
                   strokeDasharray="6 3"
                 />
                 <text
-                  x={labelX}
-                  y={labelY}
+                  x={labelW.x}
+                  y={labelW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill="#7b1fa2"
                   fontSize={3.5}
                   fontFamily="sans-serif"
                   fontWeight={700}
-                  transform={`rotate(${angleDeg},${labelX},${labelY})`}
+                  transform={`rotate(${angleDeg},${labelW.x},${labelW.y})`}
                 >
                   {pa.profileKey}
                 </text>
                 <text
-                  x={labelX}
-                  y={labelY + 4}
+                  x={labelW.x}
+                  y={labelW.y + 4}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill="#7b1fa2"
@@ -5617,7 +5641,7 @@ export function WorkspaceCanvas() {
                   fontFamily="sans-serif"
                   fontWeight={400}
                   opacity={0.8}
-                  transform={`rotate(${angleDeg},${labelX},${labelY + 4})`}
+                  transform={`rotate(${angleDeg},${labelW.x},${labelW.y + 4})`}
                 >
                   {detailText}
                 </text>
