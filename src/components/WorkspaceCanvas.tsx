@@ -2320,6 +2320,10 @@ export function WorkspaceCanvas() {
       showWorkspaceNotes,
       addWorkspaceNote,
       setToastMessage,
+      hoveredProfileEdge,
+      profileAssignments,
+      addProfileAssignment,
+      setProfileDialogAssignmentId,
     ]
   )
 
