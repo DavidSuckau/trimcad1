@@ -147,7 +147,7 @@ function drawWorkspacePreviewTechnicalPage(doc: jsPDF, p: TechnicalPreviewPagePa
   }
   const imgX = innerLeft + (innerW - dwMm) / 2
   const imgY = drawFieldTop + (drawFieldH - dhMm) / 2
-  doc.addImage(p.png, 'PNG', imgX, imgY, dwMm, dhMm, undefined, 'FAST')
+  doc.addImage(p.png, 'PNG', imgX, imgY, dwMm, dhMm, undefined, 'MEDIUM')
 
   doc.setDrawColor(0, 0, 0)
   doc.setLineWidth(0.3)
@@ -191,7 +191,7 @@ function drawWorkspacePreviewTechnicalPage(doc: jsPDF, p: TechnicalPreviewPagePa
 
   doc.setFontSize(8)
   doc.setTextColor(0, 0, 0)
-  doc.text('1 : 1 (mm, Modellkoordinaten)', innerLeft + 2, tbY2 + 3.5)
+  doc.text('Modellmaße in mm (Papier skaliert)', innerLeft + 2, tbY2 + 3.5)
   doc.text(p.bomDeveloperName || '—', x1 + 2, tbY2 + 3.5)
   doc.text(p.bomEngineerName || '—', x2 + 2, tbY2 + 3.5)
 
@@ -335,7 +335,7 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
         dhMm = maxPieH
         dwMm = (dhMm * iw) / ih
       }
-      doc.addImage(piePng, 'PNG', margin, y, dwMm, dhMm, undefined, 'FAST')
+      doc.addImage(piePng, 'PNG', margin, y, dwMm, dhMm, undefined, 'MEDIUM')
       y += dhMm + 8
     }
   }
@@ -405,7 +405,7 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
 
   const svg = buildWorkspaceOverviewSvgDocument(pieces, imageSession, imageDataUrl, workspace.profileAssignments)
   if (svg) {
-    const maxPreviewPx = 1600
+    const maxPreviewPx = 2400
     const png = await svgDocumentToPngDataUrl(svg, maxPreviewPx)
     if (png) {
       doc.addPage()
@@ -421,6 +421,18 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
         bomEngineerName: engName,
       })
     }
+  }
+
+  const totalPages = doc.getNumberOfPages()
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7)
+    doc.setTextColor(130, 130, 130)
+    const pw = doc.internal.pageSize.getWidth()
+    const ph = doc.internal.pageSize.getHeight()
+    doc.text(`Seite ${i} / ${totalPages}`, pw - margin - 1, ph - 4, { align: 'right' })
+    doc.text(`TrimTex · ${workspace.name}`, margin, ph - 4)
   }
 
   const datePart = new Date().toISOString().slice(0, 10)

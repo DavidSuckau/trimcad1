@@ -240,6 +240,10 @@ function extractNotchesFromBlock(
       const n = lineToNotch(p1.x, p1.y, p2.x, p2.y, e.layer, 1)
       if (n) notches.push(n)
     }
+    if (e.type === 'POINT' && isNotchLineLayer(e.layer)) {
+      const p = transformPoint({ x: e.x, y: e.y }, insert, unitScale)
+      notches.push(pointToNotch(p.x, p.y, e.layer, 1))
+    }
   }
   return notches
 }
@@ -434,6 +438,34 @@ function extractFallbackCutDrafts(parsed: {
   return drafts
 }
 
+function pointToNotch(px: number, py: number, layer: string, coordScale: number): Notch {
+  const type = notchTypeForLayer(layer)
+  return {
+    id: generateId(),
+    position: { x: px * coordScale, y: py * coordScale },
+    angle: 90,
+    type,
+    depth: 4,
+    width: 6,
+  }
+}
+
+function assignToPiece(mx: number, my: number, cutBounds: BBox[]): number {
+  let bestPiece = -1
+  let bestDist = Infinity
+  for (let i = 0; i < cutBounds.length; i++) {
+    const b = cutBounds[i]
+    if (mx >= b.minX - 50 && mx <= b.maxX + 50 && my >= b.minY - 50 && my <= b.maxY + 50) {
+      const d = Math.max(0, b.minX - mx, mx - b.maxX, b.minY - my, my - b.maxY)
+      if (d < bestDist) {
+        bestDist = d
+        bestPiece = i
+      }
+    }
+  }
+  return bestPiece
+}
+
 function extractStandaloneNotches(
   entities: DxfEntity[],
   cutBounds: BBox[],
@@ -444,18 +476,7 @@ function extractStandaloneNotches(
     if (e.type === 'LINE' && isNotchLineLayer(e.layer)) {
       const mx = ((e.x1 + e.x2) / 2) * unitScale
       const my = ((e.y1 + e.y2) / 2) * unitScale
-      let bestPiece = -1
-      let bestDist = Infinity
-      for (let i = 0; i < cutBounds.length; i++) {
-        const b = cutBounds[i]
-        if (mx >= b.minX - 50 && mx <= b.maxX + 50 && my >= b.minY - 50 && my <= b.maxY + 50) {
-          const d = Math.max(0, b.minX - mx, mx - b.maxX, b.minY - my, my - b.maxY)
-          if (d < bestDist) {
-            bestDist = d
-            bestPiece = i
-          }
-        }
-      }
+      const bestPiece = assignToPiece(mx, my, cutBounds)
       if (bestPiece >= 0) {
         const n = lineToNotch(e.x1, e.y1, e.x2, e.y2, e.layer, unitScale)
         if (n) {
@@ -463,6 +484,17 @@ function extractStandaloneNotches(
           list.push(n)
           byPiece.set(bestPiece, list)
         }
+      }
+    }
+    if (e.type === 'POINT' && isNotchLineLayer(e.layer)) {
+      const mx = e.x * unitScale
+      const my = e.y * unitScale
+      const bestPiece = assignToPiece(mx, my, cutBounds)
+      if (bestPiece >= 0) {
+        const n = pointToNotch(e.x, e.y, e.layer, unitScale)
+        const list = byPiece.get(bestPiece) ?? []
+        list.push(n)
+        byPiece.set(bestPiece, list)
       }
     }
   }

@@ -61,6 +61,13 @@ export type DxfArcPolyline = {
   closed: boolean
 }
 
+export type DxfPointEntity = {
+  type: 'POINT'
+  layer: string
+  x: number
+  y: number
+}
+
 export type DxfEntity =
   | DxfPolyline
   | DxfLwPolyline
@@ -68,6 +75,7 @@ export type DxfEntity =
   | DxfCircle
   | DxfInsert
   | DxfArcPolyline
+  | DxfPointEntity
 
 export type DxfBlock = {
   name: string
@@ -233,6 +241,15 @@ function parseEntitiesSection(
         i = nextEntityIndex(groups, i)
         continue
       }
+      if (ev === 'POINT') {
+        const slice = groups.slice(i)
+        const layer = getValue(slice, 8) ?? '0'
+        const x = getNum(slice, 10) ?? 0
+        const y = getNum(slice, 20) ?? 0
+        list.push({ type: 'POINT', layer, x, y })
+        i = nextEntityIndex(groups, i)
+        continue
+      }
       if (ev === 'INSERT') {
         const slice = groups.slice(i)
         const blockName = getValue(slice, 2) ?? ''
@@ -367,6 +384,7 @@ function parseLwPolyline(
       [
         'LINE',
         'CIRCLE',
+        'POINT',
         'POLYLINE',
         'LWPOLYLINE',
         'INSERT',
@@ -520,6 +538,15 @@ function parseEntitiesFromSlice(groups: Array<{ code: number; value: string }>):
         const cy = getNum(slice, 20) ?? 0
         const radius = getNum(slice, 40) ?? 0
         list.push({ type: 'CIRCLE', layer, cx, cy, radius })
+        i = nextEntityIndex(groups, i)
+        continue
+      }
+      if (ev === 'POINT') {
+        const slice = groups.slice(i)
+        const layer = getValue(slice, 8) ?? '0'
+        const x = getNum(slice, 10) ?? 0
+        const y = getNum(slice, 20) ?? 0
+        list.push({ type: 'POINT', layer, x, y })
         i = nextEntityIndex(groups, i)
         continue
       }

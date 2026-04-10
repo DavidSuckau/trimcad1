@@ -1,5 +1,5 @@
 import type { PatternPiece, ProfileAssignment } from '../types/model'
-import { closedPathD, bezierDerivativeAt, signedAreaCurves } from '../geometry/curveToPath'
+import { closedPathD, bezierDerivativeAt, signedAreaCurves, curvesBounds } from '../geometry/curveToPath'
 import {
   cutLineWithNotchCutouts,
   getNotchPositionAndAngleOnCutLine,
@@ -155,6 +155,18 @@ export function buildWorkspaceOverviewSvgDocument(
           `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="#7b1fa2" font-size="9" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
         )
       }
+    }
+
+    const bounds = curvesBounds(p.cutLine)
+    if (bounds && p.name) {
+      const cx = (bounds.minX + bounds.maxX) / 2
+      const cy = (bounds.minY + bounds.maxY) / 2
+      const bw = bounds.maxX - bounds.minX
+      const bh = bounds.maxY - bounds.minY
+      const fontSize = Math.max(4, Math.min(16, Math.min(bw, bh) * 0.18))
+      parts.push(
+        `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#1a1a1a" fill-opacity="0.7" font-size="${fontSize.toFixed(1)}" font-family="sans-serif" font-weight="700">${escapeXmlAttr(p.name)}</text>`,
+      )
     }
 
     parts.push('</g>')

@@ -31,12 +31,11 @@ export function getGrainArrowLayout(piece: PatternPiece): {
   const bounds = curvesBounds(piece.cutLine)
   if (!bounds) return null
   const line = getPieceGrainLine(piece)
-  const w = bounds.maxX - bounds.minX
   const shaftH = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y) || 1
   const awNom = 6
   const ahNom = 8
   const tickLenNom = 3
-  const scale = Math.min(1, w / (2 * awNom), shaftH / (2 * ahNom))
+  const scale = Math.min(1, shaftH / (2 * ahNom))
   const aw = awNom * scale
   const ah = ahNom * scale
   const tickLen = tickLenNom * scale

@@ -50,7 +50,7 @@ export function WorkspaceAiChatPanel() {
   const pieces = useStore((s) => s.workspace.pieces)
   const selectedPieceIds = useStore((s) => s.selectedPieceIds)
 
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   const [openAiApiKey, setOpenAiApiKey] = useState('')
   const [freeText, setFreeText] = useState('')
   const [attachedImage, setAttachedImage] = useState<AttachedImage | null>(null)

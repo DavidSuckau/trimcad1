@@ -513,7 +513,7 @@ function snapRulerToNearestPoint(world: Point, pieces: PatternPiece[]): Point {
 }
 
 /** Treffer-/Hover-Distanz (mm) für Nahtzuordnung: Klick oder Zeiger auf Konturlinie (Kante von Punkt zu Punkt) */
-const SEAM_HIT_MM = 18
+const SEAM_HIT_MM = 28
 
 /** Eckpunkt ziehen/löschen: max. Abstand Maus→Ecke (mm). Klein = Klick muss näher am Eckpunkt sitzen. */
 const VERTEX_DRAG_HIT_MM = 5
@@ -1916,6 +1916,10 @@ export function WorkspaceCanvas() {
         if (useVertex && bestVertex) {
           if (bestVertex.dist <= bestVertex.hitRadius) {
             const p = pieces.find((x) => x.id === bestVertex.pieceId)
+            if (p && (p.notches ?? []).some((n) => n.vertexIndex === bestVertex!.vertexIndex)) {
+              setToastMessage('warn:Kerbe auf diesem Eckpunkt – bitte zuerst Kerbe löschen oder verschieben.')
+              return
+            }
             const useSeamMaster = p != null && useSeamLineForVertexEditing(p)
             const curves = useSeamMaster ? p!.seamLine : p!.cutLine
             const startLocal = bestVertex.vertexIndex === 0
@@ -2585,14 +2589,12 @@ export function WorkspaceCanvas() {
           const vertexInRange = bestVertex.value != null && bestVertex.dist <= HOVER_DELETE_HIT
           const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
           if (vertexInRange && notchInRange) {
-            if (bestNotch.dist < bestVertex.dist) {
-              setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
-              setHoveredDeletablePoint(null)
-              setHoveredInternalLine(null)
-              setNotchPreview(null)
-              setHoveredPieceId(null)
-              return
-            }
+            setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
+            setHoveredDeletablePoint(bestVertex.value)
+            setHoveredInternalLine(null)
+            setNotchPreview(null)
+            setHoveredPieceId(null)
+            return
           } else if (notchInRange) {
             setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
             setHoveredDeletablePoint(null)
@@ -5477,15 +5479,24 @@ export function WorkspaceCanvas() {
             }
             if (!d) return null
             return (
-              <path
-                key="edge-picking-hover"
-                d={d}
-                fill="none"
-                stroke="#e65100"
-                strokeWidth={3.5}
-                strokeOpacity={0.9}
-                pointerEvents="none"
-              />
+              <g key="edge-picking-hover">
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#e65100"
+                  strokeWidth={5}
+                  strokeOpacity={0.35}
+                  pointerEvents="none"
+                />
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#e65100"
+                  strokeWidth={2.5}
+                  strokeOpacity={0.9}
+                  pointerEvents="none"
+                />
+              </g>
             )
           })()}
           {tool === 'profil' && hoveredProfileEdge && (() => {

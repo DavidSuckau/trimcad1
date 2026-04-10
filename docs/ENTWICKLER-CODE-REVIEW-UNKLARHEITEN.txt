@@ -10,10 +10,12 @@
   • LOP-009, LOP-010, LOP-014, LOP-016: Technik / Code-Review (konkrete
     Codepfade, Doku-Lücken, Seam-as-Master vs. cutLine).
   • LOP-020–041: Produkt, UX, Import/Export-Roadmap, Vision.
-  • LOP-042–056: Code-Qualität, Architektur, Performance, Tooling
+  • LOP-042–057: Code-Qualität, Architektur, Performance, Tooling
     (aus systematischer Code-Review April 2026).
+  • LOP-058–069: Externer Tester-Feedback (April 2026) – PDF, UI, Notches,
+    Nahtzugabe, Geometrie, Import, Profile.
   Neue Funktionen, Erweiterungen und größere Refactorings: immer als **neuer**
-  LOP-Punkt mit der **nächsten freien ID** (nach 056 fortführen) eintragen;
+  LOP-Punkt mit der **nächsten freien ID** (nach 069 fortführen) eintragen;
   bei Überschneidung mit technischen LOP-Punkten **„Siehe auch LOP-xxx“** setzen.
 
   Legende
@@ -79,6 +81,27 @@
   LOP-052   Tooling                ESLint/Prettier einrichten           [~]
   LOP-055   Performance            Batch-Actions: Mehrfach-set() statt gebündelt [~]
   LOP-057   Bug [!]                Harte Vertices → soft bei Seam-CutLine-Rebuild [✓]
+
+
+================================================================================
+  LOP-PUNKTE – Übersicht Externer Tester-Feedback (LOP-058–069)
+================================================================================
+
+  ID        Kategorie              Kurztitel                             Status
+  --------  ---------------------  ------------------------------------  ----------
+  LOP-058   Export [!]             PDF druckfertig (Skalierung, Ränder)  [✓]
+  LOP-059   UI / Darstellung       Profilbezeichnung an Linie binden    [✓] geprüft
+  LOP-060   Bug [!]                Farbwechsel Blau↔Rot unzuverlässig   [✓]
+  LOP-061   UI                     KI-Fenster standardmäßig ausblenden  [✓]
+  LOP-062   Interaktion [!]        Notch↔Vertex-Konflikt: blockieren   [✓]
+  LOP-063   Nahtzugabe             Notch-Stabilität bei NZ-Änderung     [✓] geprüft
+  LOP-064   Nahtzugabe / UX        Individuelle NZ: Hitbox + Feedback   [✓]
+  LOP-065   Geometrie              Laufrichtungspfeil skaliert ungewollt [✓]
+  LOP-066   Geometrie              Drehpunkt (Pivot) bewegt sich        [✓]
+  LOP-067   UX / Stückliste        Teilenamen groß auf Pattern (Vorschau) [✓]
+  LOP-068   Import [!]             DXF-Import: Notch-Erkennung robuster [✓]
+  LOP-069   Funktion               Profile auf internen Linien          [ ]
+
 
   Erledigt (April 2026): LOP-042 (ErrorBoundary), LOP-046 (deletePiece),
   LOP-047 (loadProject UI-Reset), LOP-048 (Geometry-Duplikate → geometryConstants.ts),
@@ -210,6 +233,11 @@
   durch Nutzer wählbar. Aktuell: eingeschränkt / fehleranfällig.
   Siehe auch: LOP-009, LOP-010.
 
+  Externer Tester (April 2026):
+  • Notches springen teilweise unerwartet (Geometrie-/Snap-Logik prüfen)
+  • Constraint-System für Notch-Platzierung fehlt
+  Siehe auch LOP-062, LOP-063.
+
 
 --- LOP-022 [~] [!] Digitalisierung (Foto → Schnittteil) -------------------
 
@@ -225,6 +253,11 @@
 
   Validierung: Schnittpunktfehler, Notch auf Ecke, ungültige Geometrien; optional
   Debug-Ausgaben verbessern.
+
+  Externer Tester (April 2026):
+  • Fehlerhafte Warnungen erscheinen ohne echten Konflikt → Kollisionslogik
+    überarbeiten, Edge Cases testen.
+  Siehe auch LOP-062.
 
 
 --- LOP-024 [ ] Online-Zugriff Version 1 ----------------------------------
@@ -250,6 +283,13 @@
   Rechtsklick und Tastatur: Löschen, Kopieren, Umbenennen, Material, Laufrichtung
   (soweit vorgesehen).
 
+  Externer Tester (April 2026):
+  • Tastenkürzel funktionieren im Browser teilweise nicht (Fokusverlust,
+    Event-Listener überschrieben). Lösung: Globales Shortcut-System,
+    Fokus-Handling verbessern.
+  Hinweis: Keyboard-Listener-Churn bereits behoben (LOP-053 erledigt);
+  restliches Fokus-Problem offen.
+
 
 --- LOP-028 [~] Nahtlogik -------------------------------------------------
 
@@ -272,6 +312,11 @@
 --- LOP-031 [ ] DXF-Import (über SVG) -------------------------------------
 
   Pipeline DXF → SVG → bearbeitbares Modell.
+
+  Externer Tester (April 2026):
+  • Beim DXF-Import werden nicht alle Notches erkannt → robustere
+    Notch-Detection nötig.
+  Siehe auch LOP-068.
 
 
 --- LOP-032 [ ] Export-Einstellungen --------------------------------------
@@ -324,12 +369,21 @@
 
   Batch-Ausgabe für Produktion; vollständige Datensätze automatisch erzeugen.
 
+  Externer Tester (April 2026):
+  • Profile sollen beim PDF-Export automatisch als Stückliste integriert werden
+    (Profilname, Maße/Länge, Anzahl, Material; eigene Seite oder Sidebar).
+  Siehe auch LOP-058, PROF-005.
+
 
 --- LOP-041 [ ] UX-Detailverbesserungen ------------------------------------
 
   Hover bei Notches; Mehrfach-Notches vermeiden/regeln; Punktauswahl präziser;
   Laufrichtung visuell klar; Shortcuts; Zoom/Lupe für Fehleranalyse.
   Siehe auch: LOP-021 (Notches).
+
+  Externer Tester (April 2026):
+  • Debug-Overlay gewünscht: Punkt-IDs, Linienrichtungen, Notch-Positionen.
+  • Ständiges visuelles Feedback bei Interaktionen.
 
 
 ================================================================================
@@ -553,27 +607,382 @@
 
 
 ================================================================================
+  Externer Tester-Feedback – Detail (LOP-058 … LOP-069)
+  (Quelle: Externer Tester-Report April 2026)
+================================================================================
+
+--- LOP-058 [✓] PDF-Export druckfertig ------------------------------------
+
+  Kategorie: Export / Druckausgabe
+  Quelle: Externer Tester
+
+  Problem:
+  PDFs müssen direkt druckfähig sein, ohne manuelles Anpassen.
+
+  Anforderungen:
+  • Korrekte Skalierung (1:1 oder definierter Maßstab)
+  • Einheitliche Seitenformate (A4 / A3)
+  • Richtige Ränder und ausreichende DPI (≥ 300 für Druck)
+  • Keine UI-Elemente oder Debug-Infos im Export
+  • Profile automatisch als Stückliste im PDF integrieren:
+    - Profilname, Maße/Länge, Anzahl, Material (optional)
+    - Eigene Seite oder Sidebar
+
+  Siehe auch: LOP-040, PROF-005.
+
+  Erledigt (April 2026):
+  ✓ Bildkompression 'FAST' → 'MEDIUM' (schärferer Druck)
+  ✓ Workspace-Vorschau-Auflösung 1600px → 2400px
+  ✓ Seitennummern-Footer auf allen Seiten
+  ✓ Irreführender "1:1"-Text in Plankopf klargestellt
+  Datei: src/bom/stuecklistePdf.ts
+
+
+--- LOP-059 [✓] Profilbezeichnung dynamisch an Profillinie binden ---------
+
+  Kategorie: UI / Darstellung
+  Quelle: Externer Tester
+
+  Problem:
+  Profilbezeichnung muss immer oberhalb der Profil-Linie stehen.
+  Bei nachträglichem Verschieben der Linie wandert die Beschriftung nicht mit.
+
+  Lösung:
+  Dynamische Bindung der Beschriftung an die Linie (relative Position),
+  sodass Label sich automatisch bei Verschiebung anpasst.
+
+  Erledigt (April 2026):
+  ✓ Geprüft: Labels werden bei jedem Render aus der aktuellen Kantengeometrie
+    berechnet (Zeilen 5576-5600 in WorkspaceCanvas.tsx). Midpoint der Kante +
+    perpendikularer Offset → Label folgt automatisch bei Konturänderung.
+
+
+--- LOP-060 [✓] Farbwechsel Blau↔Rot unzuverlässig -----------------------
+
+  Kategorie: Bug / UI
+  Quelle: Externer Tester
+
+  Problem:
+  Das manuelle Umschalten von Eckpunkten (hart/rot ↔ weich/blau) über P/E
+  funktioniert nicht zuverlässig.
+  Ursache vermutlich: Event-Handling oder State-Update fehlerhaft.
+
+  Hinweis: Automatisches Umschalten von rot→blau ist in LOP-057 (erledigt)
+  behandelt. Hier geht es um den manuellen User-Toggle.
+
+  Maßnahmen:
+  • Event-Handler in WorkspaceCanvas prüfen (keydown P / E)
+  • Zustand nach Toggle verifizieren (softVertices / softVerticesMaster)
+  • Re-Rendering analysieren (wird UI nach Toggle aktualisiert?)
+
+  Siehe auch: LOP-057.
+
+  Erledigt (April 2026):
+  ✓ Hover-Logik: Wenn Vertex UND Notch im Hover-Bereich, werden jetzt BEIDE
+    States parallel gesetzt (hoveredDeletablePoint + hoveredDeletableNotch).
+    P/E wirkt auf den Vertex (höhere Prio im Handler), Delete wirkt auf den
+    Notch (Notch zuerst geprüft). Vorher: Notch näher → Vertex-State gelöscht
+    → P/E funktionierte nicht.
+  Datei: src/components/WorkspaceCanvas.tsx (Hover-Detection ~2585-2610)
+
+
+--- LOP-061 [✓] KI-Fenster standardmäßig ausblenden ----------------------
+
+  Kategorie: UI
+  Quelle: Externer Tester
+
+  Problem:
+  KI-Fenster soll standardmäßig ausgeblendet sein und nur nach
+  aktiver Öffnung durch den Nutzer sichtbar werden.
+
+  Lösung:
+  Initial-State für KI-Fenster-Sichtbarkeit auf false setzen.
+
+  Erledigt (April 2026):
+  ✓ useState(true) → useState(false) in WorkspaceAiChatPanel.tsx
+  Datei: src/components/WorkspaceAiChatPanel.tsx
+
+
+--- LOP-062 [✓] Notch↔Vertex-Konflikt: Verschieben blockieren ------------
+
+  Kategorie: Interaktion / Validierung
+  Quelle: Externer Tester
+
+  Problem:
+  Wenn ein Notch im Weg ist (auf einem Vertex), kann der Vertex trotzdem
+  verschoben werden → Geometrie-Inkonsistenz.
+
+  Anforderungen:
+  • Verschieben verhindern, wenn Notch auf Vertex sitzt
+  • Fehlermeldung anzeigen: „Notch muss zuerst gelöscht werden."
+  • Visuelles Highlight des Problems (z. B. roter Rahmen um Notch)
+
+  Siehe auch: LOP-021, LOP-023.
+
+  Erledigt (April 2026):
+  ✓ Vertex-Drag wird sofort blockiert, wenn eine Kerbe auf dem Vertex verankert
+    ist (notch.vertexIndex === draggedVertexIndex). Toast-Warnung:
+    „Kerbe auf diesem Eckpunkt – bitte zuerst Kerbe löschen oder verschieben."
+  ✓ Store-seitig: notchPushedToCorner war bereits vorhanden (Fallback).
+  Datei: src/components/WorkspaceCanvas.tsx (~1916-1920)
+
+
+--- LOP-063 [✓] Notch-Stabilität bei Nahtzugabe-Änderung -----------------
+
+  Kategorie: Nahtzugabe / Notches
+  Quelle: Externer Tester
+
+  Problem:
+  Bei Änderung der Nahtzugabe (z. B. auf 0) verschieben sich Notches.
+
+  Erwartung:
+  Notches bleiben stabil (relative Position auf der Kante beibehalten).
+
+  Lösung:
+  Relative Position (parametrisch t ∈ [0,1] auf der Kante) statt absoluter
+  Werte speichern. Bei NZ-Änderung Notch-Position parametrisch remappen.
+
+  Hinweis: notchResyncCutLine.ts arbeitet bereits geometrisch; prüfen ob
+  NZ=0-Fall korrekt behandelt wird.
+  Siehe auch: LOP-010.
+
+  Erledigt (April 2026):
+  ✓ Geprüft: Notch-Resync nutzt sNormalized (normalisierter Bogenparameter 0–1)
+    bei jeder CutLine-Änderung. Notches behalten ihre relative Position auf der
+    Kontur. materializeNotchAnchorsOnCutLine setzt sNormalized bei Erstellung.
+    resyncNotchesAfterCutLineRebuilt mappt bei Topologie-Änderung (NZ) über
+    sNormalized auf die neue Kontur.
+
+
+--- LOP-064 [✓] Individuelle Nahtzugabe: Kantenauswahl Hitbox + Feedback --
+
+  Kategorie: Nahtzugabe / UX
+  Quelle: Externer Tester
+
+  Problem:
+  Auswahl der Kanten für individuelle Nahtzugabe ist unzuverlässig –
+  falsche Kante wird getroffen.
+
+  Lösung:
+  • Größere Hitboxen für Kantenerkennung
+  • Hover-Feedback (Kante hervorheben vor Klick)
+  • Nächstgelegene Kante priorisieren (statt erster Treffer)
+
+  Hinweis: EdgeAllowancePopover existiert bereits; Hit-Detection in
+  WorkspaceCanvas prüfen.
+
+  Erledigt (April 2026):
+  ✓ SEAM_HIT_MM von 18 auf 28mm erhöht (großzügigere Trefferzone)
+  ✓ Hover-Hervorhebung visuell verstärkt (doppelte Linie: 5mm/35% + 2.5mm/90%)
+  Datei: src/components/WorkspaceCanvas.tsx
+
+
+--- LOP-065 [✓] Laufrichtungspfeil skaliert ungewollt --------------------
+
+  Kategorie: Geometrie / Darstellung
+  Quelle: Externer Tester
+
+  Problem:
+  Laufrichtungspfeil (Grain Arrow) skaliert automatisch bei
+  Konturänderung mit.
+
+  Erwartung:
+  Pfeil-Skalierung nur einmal bei Erstellung festlegen; danach stabil.
+
+  Lösung:
+  Pfeil-Geometrie von Kontur-Updates entkoppeln. Länge/Richtung separat
+  speichern, nicht aus Bounding Box o. Ä. ableiten.
+
+  Erledigt (April 2026):
+  ✓ Pfeilkopf-Skalierung: Bounds-Breite (w) aus scale-Berechnung entfernt.
+    Scale hängt nur noch von der Schaftlänge ab: Math.min(1, shaftH/(2*ahNom)).
+    Bei Konturänderung ändert sich die Pfeilgröße nur noch, wenn die
+    Laufrichtungslinie selbst verschoben wird.
+  Datei: src/geometry/grainArrowLayout.ts
+
+
+--- LOP-066 [✓] Drehpunkt (Pivot) bewegt sich ungewollt ------------------
+
+  Kategorie: Geometrie / Interaktion
+  Quelle: Externer Tester
+
+  Problem:
+  Der Drehpunkt (Pivot) bewegt sich bei Konturänderungen ungewollt.
+
+  Erwartung:
+  Pivot nur durch explizite Nutzeraktion veränderbar.
+
+  Lösung:
+  Pivot-Position explizit als eigene Eigenschaft speichern (nicht aus
+  Zentroid oder Bounding Box ableiten). Fixieren / Constraints definieren.
+
+  Erledigt (April 2026):
+  ✓ setPieceRotation: Wenn pivotLocal noch nicht gesetzt, wird der aktuelle
+    Pivot (Bounds-Mitte) beim ersten Drehen als pivotLocal persistiert.
+    Ab dann bleibt der Pivot stabil bei Konturänderungen.
+  ✓ Doppelklick auf Pivot setzt ihn weiterhin zurück (setPiecePivot(null)).
+  Datei: src/store/useStore.ts (~2355-2380)
+
+
+--- LOP-067 [✓] Stückliste-Vorschau: Teilenamen groß auf Pattern ---------
+
+  Kategorie: UX / Stückliste
+  Quelle: Externer Tester + User-Feedback
+
+  Anforderung:
+  In der Stücklisten-Vorschau (StuecklisteModal / PDF-Preview) sollen die
+  Teilenamen groß und lesbar auf den Pattern-Teilen abgebildet sein, damit
+  man sie direkt zuordnen kann.
+
+  Umsetzung:
+  • In der SVG-Vorschau: Text-Element mit piece.name zentriert auf dem Teil
+  • Schriftgröße relativ zur Teilgröße (z. B. 40% der Bounding-Box-Höhe)
+  • Auch im PDF-Export sichtbar
+
+  Erledigt (April 2026):
+  ✓ buildWorkspaceOverviewSvgDocument: Teilenamen als Text-Element zentriert
+    auf der Bounding-Box-Mitte jedes Teils. Schriftgröße relativ zur
+    Teilgröße (18% der kleineren Seite, min 4, max 16).
+  Datei: src/workspace/buildWorkspaceOverviewSvg.ts
+
+
+--- LOP-068 [✓] DXF-Import: Notch-Erkennung robuster ---------------------
+
+  Kategorie: Import
+  Quelle: Externer Tester
+
+  Problem:
+  Beim DXF-Import werden nicht alle Notches erkannt. Die aktuelle
+  Detection-Logik (DXF → SVG → Modell) ist zu fragil.
+
+  Lösung:
+  • Notch-Entities im DXF robuster erkennen (verschiedene DXF-Layer,
+    Entity-Typen: LINE, INSERT, POINT auf Notch-Layern)
+  • Toleranzen bei Geometrie-Matching lockern
+  • Fehlende Notches loggen / Nutzer warnen
+
+  Siehe auch: LOP-031, LOP-014.
+
+  Erledigt (April 2026):
+  ✓ DXF-Parser: POINT-Entity-Typ hinzugefügt (DxfPointEntity)
+  ✓ Notch-Layer-Aliase erweitert: NOTCHES, MARK, NICK, SCORE, KERBE, KERBEN
+  ✓ Importer: POINT-Entities auf Notch-Layern als Kerben importiert
+    (extractStandaloneNotches + extractNotchesFromBlock)
+  ✓ V-Notch-Detection bereits mit 3-stufigem Toleranzsystem (strict → relaxed
+    → veryRelaxed, asymmetrische Schenkellängen)
+  Dateien: src/dxf/dxfParser.ts, src/dxf/dxfImporter.ts, src/dxf/dxfImportLayers.ts
+
+
+--- LOP-069 [ ] Profile auf internen Linien anlegen ------------------------
+
+  Kategorie: Funktion / Profile
+  Quelle: Externer Tester + User-Feedback
+
+  Anforderung:
+  Profile sollen nicht nur auf Außenkanten, sondern auch auf internen
+  Linien (z. B. innerhalb eines Teils) erstellt und zugeordnet werden können.
+  Profillinie und Beschriftung liegen dann innerhalb des Teils.
+
+  Umsetzung:
+  • Interne Linien als zusätzliche Geometrie am PatternPiece modellieren
+    (z. B. Array von internen Kurven neben cutLine/seamLine)
+  • Profilzuordnung auch für interne Linien ermöglichen
+  • Darstellung: Profil-Linie + Beschriftung innerhalb der Teilkontur
+
+  Siehe auch: PROF-001, PROF-003.
+
+
+================================================================================
+  Entwickler-Tipps (externer Tester) – Architektur-Kurzfassung
+================================================================================
+
+  Die folgenden Empfehlungen stammen aus dem externen Tester-Report (April 2026).
+  Viele decken sich mit bestehenden LOPs – daher hier als Kurzreferenz ohne
+  eigene LOP-IDs:
+
+  Geometrie & Datenmodell:
+  • Geometrie im Datenmodell speichern, SVG nur als Darstellung → LOP-043
+  • Relative Koordinaten (Notch auf Linie: Parameter 0–1) → LOP-063
+  • Topologische Beziehungen speichern (Punkt↔Linie↔Notch) → LOP-023
+
+  Numerische Stabilität:
+  • Floating-Point-Toleranz (epsilon) → LOP-054 (erledigt)
+  • Keine direkten Gleichheitsvergleiche → LOP-054
+  • Einheitliches Snapping-System → LOP-062
+
+  SVG-Rendering:
+  • Kein direktes DOM-Manipulieren → aktuell React/Zustand-basiert ✓
+  • Layer-System (Geometrie, Labels, Interaktion) → LOP-043
+  • Unsichtbare Hitboxen → LOP-064
+
+  Interaktion:
+  • Event-Phasen trennen (mousedown, mousemove, mouseup) → LOP-043
+  • Undo/Redo-System → neues Feature (noch kein LOP)
+  • Ständiges visuelles Feedback → LOP-041
+
+  Performance:
+  • Nur betroffene Elemente neu rendern → LOP-045
+  • Debouncing bei Mausbewegung → LOP-045
+
+  Maße & Skalierung:
+  • Intern immer feste Einheit (mm) → bereits umgesetzt ✓
+  • Zoom/Pan über Transformation, nicht Geometrie → bereits umgesetzt ✓
+
+  Architektur-Empfehlung:
+  • Klare Trennung: Geometry Engine, State Management, SVG Renderer,
+    Interaction Layer → LOP-043 + LOP-044
+
+  Typische Fehlerquellen (Tester-Hinweis):
+  • Direkte State-Mutationen → Zustand Immutability ✓
+  • Mehrfache Geometrie-Berechnung → LOP-055
+  • UI-Positionen gespeichert statt berechnet → LOP-059, LOP-065, LOP-066
+  • Event-Reihenfolge fehlerhaft → LOP-060, LOP-027
+
+  Debugging:
+  • Debug-Overlay (Punkt-IDs, Linienrichtungen, Notch-Positionen) → LOP-041
+  • Edge Cases testen (kleine Linien, NZ=0, Überlappungen) → LOP-050, LOP-063
+
+
+================================================================================
   ANHANG B: Empfohlene Maßnahmen (Technik, konsolidiert)
 ================================================================================
 
   Nächste sinnvolle Schritte (offen, nach Aufwand/Impact sortiert):
 
+  Kritisch / Blocker (Tester-Feedback):
+  0a. LOP-058 PDF-Export druckfertig (Skalierung, Ränder, DPI)
+  0b. LOP-060 Farbwechsel Blau↔Rot Toggle unzuverlässig (Bug)
+  0c. LOP-062 Notch↔Vertex-Konflikt: Verschieben blockieren
+  0d. LOP-068 DXF-Import: Notch-Erkennung robuster
+
   Mittlerer Aufwand, hoher Impact:
   1. LOP-045 Store-Selektoren in WorkspaceCanvas, Toolbar, Sidebar einführen
   2. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
   3. LOP-050 Tests für deletePiece, loadProject, Batch ergänzen
+  4. LOP-063 Notch-Stabilität bei NZ-Änderung
+  5. LOP-064 Individuelle NZ: Hitbox + Hover-Feedback
+  6. LOP-067 Stückliste-Vorschau: Teilenamen groß auf Pattern
 
   Bestehende Technik-LOP (weiterhin offen):
-  4. LOP-009/010 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
-  5. LOP-014 DXF-Doku/Writer-Abgrenzung (mit LOP-020/030)
+  7. LOP-009/010 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
+  8. LOP-014 DXF-Doku/Writer-Abgrenzung (mit LOP-020/030)
+
+  Geringer Aufwand (Quick Wins):
+  9. LOP-061 KI-Fenster standardmäßig ausblenden
+  10. LOP-059 Profilbezeichnung an Linie binden
 
   Langfristige Architektur:
-  6. LOP-043 WorkspaceCanvas aufteilen
-  7. LOP-044 useStore in Slices aufteilen
-  8. LOP-052 ESLint/Prettier einrichten
-  9. LOP-055 Batch-Actions gebündelt
-  10. LOP-051 Accessibility verbessern
-  11. LOP-041 UX-Feintuning
+  11. LOP-043 WorkspaceCanvas aufteilen
+  12. LOP-044 useStore in Slices aufteilen
+  13. LOP-052 ESLint/Prettier einrichten
+  14. LOP-055 Batch-Actions gebündelt
+  15. LOP-051 Accessibility verbessern
+  16. LOP-041 UX-Feintuning
+
+  Feature-Erweiterungen:
+  17. LOP-065 Laufrichtungspfeil Skalierung entkoppeln
+  18. LOP-066 Drehpunkt (Pivot) fixieren
+  19. LOP-069 Profile auf internen Linien
 
 
 ================================================================================
@@ -583,16 +992,28 @@
   Blocker / kritisch
   ------------------
   • LOP-020 DXF-Export produktionsreif
+  • LOP-058 PDF-Export druckfertig (Skalierung, Ränder, Stückliste) [NEU]
+  • LOP-060 Farbwechsel Blau↔Rot Toggle unzuverlässig [NEU]
   • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016)
   • LOP-022 Digitalisierung stabil (weitere Produkt-/UX-Themen)
+  • LOP-062 Notch↔Vertex-Konflikt: Verschieben blockieren [NEU]
+  • LOP-068 DXF-Import: Notch-Erkennung robuster [NEU]
 
   Wichtig
   -------
-  • LOP-021 Notch-System
+  • LOP-021 Notch-System (inkl. Tester-Feedback: Springen, Constraints)
   • LOP-028 Nahtlogik
   • LOP-025 Kurvenbearbeitung (Rest v. a. Produkt)
   • LOP-045 Performance: Store-Subscriptions + Memoization
   • LOP-050 Fehlende Tests für kritische Flows
+  • LOP-063 Notch-Stabilität bei NZ-Änderung [NEU]
+  • LOP-064 Individuelle NZ: Hitbox + Hover-Feedback [NEU]
+  • LOP-067 Stückliste-Vorschau: Teilenamen groß auf Pattern [NEU]
+
+  Quick Wins
+  ----------
+  • LOP-061 KI-Fenster standardmäßig ausblenden [NEU]
+  • LOP-059 Profilbezeichnung an Linie binden [NEU]
 
   Architektur / Wartbarkeit (mittelfristig)
   ------------------------------------------
@@ -607,6 +1028,9 @@
   • LOP-038 Materialdatenbank, LOP-039 Produktionsintegration
   • LOP-030–032, LOP-036–037, LOP-040–041 je nach Roadmap
   • LOP-051 Accessibility
+  • LOP-065 Laufrichtungspfeil Skalierung entkoppeln [NEU]
+  • LOP-066 Drehpunkt (Pivot) fixieren [NEU]
+  • LOP-069 Profile auf internen Linien [NEU]
 
   Erledigt (April 2026, Code-Review-Runde)
   -----------------------------------------
@@ -635,6 +1059,17 @@
   ✓ LOP-045 teilw. (PieceGroup mit React.memo gewrapped)
   ✓ LOP-055 teilw. (batchSetVerticesSoft zu single-set konsolidiert)
   ✓ LOP-009 teilw. (NotchType-Mapping UI↔Modell dokumentiert)
+  ✓ LOP-058 PDF druckfertig (Kompression MEDIUM, 2400px Vorschau, Seitennummern)
+  ✓ LOP-059 Profilbezeichnung dynamisch an Linie (geprüft: bereits korrekt)
+  ✓ LOP-060 Farbwechsel P/E: Hover parallel Vertex+Notch, Toggle zuverlässig
+  ✓ LOP-061 KI-Fenster standardmäßig ausgeblendet (expanded=false)
+  ✓ LOP-062 Notch↔Vertex-Konflikt: Drag sofort blockiert + Toast-Warnung
+  ✓ LOP-063 Notch-Stabilität bei NZ-Änderung (geprüft: sNormalized/resync)
+  ✓ LOP-064 Individuelle NZ Hitbox (SEAM_HIT_MM 18→28, Hover-Glow)
+  ✓ LOP-065 Laufrichtungspfeil: Bounds-Breite aus Scale entfernt
+  ✓ LOP-066 Pivot: persistPivotLocal bei erster Rotation
+  ✓ LOP-067 Teilenamen groß auf Pattern-Vorschau (SVG-Text)
+  ✓ LOP-068 DXF-Import: POINT-Entity + 6 neue Notch-Layer-Aliase
 
 
 ================================================================================

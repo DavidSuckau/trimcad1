@@ -2366,12 +2366,13 @@ export const useStore = create<Store>((set, get) => ({
       const sin = Math.sin(rad)
       const txNew = worldCenter.x - (lx * cos - ly * sin)
       const tyNew = worldCenter.y - (lx * sin + ly * cos)
+      const persistPivot = piece.transform.pivotLocal == null ? pivot : piece.transform.pivotLocal
       return {
         workspace: {
           ...s.workspace,
           pieces: s.workspace.pieces.map((p) =>
             p.id === pieceId
-              ? { ...p, transform: { ...p.transform, x: txNew, y: tyNew, rotation: rotationDeg } }
+              ? { ...p, transform: { ...p.transform, x: txNew, y: tyNew, rotation: rotationDeg, pivotLocal: persistPivot } }
               : p
           ),
         },

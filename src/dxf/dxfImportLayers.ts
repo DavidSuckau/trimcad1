@@ -41,11 +41,17 @@ const NOTCH_ENTRIES: Array<[string, 'single' | 'double' | 'v']> = [
   ['82', 'v'],
   ['83', 'single'],
   ['NOTCH', 'single'],
+  ['NOTCHES', 'single'],
   ['SLIT', 'single'],
   ['T-NOTCH', 'single'],
   ['CASTLE', 'double'],
   ['CHECK', 'v'],
   ['U-NOTCH', 'single'],
+  ['MARK', 'single'],
+  ['NICK', 'single'],
+  ['SCORE', 'single'],
+  ['KERBE', 'single'],
+  ['KERBEN', 'single'],
 ]
 
 export const NOTCH_LAYER_TO_TYPE = new Map<string, 'single' | 'double' | 'v'>(
