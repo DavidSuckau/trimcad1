@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useStore } from '../store/useStore'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
 import { edgeTotalLength } from '../geometry/seamUtils'
@@ -151,18 +151,7 @@ export function ProfileAssignmentDialog() {
           <strong>{edgeLengthMm.toFixed(1)} mm</strong>
         </div>
 
-        <label className="nahtzugabe-dialog-label">
-          <span>PDF-Dokument (Pfad/URL)</span>
-          <input
-            type="text"
-            className="nahtzugabe-dialog-input"
-            style={{ width: '100%', boxSizing: 'border-box' }}
-            value={pdfDocumentUrl}
-            onChange={(e) => setPdfDocumentUrl(e.target.value)}
-            placeholder="optional"
-            autoComplete="off"
-          />
-        </label>
+        <PdfDocumentField value={pdfDocumentUrl} onChange={setPdfDocumentUrl} />
 
         <div className="nahtzugabe-dialog-actions" style={{ marginTop: 16, display: 'flex', gap: 8 }}>
           <button
@@ -186,6 +175,101 @@ export function ProfileAssignmentDialog() {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function PdfDocumentField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [fileName, setFileName] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (value.startsWith('data:')) {
+      if (!fileName) setFileName('(eingebettete PDF)')
+    } else {
+      setFileName(null)
+    }
+  }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFileSelect = () => fileRef.current?.click()
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.type !== 'application/pdf') {
+      alert('Bitte eine PDF-Datei auswählen.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      onChange(dataUrl)
+      setFileName(file.name)
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
+  const handleClear = () => {
+    onChange('')
+    setFileName(null)
+  }
+
+  const isDataUrl = value.startsWith('data:')
+
+  return (
+    <div className="nahtzugabe-dialog-label">
+      <span>PDF-Dokument</span>
+      {isDataUrl ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: '#555', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {fileName ?? '(PDF geladen)'}
+          </span>
+          <button
+            type="button"
+            className="sidebar-btn"
+            style={{ fontSize: 11, padding: '2px 8px' }}
+            onClick={handleFileSelect}
+          >
+            Andere PDF …
+          </button>
+          <button
+            type="button"
+            style={{ background: 'none', border: 'none', color: '#c62828', cursor: 'pointer', fontSize: 12, padding: '2px 4px' }}
+            onClick={handleClear}
+            title="PDF entfernen"
+          >
+            ✕
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input
+            type="text"
+            className="nahtzugabe-dialog-input"
+            style={{ flex: 1, boxSizing: 'border-box' }}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="URL oder PDF laden →"
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            className="sidebar-btn"
+            style={{ fontSize: 11, padding: '4px 10px', whiteSpace: 'nowrap' }}
+            onClick={handleFileSelect}
+          >
+            PDF laden
+          </button>
+        </div>
+      )}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
     </div>
   )
 }
