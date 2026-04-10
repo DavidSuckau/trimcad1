@@ -747,50 +747,54 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: rgba(252, 252, 253, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.06);
   user-select: none;
+}
+.canvas-tool-icon {
+  display: block;
+  flex-shrink: 0;
 }
 .canvas-tool-btn {
   width: 32px;
   height: 32px;
   border: none;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
-  color: #444;
+  color: #64748b;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
   border-left: 2px solid transparent;
   padding: 0;
 }
 .canvas-tool-btn:hover:not(:disabled) {
-  background: #e8e8e8;
-  color: #111;
+  background: rgba(15, 23, 42, 0.05);
+  color: #475569;
 }
 .canvas-tool-btn:active:not(:disabled) {
-  background: #d0d0d0;
+  background: rgba(15, 23, 42, 0.08);
 }
 .canvas-tool-btn.active {
-  background: #e0e8f0;
-  color: #1565c0;
-  border-left-color: #1565c0;
+  background: rgba(71, 85, 105, 0.08);
+  color: #475569;
+  border-left-color: rgba(71, 85, 105, 0.45);
 }
 .canvas-tool-btn:disabled {
-  color: #bbb;
+  color: #cbd5e1;
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.55;
 }
 .canvas-tool-separator {
-  width: 22px;
+  width: 20px;
   height: 1px;
-  background: #e0e0e0;
-  margin: 3px auto;
+  background: rgba(15, 23, 42, 0.07);
+  margin: 4px auto;
   flex-shrink: 0;
 }
 
