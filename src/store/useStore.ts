@@ -460,7 +460,7 @@ type Store = {
     notchOpts?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }
   ) => void
   replaceSegmentWithBezier: (pieceId: string, curveIndex: number, cp1: Point, cp2?: Point) => void
-  movePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point, skipSeamRecalc?: boolean) => void
+  movePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point, skipSeamRecalc?: boolean, notchOpts?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }) => void
   removeVertex: (pieceId: string, vertexIndex: number) => void
   convertBezierSegmentToLine: (pieceId: string, curveIndex: number) => void
   /** Eckpunkt weich (blau) / fest (rot); gleiche Index-Basis wie updateVertex/removeVertex. */
@@ -2025,7 +2025,7 @@ export const useStore = create<Store>()(
       }
     }),
 
-  movePointOnCurve: (pieceId, curveIndex, t, newPoint, skipSeamRecalc) =>
+  movePointOnCurve: (pieceId, curveIndex, t, newPoint, skipSeamRecalc, notchOpts) =>
     set((s) => {
       let toastMessage: string | null = null
       const pieces = s.workspace.pieces.map((p) => {
@@ -2051,6 +2051,7 @@ export const useStore = create<Store>()(
           toastMessage = `warn:${moveOnCurveContourCheck.message}`
           return p
         }
+        const baseline = notchOpts?.notchResyncBaseline
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
           const derived = deriveCutLineForPiece(p, seamLine, p.seamAllowanceMm)
@@ -2059,7 +2060,10 @@ export const useStore = create<Store>()(
             return p
           }
           const cutLine = derived.cutLine
-          const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+          const oldN = baseline ? baseline.notches : p.notches
+          const oldC = baseline ? baseline.cutLine : p.cutLine
+          const oldS = baseline ? baseline.seamLine ?? p.seamLine : p.seamLine
+          const notches = resyncNotchesViaSeamAnchor(oldN, oldC, cutLine, oldS, seamLine)
           const softVertices = remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices)
           return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
         }
@@ -2068,6 +2072,10 @@ export const useStore = create<Store>()(
         const seamLine = skipSeamRecalc
           ? p.seamLine
           : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
+        if (baseline) {
+          const notches = resyncNotchesAfterCutLineRebuilt(baseline.notches, baseline.cutLine, cutLine)
+          return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
+        }
         return applySharpCornerPromotion({ ...p, cutLine, seamLine })
       })
       return {

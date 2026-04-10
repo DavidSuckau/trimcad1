@@ -4,6 +4,7 @@ import { useStore as useZustandStore } from 'zustand'
 import { useStore, undoAction, redoAction } from '../store/useStore'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import type { NotchSetting } from '../store/useStore'
+import { CanvasToolbar } from './CanvasToolbar'
 import {
   closedPathD,
   curveToPathD,
@@ -1429,7 +1430,7 @@ export function WorkspaceCanvas() {
         notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[]; seamLine: Curve[] }
       }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
-    | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number } }
+    | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number }; notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[]; seamLine: Curve[] } }
     | { kind: 'rectangle'; start: Point; current: Point }
     /** Fensterauswahl im Select-Tool (leerer Bereich). */
     | { kind: 'selectionMarquee'; start: Point; current: Point }
@@ -1962,7 +1963,17 @@ export function WorkspaceCanvas() {
           bestVertex &&
           (!bestPointOnCurve || bestVertex.dist < bestPointOnCurve.dist)
         if (usePointOnCurve && bestPointOnCurve) {
-          setDragging({ kind: 'pointOnCurve', pieceId: bestPointOnCurve.pieceId, curveIndex: bestPointOnCurve.curveIndex, t: bestPointOnCurve.t })
+          const pocPiece = pieces.find((x) => x.id === bestPointOnCurve.pieceId)
+          const pocNotchSnap = pocPiece && (pocPiece.notches ?? []).length > 0
+            ? {
+                notches: cloneVertexDragNotches(pocPiece.notches),
+                cutLine: cloneVertexDragCutLine(pocPiece.cutLine),
+                seamLine: pocPiece.seamLine.length > 0
+                  ? pocPiece.seamLine.map(c => c.type === 'line' ? { ...c, start: { ...c.start }, end: { ...c.end } } : { ...c, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } })
+                  : [],
+              }
+            : undefined
+          setDragging({ kind: 'pointOnCurve', pieceId: bestPointOnCurve.pieceId, curveIndex: bestPointOnCurve.curveIndex, t: bestPointOnCurve.t, ...(pocNotchSnap ? { notchStabilize: pocNotchSnap } : {}) })
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
@@ -1978,10 +1989,15 @@ export function WorkspaceCanvas() {
             const startLocal = bestVertex.vertexIndex === 0
               ? curves[0].start
               : curves[bestVertex.vertexIndex - 1].end
-            const notchStabilize =
-              p!.seamAllowanceMm != null && useSeamLineForVertexEditing(p!)
-                ? { notches: cloneVertexDragNotches(p!.notches), cutLine: cloneVertexDragCutLine(p!.cutLine), seamLine: p!.seamLine.map(c => c.type === 'line' ? { ...c, start: { ...c.start }, end: { ...c.end } } : { ...c, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }) }
-                : undefined
+            const notchStabilize = (p!.notches ?? []).length > 0
+              ? {
+                  notches: cloneVertexDragNotches(p!.notches),
+                  cutLine: cloneVertexDragCutLine(p!.cutLine),
+                  seamLine: p!.seamLine.length > 0
+                    ? p!.seamLine.map(c => c.type === 'line' ? { ...c, start: { ...c.start }, end: { ...c.end } } : { ...c, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } })
+                    : [],
+                }
+              : undefined
             setDragging({
               kind: 'vertex',
               pieceId: bestVertex.pieceId,
@@ -3025,7 +3041,7 @@ export function WorkspaceCanvas() {
           const dy = piece.seamAllowanceMm * Math.sin(rad)
           target = { x: local.x + dx, y: local.y + dy }
         }
-        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target)
+        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target, false, dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined)
       } else if (dragging.kind === 'line') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -4049,6 +4065,7 @@ export function WorkspaceCanvas() {
           ↪
         </button>
       </div>
+      <CanvasToolbar />
       {notchEditTarget &&
         tool === 'select' &&
         (() => {
