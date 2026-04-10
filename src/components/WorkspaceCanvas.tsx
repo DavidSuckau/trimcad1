@@ -780,11 +780,12 @@ const PieceGroup = memo(function PieceGroup({
   hoveredNotchId,
   cutSeamSwapped,
   showGrain,
+  /** Endpunkte des Laufrichtungs-Pfeils (nur wenn Fadenlauf per Ziehen änderbar, z. B. Layout-Modus). */
+  showGrainDragHandles,
   showNotches,
   showDrills,
   showInternalLines,
   showPieceNames,
-  showPoints,
   showContourMeasurements,
   hoveredInternalLineCurveIndex,
   onContextMenu,
@@ -805,11 +806,11 @@ const PieceGroup = memo(function PieceGroup({
   hoveredNotchId?: string | null
   cutSeamSwapped?: boolean
   showGrain?: boolean
+  showGrainDragHandles?: boolean
   showNotches?: boolean
   showDrills?: boolean
   showInternalLines?: boolean
   showPieceNames?: boolean
-  showPoints?: boolean
   showContourMeasurements?: boolean
   hoveredInternalLineCurveIndex?: number | null
   onContextMenu?: (e: React.MouseEvent) => void
@@ -1063,24 +1064,24 @@ const PieceGroup = memo(function PieceGroup({
                 </>
               )}
             </g>
-            {showPoints && (
+            {showGrainDragHandles && (
               <>
                 <circle
                   cx={line.start.x}
                   cy={line.start.y}
-                  r={4.2 * ptPs}
+                  r={2.35 * ptPs}
                   fill={T.grain.endpoint}
                   stroke={T.grain.endpointStroke}
-                  strokeWidth={1 * ptPs}
+                  strokeWidth={0.55 * ptPs}
                   pointerEvents="none"
                 />
                 <circle
                   cx={line.end.x}
                   cy={line.end.y}
-                  r={4.2 * ptPs}
+                  r={2.35 * ptPs}
                   fill={T.grain.endpoint}
                   stroke={T.grain.endpointStroke}
-                  strokeWidth={1 * ptPs}
+                  strokeWidth={0.55 * ptPs}
                   pointerEvents="none"
                 />
               </>
@@ -4864,12 +4865,12 @@ export function WorkspaceCanvas() {
               onPointerDown={handlePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
               showGrain={showGrain}
+              showGrainDragHandles={!contourEditEnabled && selectedPieceIds.includes(piece.id) && showGrain}
               showNotches={showNotches}
               showDrills={showDrills}
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
               showContourMeasurements={showContourMeasurements}
-              showPoints={showPoints}
               notchIdBeingDragged={
                 dragging?.kind === 'notchMove' &&
                 dragging.pieceId === piece.id &&
