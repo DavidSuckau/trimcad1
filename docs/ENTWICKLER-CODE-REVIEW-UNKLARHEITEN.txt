@@ -207,8 +207,13 @@
   Zwischenstand (April 2026, in Arbeit):
   Teilweise Absicherung in angrenzenden Store-/Canvas-Pfaden umgesetzt
   (u. a. Guards/Validierung bei Vertex-Operationen, Batch-Delete-softVertices,
-  Notch-Preview/Commit-Konsistenz). Kernpunkt bleibt offen: die oben genannten
-  Funktionen sind weiterhin konzeptionell cutLine-zentriert.
+  Notch-Preview/Commit-Konsistenz).
+  ✓ flipPieceAlongGrain: Auf Seam-as-Master umgestellt (April 2026).
+    Bei Nahtzugabe wird die seamLine gespiegelt, cutLine per deriveCutLineForPiece
+    abgeleitet (statt umgekehrt). Notch-Resync über resyncNotchesAfterCutLineRebuilt.
+  ✓ removeNotchAnchor / toggleNotchAnchor: Sind No-Ops (Notch-Anchor-System entfernt).
+  Noch offen: addCurveToCutLine fügt direkt auf cutLine an (nur für Digitalisierung
+  relevant, wo noch keine NZ existiert – kein Bug in der Praxis).
 
 
 ================================================================================
@@ -601,6 +606,25 @@
     max(seamAllowanceMm×3, MAP_CUT_TO_MASTER_EPS_MM×2)
   ✓ nearestCutVertexIndex: optionaler maxDistMm-Parameter
   ✓ remapSoftVerticesToNewCutLine: nutzt REMAP_MAX_DIST_MM = 50mm
+
+  Fix Phase 3 (April 2026 – endgültige Behebung):
+  Problem: Phase-2-Schwelle war nicht ausreichend. Clipper entfernt kollineare
+  Vertices (z. B. eingefügter Punkt auf gerader Kante), sodass kein Cut-Vertex
+  nahe dem Master-Vertex existiert. syncSoftAfterSharpCornerPromotion filterte
+  softVerticesMaster per Cut-Mapping → Master-Soft-Eintrag verschwand. Zusätzlich
+  mappte masterSoftVertexIndexSet verwaiste Cut-Soft-Indizes zurück auf harte
+  Master-Vertices.
+  ✓ mapMasterVertexIndexToCutVertexIndex: Distanzschwelle max(seamAllowanceMm×2, 8)
+  ✓ mapCutVertexIndexToMasterVertexIndexForVertexDrag: Distanzschwelle analog
+  ✓ syncSoftAfterSharpCornerPromotion: softVerticesMaster NUR per Range-Check
+    validiert (m >= 0 && m < seamLine.length), NICHT mehr per Cut-Mapping gefiltert.
+    Grund: softVerticesMaster ist die alleinige Quelle der Wahrheit.
+  ✓ masterSoftVertexIndexSet: Für seam-as-master NUR softVerticesMaster verwenden.
+    Kein Rück-Mapping von softVertices (Cut-Indizes) → Master, weil verwaiste
+    Cut-Indizes sonst fälschlich auf harte Master-Vertices projiziert werden.
+  ✓ insertPointOnCutLine: nearestCutVertexIndex mit maxDist-Schwelle aufgerufen
+    max(seamAllowanceMm×3, 20), damit verwaiste Seam-Punkte nicht auf weit
+    entfernte Cut-Corner gemappt werden.
 
   Test: softVertexStability.test.ts (5 Tests, inkl. masterSoftVertexIndexSet-
   Prüfung nach Punkt-Einfügen und nach mehrfachem Einfügen).
@@ -1070,6 +1094,18 @@
   ✓ LOP-066 Pivot: persistPivotLocal bei erster Rotation
   ✓ LOP-067 Teilenamen groß auf Pattern-Vorschau (SVG-Text)
   ✓ LOP-068 DXF-Import: POINT-Entity + 6 neue Notch-Layer-Aliase
+  ✓ LOP-057 Phase 3: mapMaster/CutVertexIndex Distanzschwelle,
+    syncSoftAfterSharpCornerPromotion nur Range-Check für softVerticesMaster,
+    masterSoftVertexIndexSet ausschließlich softVerticesMaster für seam-as-master,
+    insertPointOnCutLine nearestCutVertexIndex mit maxDist-Schwelle
+  ✓ LOP-016 teilw. (flipPieceAlongGrain auf Seam-as-Master umgestellt;
+    Notch-Spiegelung über materializeNotchAnchorsOnCutLine statt resync)
+  ✓ LOP-045 teilw. (DesignBar + Sidebar: useShallow-Selektoren statt useStore())
+  ✓ LOP-055 teilw. (batchDeleteMarqueeCompletePieces zu single-set() konsolidiert)
+  ✓ LOP-051 teilw. (useFocusTrap Hook: SettingsModal, PiecePropertiesModal,
+    StuecklisteModal – Tab-Navigation bleibt im Modal)
+  ✓ LOP-050 teilw. (flipPieceAlongGrain.test.ts: 4 Tests – cut-only, seam-master,
+    softVertex-Stabilität, Notch-Resync nach Spiegelung)
 
 
 ================================================================================

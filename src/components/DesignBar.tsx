@@ -1,4 +1,5 @@
 import { useStore } from '../store/useStore'
+import { useShallow } from 'zustand/react/shallow'
 
 export function DesignBar() {
   const {
@@ -12,7 +13,18 @@ export function DesignBar() {
     showProfiles, setShowProfiles,
     showContourMeasurements, setShowContourMeasurements,
     showWorkspaceNotes, setShowWorkspaceNotes,
-  } = useStore()
+  } = useStore(useShallow((s) => ({
+    showGrid: s.showGrid, setShowGrid: s.setShowGrid,
+    showPoints: s.showPoints, setShowPoints: s.setShowPoints,
+    showGrain: s.showGrain, setShowGrain: s.setShowGrain,
+    showNotches: s.showNotches, setShowNotches: s.setShowNotches,
+    showDrills: s.showDrills, setShowDrills: s.setShowDrills,
+    showInternalLines: s.showInternalLines, setShowInternalLines: s.setShowInternalLines,
+    showPieceNames: s.showPieceNames, setShowPieceNames: s.setShowPieceNames,
+    showProfiles: s.showProfiles, setShowProfiles: s.setShowProfiles,
+    showContourMeasurements: s.showContourMeasurements, setShowContourMeasurements: s.setShowContourMeasurements,
+    showWorkspaceNotes: s.showWorkspaceNotes, setShowWorkspaceNotes: s.setShowWorkspaceNotes,
+  })))
 
   const items: { label: string; checked: boolean; toggle: (v: boolean) => void }[] = [
     { label: 'Raster', checked: showGrid, toggle: setShowGrid },

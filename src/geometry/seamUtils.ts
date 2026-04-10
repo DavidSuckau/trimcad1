@@ -25,6 +25,8 @@ const MAP_CUT_TO_MASTER_EPS_MM = 8
 
 /**
  * Master-Vertex (Naht) → nächstliegender Eckpunkt auf der cutLine (für softVertices, die immer cut-indiziert sind).
+ * Mit Distanzschwelle: verhindert, dass ein Master-Vertex auf einen weit entfernten Cut-Vertex
+ * gemappt wird (z. B. wenn Clipper die Topologie ändert und keine logische Entsprechung existiert).
  */
 export function mapMasterVertexIndexToCutVertexIndex(piece: PatternPiece, masterVi: number): number | null {
   const master = getCurvesForSeamEdge(piece)
@@ -42,7 +44,8 @@ export function mapMasterVertexIndexToCutVertexIndex(piece: PatternPiece, master
       best = i
     }
   }
-  return best >= 0 ? best : null
+  const maxDist = Math.max((piece.seamAllowanceMm ?? 0) * 2, MAP_CUT_TO_MASTER_EPS_MM)
+  return best >= 0 && bestD <= maxDist ? best : null
 }
 
 /**
@@ -97,7 +100,8 @@ export function mapCutVertexIndexToMasterVertexIndexForVertexDrag(
       best = i
     }
   }
-  return best >= 0 ? best : null
+  const maxDist = Math.max((piece.seamAllowanceMm ?? 0) * 2, MAP_CUT_TO_MASTER_EPS_MM)
+  return best >= 0 && bestD <= maxDist ? best : null
 }
 
 /** Alle weichen Eckpunkte auf der Schnittkontur (Cut-Indizes): eingefügte Punkte + per Master gemappte weiche Naht-Ecken. */
@@ -115,7 +119,15 @@ export function getEffectiveSoftVerticesCut(piece: PatternPiece): number[] {
   return [...set].sort((a, b) => a - b)
 }
 
-/** Cut-Soft-Liste (z. B. nach Remap) wieder in `softVertices` / `softVerticesMaster` aufteilen. */
+/**
+ * Cut-Soft-Liste (z. B. nach Remap) wieder in `softVertices` / `softVerticesMaster` aufteilen.
+ *
+ * `softVerticesMaster` ist die primäre Quelle der Wahrheit für seam-as-master Teile.
+ * Sie wird nur per Range-Check gefiltert (Index innerhalb der Master-Kontur), NICHT
+ * nach Cut-Mapping. Grund: Clipper kann kollineare Vertices auf der cutLine entfernen,
+ * sodass kein korrespondierender Cut-Vertex existiert. Dann würde ein Filter per
+ * `mapMasterVertexIndexToCutVertexIndex` den Master-Soft-Eintrag fälschlich löschen.
+ */
 export function syncSoftAfterSharpCornerPromotion(piece: PatternPiece, filteredCutSoft: number[]): PatternPiece {
   const valid = new Set(filteredCutSoft)
   if (useSeamLineForVertexEditing(piece)) {
@@ -124,18 +136,15 @@ export function syncSoftAfterSharpCornerPromotion(piece: PatternPiece, filteredC
         .map((m) => mapMasterVertexIndexToCutVertexIndex(piece, m))
         .filter((x): x is number => x != null)
     )
-    // Cut-Liste: nur explizit eingefügte / Remap-Indizes; nicht jeden gültigen Cut, der auch durch Master abgedeckt ist
     const softVertices = [...valid]
       .filter((c) => {
         if (!masterImpliedCut.has(c)) return true
         return (piece.softVertices ?? []).includes(c)
       })
       .sort((a, b) => a - b)
+    const masterN = piece.seamLine.length
     const softVerticesMaster = (piece.softVerticesMaster ?? [])
-      .filter((m) => {
-        const c = mapMasterVertexIndexToCutVertexIndex(piece, m)
-        return c != null && valid.has(c)
-      })
+      .filter((m) => m >= 0 && m < masterN)
       .sort((a, b) => a - b)
     return {
       ...piece,
@@ -148,7 +157,13 @@ export function syncSoftAfterSharpCornerPromotion(piece: PatternPiece, filteredC
 
 /**
  * Weiche Punkte auf der **Master-Kontur** (Naht bzw. Schnitt ohne Zugabe).
- * Bei Nahtzugabe: `softVerticesMaster` (1:1 P/E) ∪ Cut-Soft aus `softVertices` (Legacy/eingefügt).
+ *
+ * Bei seam-as-master (Nahtzugabe): ausschließlich `softVerticesMaster`.
+ * Kein Rück-Mapping von `softVertices` (Cut-Indizes) → Master, weil
+ * Clipper die Cut-Topologie ändert und verwaiste Cut-Indizes sonst
+ * fälschlich auf harte Master-Vertices projiziert werden (Bug: rot→blau).
+ *
+ * Ohne Nahtzugabe (master === cutLine): `softVertices` direkt.
  */
 export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   const master = getCurvesForSeamEdge(piece)
@@ -162,37 +177,6 @@ export function masterSoftVertexIndexSet(piece: PatternPiece): Set<number> {
   }
   for (const vi of piece.softVerticesMaster ?? []) {
     if (vi >= 0 && vi < n) out.add(vi)
-  }
-  const cut = piece.cutLine
-  const cutImpliedByMaster = new Set<number>()
-  for (const mvi of piece.softVerticesMaster ?? []) {
-    if (mvi < 0 || mvi >= n) continue
-    const c = mapMasterVertexIndexToCutVertexIndex(piece, mvi)
-    if (c != null) cutImpliedByMaster.add(c)
-  }
-  for (const cutVi of piece.softVertices ?? []) {
-    if (cutVi < 0 || cutVi >= cut.length) continue
-    if (cutImpliedByMaster.has(cutVi)) continue
-    const mapped = mapCutVertexIndexToMasterVertexIndex(piece, cutVi)
-    if (mapped != null) {
-      out.add(mapped)
-      continue
-    }
-    // Fallback: nur wenn Cut-Ecke innerhalb einer großzügigen Schwelle zum nächsten Master liegt.
-    // Ohne Schwelle würden orphane Cut-Soft-Indizes auf beliebige harte Master-Vertices projiziert → Bug.
-    const cutPt = vertexPositionOnClosedCurves(cut, cutVi)
-    let bestMasterVi = -1
-    let bestD = Infinity
-    for (let mvi = 0; mvi < n; mvi++) {
-      const pt = vertexPositionOnClosedCurves(master, mvi)
-      const d = Math.hypot(pt.x - cutPt.x, pt.y - cutPt.y)
-      if (d < bestD) {
-        bestD = d
-        bestMasterVi = mvi
-      }
-    }
-    const maxFallbackMm = Math.max((piece.seamAllowanceMm ?? 0) * 3, MAP_CUT_TO_MASTER_EPS_MM * 2)
-    if (bestMasterVi >= 0 && bestD <= maxFallbackMm) out.add(bestMasterVi)
   }
   return out
 }

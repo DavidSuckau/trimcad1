@@ -1,7 +1,17 @@
 import { useStore } from '../store/useStore'
+import { useShallow } from 'zustand/react/shallow'
 
 export function Sidebar() {
-  const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, setPiecePropertiesDialogPieceId } = useStore()
+  const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, setPiecePropertiesDialogPieceId } = useStore(
+    useShallow((s) => ({
+      workspace: s.workspace,
+      selectedPieceIds: s.selectedPieceIds,
+      addPiece: s.addPiece,
+      selectPiece: s.selectPiece,
+      deletePiece: s.deletePiece,
+      setPiecePropertiesDialogPieceId: s.setPiecePropertiesDialogPieceId,
+    }))
+  )
   const { pieces } = workspace
 
   return (

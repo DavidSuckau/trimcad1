@@ -694,6 +694,46 @@ body {
   pointer-events: none;
 }
 
+.undo-redo-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 100;
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 3px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.1);
+  user-select: none;
+}
+.undo-redo-btn {
+  width: 30px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.undo-redo-btn:hover:not(:disabled) {
+  background: #e8e8e8;
+}
+.undo-redo-btn:active:not(:disabled) {
+  background: #d0d0d0;
+}
+.undo-redo-btn:disabled {
+  color: #bbb;
+  cursor: default;
+}
+
 /* Nahtzugabe-Dialog (Modal) */
 .nahtzugabe-dialog-overlay {
   position: fixed;

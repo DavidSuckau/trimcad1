@@ -395,7 +395,7 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     expect(nr!.distance).toBeLessThan(0.15)
   })
 
-  it('vermeidet Überschneidung: ein einzelner Cut-Soft-Index färbt nicht mehrere Master-Eckpunkte blau', () => {
+  it('vermeidet Überschneidung: softVerticesMaster ist alleinige Quelle, verwaiste softVertices färben keine Master-Vertices blau', () => {
     const piece: Workspace['pieces'][0] = {
       id: 'map-overlap',
       number: '003',
@@ -425,7 +425,11 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
       bomQuantity: 1,
     }
     const mapped = masterSoftVertexIndexSet(piece)
-    expect([...mapped]).toEqual([0])
+    expect([...mapped]).toEqual([])
+
+    const pieceWithMaster: Workspace['pieces'][0] = { ...piece, softVerticesMaster: [2] }
+    const mapped2 = masterSoftVertexIndexSet(pieceWithMaster)
+    expect([...mapped2]).toEqual([2])
   })
 
   it('beim Hinzufügen der Nahtzugabe bleibt ein weicher Punkt am Winkel stabil (nicht rot)', () => {

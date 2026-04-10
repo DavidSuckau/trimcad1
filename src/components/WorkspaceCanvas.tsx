@@ -1,6 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore } from '../store/useStore'
+import { useStore as useZustandStore } from 'zustand'
+import { useStore, undoAction, redoAction } from '../store/useStore'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import type { NotchSetting } from '../store/useStore'
 import {
@@ -1372,6 +1373,11 @@ export function WorkspaceCanvas() {
   const { pieces, view, notes: workspaceNotesList } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
   const profileAssignments = workspace.profileAssignments ?? []
+  const canUndo = useZustandStore(useStore.temporal, (s) => s.pastStates.length > 0)
+  const canRedo = useZustandStore(useStore.temporal, (s) => s.futureStates.length > 0)
+
+  const prevDragKindRef = useRef<string | null>(null)
+  const dragSnapshotRef = useRef<{ workspace: typeof workspace } | null>(null)
   const [grainFlipHover, setGrainFlipHover] = useState<{
     pieceId: string
     clientX: number
@@ -1519,6 +1525,35 @@ export function WorkspaceCanvas() {
     lineLengthInputRef.current?.focus()
     lineLengthInputRef.current?.select()
   }, [lineLengthEditor?.mode, lineLengthEditor?.pieceId, lineLengthEditor?.curveIndex])
+
+  const STORE_MODIFYING_DRAGS = useMemo(() => new Set([
+    'vertex', 'piece', 'rotate', 'pointOnCurve', 'notchMove',
+    'grainPoint', 'grainLine', 'controlpoint', 'workspaceNote',
+    'pivot', 'image-move', 'image-resize',
+  ]), [])
+  useEffect(() => {
+    const currentKind = dragging?.kind ?? null
+    const prevKind = prevDragKindRef.current
+    prevDragKindRef.current = currentKind
+    const wasData = prevKind != null && STORE_MODIFYING_DRAGS.has(prevKind)
+    const isData = currentKind != null && STORE_MODIFYING_DRAGS.has(currentKind)
+    if (isData && !wasData) {
+      dragSnapshotRef.current = { workspace: useStore.getState().workspace }
+      useStore.temporal.getState().pause()
+    } else if (!isData && wasData && dragSnapshotRef.current) {
+      const snapshot = dragSnapshotRef.current
+      dragSnapshotRef.current = null
+      const temporal = useStore.temporal.getState()
+      temporal.resume()
+      const currentWs = useStore.getState().workspace
+      if (snapshot.workspace !== currentWs) {
+        useStore.temporal.setState({
+          pastStates: [...temporal.pastStates, snapshot].slice(-20),
+          futureStates: [],
+        })
+      }
+    }
+  }, [dragging, STORE_MODIFYING_DRAGS])
 
   const segmentMenuVisible =
     (hoveredSegment != null && hoveredSegmentPos != null) ||
@@ -3211,6 +3246,16 @@ export function WorkspaceCanvas() {
   keydownHandlerRef.current = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (!inInput && (e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undoAction()
+        return
+      }
+      if (!inInput && (e.ctrlKey || e.metaKey) && (e.key === 'z' && e.shiftKey || e.key === 'y')) {
+        e.preventDefault()
+        redoAction()
+        return
+      }
       if (workspaceNoteEditor && e.key === 'Escape') {
         e.preventDefault()
         setWorkspaceNoteEditor(null)
@@ -3968,6 +4013,30 @@ export function WorkspaceCanvas() {
       }}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>
+      <div
+        className="undo-redo-bar"
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+      >
+        <button
+          className="undo-redo-btn"
+          disabled={!canUndo}
+          title="Rückgängig (Ctrl+Z)"
+          onClick={() => undoAction()}
+        >
+          ↩
+        </button>
+        <button
+          className="undo-redo-btn"
+          disabled={!canRedo}
+          title="Wiederherstellen (Ctrl+Shift+Z)"
+          onClick={() => redoAction()}
+        >
+          ↪
+        </button>
+      </div>
       {notchEditTarget &&
         tool === 'select' &&
         (() => {

@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useStore } from '../store/useStore'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
 import { edgeTotalLength } from '../geometry/seamUtils'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 export function PiecePropertiesModal() {
   const {
@@ -24,6 +25,8 @@ export function PiecePropertiesModal() {
     }
   }, [piecePropertiesDialogPieceId, piece, setPiecePropertiesDialogPieceId])
 
+  const trapRef = useFocusTrap<HTMLDivElement>()
+
   if (!piecePropertiesDialogPieceId || !piece) return null
 
   const fillOn = piece.fillInterior !== false
@@ -36,7 +39,7 @@ export function PiecePropertiesModal() {
       aria-modal="true"
       aria-label="Teil-Eigenschaften"
     >
-      <div className="nahtzugabe-dialog" style={{ minWidth: 320 }} onClick={(e) => e.stopPropagation()}>
+      <div className="nahtzugabe-dialog" style={{ minWidth: 320 }} onClick={(e) => e.stopPropagation()} ref={trapRef}>
         <h3 className="nahtzugabe-dialog-title">Teil-Eigenschaften</h3>
 
         <label className="nahtzugabe-dialog-label">

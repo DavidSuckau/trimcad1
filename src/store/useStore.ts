@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { temporal } from 'zundo'
 import type {
   Workspace,
   WorkspaceNote,
@@ -644,7 +645,9 @@ export function digitizeNodesToCurves(nodes: DigitizeNode[]): Curve[] {
   return curves
 }
 
-export const useStore = create<Store>((set, get) => ({
+export const useStore = create<Store>()(
+  temporal(
+    (set, get) => ({
   workspace: {
     id: 'ws1',
     name: 'Arbeitsfläche 1',
@@ -950,28 +953,37 @@ export const useStore = create<Store>((set, get) => ({
 
   batchDeleteMarqueeCompletePieces: () => {
     const s = get()
-    const ids = [
-      ...new Set(
-        s.batchSelectionTargets
-          .filter((t): t is { kind: 'piece'; pieceId: string } => t.kind === 'piece')
-          .map((t) => t.pieceId)
-      ),
-    ]
-    if (ids.length === 0) {
+    const idsToDelete = new Set(
+      s.batchSelectionTargets
+        .filter((t): t is { kind: 'piece'; pieceId: string } => t.kind === 'piece')
+        .map((t) => t.pieceId)
+    )
+    if (idsToDelete.size === 0) {
       set({
         toastMessage:
           'warn:Keine kompletten Teile in der Fensterauswahl. Auswahlrahmen muss jedes Teil vollständig umschließen.',
       })
       return
     }
-    for (const id of ids) {
-      get().deletePiece(id)
-    }
-    set({
+    set((prev) => ({
+      workspace: {
+        ...prev.workspace,
+        pieces: prev.workspace.pieces.filter((p) => !idsToDelete.has(p.id)),
+        notes: (prev.workspace.notes ?? []).filter((n) => !idsToDelete.has(n.pieceId)),
+        profileAssignments: (prev.workspace.profileAssignments ?? []).filter((pa) => !idsToDelete.has(pa.pieceId)),
+        seamAssignments: prev.workspace.seamAssignments.filter(
+          (sa) => !idsToDelete.has(sa.pieceIdA) && !idsToDelete.has(sa.pieceIdB)
+        ),
+      },
+      selectedPieceIds: prev.selectedPieceIds.filter((id) => !idsToDelete.has(id)),
+      piecePropertiesDialogPieceId:
+        prev.piecePropertiesDialogPieceId && idsToDelete.has(prev.piecePropertiesDialogPieceId) ? null : prev.piecePropertiesDialogPieceId,
+      nahtzugabeDialogPieceId:
+        prev.nahtzugabeDialogPieceId && idsToDelete.has(prev.nahtzugabeDialogPieceId) ? null : prev.nahtzugabeDialogPieceId,
       batchSelectionTargets: [],
       batchUiHighlightByTargetId: {},
-      batchSelectionFilter: 'all',
-    })
+      batchSelectionFilter: 'all' as const,
+    }))
   },
 
   setTool: (t) => set({ tool: t }),
@@ -1839,7 +1851,8 @@ export const useStore = create<Store>((set, get) => ({
               const cutLine = derived.cutLine
               const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
               const insertedOnSeam = newMaster[curveIndex].end
-              const insertedCutVi = nearestCutVertexIndex(cutLine, insertedOnSeam)
+              const maxInsertDist = Math.max((p.seamAllowanceMm ?? 0) * 3, 20)
+              const insertedCutVi = nearestCutVertexIndex(cutLine, insertedOnSeam, maxInsertDist)
               const softSet = new Set(remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices))
               if (insertedCutVi != null) softSet.add(insertedCutVi)
               const softVertices = [...softSet].sort((a, b) => a - b)
@@ -2316,17 +2329,28 @@ export const useStore = create<Store>((set, get) => ({
       const bounds = curvesBounds(piece.cutLine)
       if (!bounds) return s
       const cx = (bounds.minX + bounds.maxX) / 2
-      const cutLine = piece.cutLine.map((c) => mirrorCurve(c, cx))
-      // SeamLine nur aus cutLine ableiten – nie alte seamLine spiegeln (verhindert willkürliche Kontur)
-      const seamLine =
-        piece.seamAllowanceMm != null && cutLine.length >= 3
+      let cutLine: Curve[]
+      let seamLine: Curve[]
+      if (useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3) {
+        seamLine = piece.seamLine.map((c) => mirrorCurve(c, cx))
+        const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
+        cutLine = derived.ok ? derived.cutLine : piece.cutLine.map((c) => mirrorCurve(c, cx))
+      } else {
+        cutLine = piece.cutLine.map((c) => mirrorCurve(c, cx))
+        seamLine = piece.seamAllowanceMm != null && cutLine.length >= 3
           ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
           : []
-      const notches = piece.notches.map((n) => ({
+      }
+      const mirroredNotches = piece.notches.map((n) => ({
         ...n,
         position: mirrorX(n.position, cx),
         angle: 180 - n.angle,
+        sNormalized: undefined as number | undefined,
+        arcLengthMm: undefined as number | undefined,
       }))
+      const notches = mirroredNotches
+        .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
+        .filter((n): n is Notch => n != null)
       const drills = piece.drills.map((d) => ({ ...d, center: mirrorX(d.center, cx) }))
       const internalLines = piece.internalLines.map((c) => mirrorCurve(c, cx))
       const grainLine = piece.grainLine
@@ -2677,4 +2701,45 @@ export const useStore = create<Store>((set, get) => ({
     })
   },
 
-}))
+}),
+    {
+      limit: 20,
+      partialize: (state) => ({
+        workspace: state.workspace,
+      }),
+      equality: (pastState, currentState) => {
+        const pw = pastState.workspace
+        const cw = currentState.workspace
+        if (pw === cw) return true
+        return (
+          pw.id === cw.id &&
+          pw.name === cw.name &&
+          pw.pieces === cw.pieces &&
+          pw.seamAssignments === cw.seamAssignments &&
+          pw.notes === cw.notes &&
+          pw.profileAssignments === cw.profileAssignments &&
+          pw.projectFileName === cw.projectFileName &&
+          pw.bomDocumentVersion === cw.bomDocumentVersion &&
+          pw.bomDeveloperName === cw.bomDeveloperName &&
+          pw.bomEngineerName === cw.bomEngineerName
+        )
+      },
+    },
+  ),
+)
+
+export function undoAction() {
+  const currentView = useStore.getState().workspace.view
+  useStore.temporal.getState().undo()
+  useStore.setState((s) => ({
+    workspace: { ...s.workspace, view: currentView },
+  }))
+}
+
+export function redoAction() {
+  const currentView = useStore.getState().workspace.view
+  useStore.temporal.getState().redo()
+  useStore.setState((s) => ({
+    workspace: { ...s.workspace, view: currentView },
+  }))
+}

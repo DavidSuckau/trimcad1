@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useStore } from '../store/useStore'
 import {
   aggregateBomByMaterial,
@@ -73,11 +74,13 @@ export function StuecklisteModal() {
     [aggregate],
   )
 
+  const trapRef = useFocusTrap<HTMLDivElement>()
+
   if (!showStuecklisteModal) return null
 
   return (
     <div className="settings-overlay" onClick={() => setShowStuecklisteModal(false)} role="dialog" aria-modal="true" aria-label="Stückliste">
-      <div className="settings-modal stueckliste-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="settings-modal stueckliste-modal" onClick={(e) => e.stopPropagation()} ref={trapRef}>
         <div className="settings-header">
           <h2 className="settings-title">Stückliste</h2>
           <button

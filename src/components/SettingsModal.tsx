@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store/useStore'
 import type { NotchType } from '../store/useStore'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 type SettingsTab = 'allgemein' | 'farben' | 'pfade' | 'notches'
 
@@ -31,12 +32,13 @@ export function SettingsModal() {
     setDxfImportSeamAllowanceMm,
   } = useStore()
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
+  const trapRef = useFocusTrap<HTMLDivElement>()
 
   if (!showSettingsModal) return null
 
   return (
     <div className="settings-overlay" onClick={() => setShowSettingsModal(false)} role="dialog" aria-modal="true" aria-label="Einstellungen">
-      <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="settings-modal" onClick={(e) => e.stopPropagation()} ref={trapRef}>
         <div className="settings-header">
           <h2 className="settings-title">Einstellungen</h2>
           <button
