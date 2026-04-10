@@ -52,6 +52,9 @@ import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
+import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
+
+let T: CanvasTheme = canvasTheme
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
 
@@ -680,14 +683,14 @@ function isClickOnInnerSideOfEdge(
   return dot <= 0 // Innenseite = entgegen der Außennormale
 }
 
-/** Eckpunkte (rot), eingefügte Punkte (blau), Kurvenpunkte (grün) */
-const COLOR_ECKPUNKT: [string, string] = ['#ef5350', '#b71c1c']
-const COLOR_SOFT_PUNKT: [string, string] = ['#42a5f5', '#1565c0']
-/** Punkt auf der Kurve (ziehen = Kurve glatt verschieben, keine Ecke) */
-const COLOR_PUNKT_AUF_KURVE: [string, string] = ['#66bb6a', '#2e7d32']
-
-/** Farbe für Notch-Kerben – gleiche Farbe wie die Außenkontur. */
-const NOTCH_STROKE = '#000'
+function getVertexColors() {
+  return {
+    COLOR_ECKPUNKT: T.vertex.corner,
+    COLOR_SOFT_PUNKT: T.vertex.soft,
+    COLOR_PUNKT_AUF_KURVE: T.vertex.curvePoint,
+    NOTCH_STROKE: T.notch.stroke,
+  }
+}
 
 /** Distanz in mm entlang des Segments von t bis zum nächsten Eckpunkt oder nächsten Notch (falls auf diesem Segment). Immer entlang der Kurve (Bogenlänge). */
 function distanceToNextVertexOrNotch(
@@ -785,12 +788,12 @@ const PieceGroup = memo(function PieceGroup({
   hoveredInternalLineCurveIndex,
   onContextMenu,
   viewZoom,
+  themeMode: _themeMode,
 }: {
   piece: PatternPiece
   isSelected: boolean
   isHovered: boolean
   hoveredSegmentCurveIndex: number | null
-  /** Kurvenpunkt-Werkzeug: Segment-Index bezieht sich auf Naht statt Schnittkontur */
   hoveredSegmentOnSeam?: boolean
   onPointerDown: (e: React.PointerEvent) => void
   onGrainArrowEnter?: (e: React.PointerEvent) => void
@@ -809,9 +812,12 @@ const PieceGroup = memo(function PieceGroup({
   showContourMeasurements?: boolean
   hoveredInternalLineCurveIndex?: number | null
   onContextMenu?: (e: React.MouseEvent) => void
-  /** view.zoom – für Punkt-Marker, die auf dem Bildschirm gleich groß bleiben sollen */
   viewZoom: number
+  /** Theme-Modus: nur für memo-Invalidierung, T wird modulweit gesetzt. */
+  themeMode: string
 }) {
+  void _themeMode
+  const { NOTCH_STROKE } = getVertexColors()
   const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
   const ptPs = 1 / Math.max(viewZoom, 1e-6)
   const tx = `translate(${transform.x},${transform.y}) rotate(${transform.rotation}) scale(${transform.mirrored ? -1 : 1},1)`
@@ -820,14 +826,21 @@ const PieceGroup = memo(function PieceGroup({
   const cutPath = closedPathD(mergedCutLine)
   const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
   const seamPath = closedPathD(mergedSeamLine)
-  const fillHellgelb = '#fef9c3'
-  const useInteriorFill = piece.fillInterior !== false
-  const interiorFill = useInteriorFill ? fillHellgelb : 'none'
-  const interiorFillOpacity = useInteriorFill ? 0.82 : undefined
+  const interiorFill = piece.fillInterior != null && piece.fillInterior !== false
+    ? (typeof piece.fillInterior === 'string' ? piece.fillInterior : T.piece.fillSelected)
+    : isSelected ? T.piece.fillSelected : T.piece.fill
+  const interiorFillOpacity = interiorFill === 'none' ? undefined : (isSelected && T.piece.fill === 'none' ? 1 : 0.82)
   const hasSeam = !!(seamPath && seamLine.length >= 3)
   const solidIsCut = !hasSeam || !!cutSeamSwapped
   const solidPath = solidIsCut ? cutPath : seamPath
   const dashedPath = solidIsCut ? seamPath : cutPath
+
+  const solidStroke = isHovered ? T.piece.strokeHover
+    : isSelected ? T.piece.strokeSelected
+    : T.piece.stroke
+  const solidStrokeWidth = isHovered ? T.piece.strokeWidthHover
+    : isSelected ? T.piece.strokeWidthSelected
+    : T.piece.strokeWidth
 
   return (
     <g
@@ -840,8 +853,9 @@ const PieceGroup = memo(function PieceGroup({
           d={dashedPath}
           fill={interiorFill}
           fillOpacity={interiorFillOpacity}
-          stroke="#888"
-          strokeWidth={0.5}
+          stroke={T.piece.strokeDashed}
+          strokeWidth={T.piece.strokeWidthDashed}
+          opacity={T.piece.dashOpacity}
           pointerEvents="none"
         />
       )}
@@ -850,8 +864,8 @@ const PieceGroup = memo(function PieceGroup({
           d={solidPath}
           fill={interiorFill}
           fillOpacity={interiorFillOpacity}
-          stroke={isHovered ? '#e53935' : '#000'}
-          strokeWidth={isHovered ? 0.8 : 0.5}
+          stroke={solidStroke}
+          strokeWidth={solidStrokeWidth}
           pointerEvents="none"
         />
       )}
@@ -862,8 +876,8 @@ const PieceGroup = memo(function PieceGroup({
             (hoveredSegmentOnSeam ? seamLine : cutLine)[hoveredSegmentCurveIndex],
           ])}
           fill="none"
-          stroke="#1565c0"
-          strokeWidth={1.8}
+          stroke={T.piece.strokeSegmentHover}
+          strokeWidth={T.piece.strokeWidthSegmentHover}
           strokeLinecap="round"
           opacity={0.95}
           pointerEvents="none"
@@ -875,7 +889,7 @@ const PieceGroup = memo(function PieceGroup({
           cy={0}
           r={2.2 * ptPs}
           fill="none"
-          stroke="#ccc"
+          stroke={T.piece.strokeEmpty}
           strokeWidth={0.55 * ptPs}
           pointerEvents="none"
         />
@@ -887,9 +901,10 @@ const PieceGroup = memo(function PieceGroup({
             key={`internal-${i}`}
             d={curveToPathD([curve])}
             fill="none"
-            stroke={isHovered ? '#e53935' : '#1565c0'}
-            strokeWidth={isHovered ? 1.2 : 0.6}
-            strokeDasharray="4 3"
+            stroke={isHovered ? T.internalLine.strokeHover : T.internalLine.stroke}
+            strokeWidth={isHovered ? T.internalLine.strokeWidthHover : T.internalLine.strokeWidth}
+            strokeDasharray={T.internalLine.dash}
+            opacity={isHovered ? 1 : T.internalLine.opacity}
             pointerEvents="none"
           />
         )
@@ -916,12 +931,12 @@ const PieceGroup = memo(function PieceGroup({
           }
         }
         const isHovered = hoveredNotchId === n.id
-        const stroke = isHovered ? '#1565c0' : NOTCH_STROKE
+        const stroke = isHovered ? T.notch.strokeHover : NOTCH_STROKE
         const strokeW = isHovered ? 0.7 : 0.4
         const circleR = isHovered ? 1 : 0.8
         return (
           <g key={n.id} pointerEvents="none">
-            {cutFillD ? <path d={cutFillD} fill="#fff" stroke="none" /> : null}
+            {cutFillD ? <path d={cutFillD} fill={T.notch.fill} stroke="none" /> : null}
             <path
               d={cutEdgesD}
               fill="none"
@@ -938,7 +953,7 @@ const PieceGroup = memo(function PieceGroup({
               stroke={stroke}
               strokeWidth={isHovered ? 0.5 : 0.3}
             />
-            {seamFillD ? <path d={seamFillD} fill="#fff" stroke="none" /> : null}
+            {seamFillD ? <path d={seamFillD} fill={T.notch.fill} stroke="none" /> : null}
             {seamEdgesD ? (
               <path
                 d={seamEdgesD}
@@ -959,8 +974,8 @@ const PieceGroup = memo(function PieceGroup({
           cy={d.center.y}
           r={d.radius}
           fill="none"
-          stroke="#000"
-          strokeWidth={0.5}
+          stroke={T.drill.stroke}
+          strokeWidth={T.drill.strokeWidth}
           pointerEvents="none"
         />
       ))}
@@ -994,9 +1009,9 @@ const PieceGroup = memo(function PieceGroup({
                 y1={line.start.y}
                 x2={line.end.x}
                 y2={line.end.y}
-                stroke="#333"
-                strokeWidth={0.35}
-                strokeDasharray="5 3"
+                stroke={T.grain.stroke}
+                strokeWidth={T.grain.strokeWidth}
+                strokeDasharray={T.grain.dash}
                 pointerEvents="none"
               />
               <line
@@ -1004,15 +1019,15 @@ const PieceGroup = memo(function PieceGroup({
                 y1={tickStart.y}
                 x2={tickEnd.x}
                 y2={tickEnd.y}
-                stroke="#333"
-                strokeWidth={0.35}
+                stroke={T.grain.stroke}
+                strokeWidth={T.grain.strokeWidth}
                 pointerEvents="none"
               />
               <path
                 d={triangleD}
                 fill="none"
-                stroke="#333"
-                strokeWidth={0.35}
+                stroke={T.grain.stroke}
+                strokeWidth={T.grain.strokeWidth}
                 pointerEvents="none"
               />
               {hasGrainHandlers && (
@@ -1053,8 +1068,8 @@ const PieceGroup = memo(function PieceGroup({
                   cx={line.start.x}
                   cy={line.start.y}
                   r={4.2 * ptPs}
-                  fill="#1565c0"
-                  stroke="#fff"
+                  fill={T.grain.endpoint}
+                  stroke={T.grain.endpointStroke}
                   strokeWidth={1 * ptPs}
                   pointerEvents="none"
                 />
@@ -1062,8 +1077,8 @@ const PieceGroup = memo(function PieceGroup({
                   cx={line.end.x}
                   cy={line.end.y}
                   r={4.2 * ptPs}
-                  fill="#1565c0"
-                  stroke="#fff"
+                  fill={T.grain.endpoint}
+                  stroke={T.grain.endpointStroke}
                   strokeWidth={1 * ptPs}
                   pointerEvents="none"
                 />
@@ -1085,7 +1100,7 @@ const PieceGroup = memo(function PieceGroup({
                   transform={`rotate(${rotDeg}, ${tx}, ${ty})`}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill="#333"
+                  fill={T.text.pieceName}
                   fontSize={3.8}
                   fontFamily="sans-serif"
                   fontWeight="600"
@@ -1125,8 +1140,8 @@ const PieceGroup = memo(function PieceGroup({
                   fontSize={3.4}
                   fontFamily="sans-serif"
                   fontWeight={600}
-                  fill="#5d4037"
-                  stroke="#fff"
+                  fill={T.text.contourMeasure}
+                  stroke={T.text.haloStroke}
                   strokeWidth={0.22}
                   paintOrder="stroke fill"
                   pointerEvents="none"
@@ -1172,8 +1187,8 @@ const PieceGroup = memo(function PieceGroup({
                   fontSize={3}
                   fontFamily="sans-serif"
                   fontWeight={700}
-                  fill="#1a6fb5"
-                  stroke="#fff"
+                  fill={T.text.edgeAllowance}
+                  stroke={T.text.haloStroke}
                   strokeWidth={0.2}
                   paintOrder="stroke fill"
                   pointerEvents="none"
@@ -1193,7 +1208,7 @@ const PieceGroup = memo(function PieceGroup({
           width={4}
           height={4}
           fill="none"
-          stroke="#000"
+          stroke={T.selection.originMark}
           strokeWidth={0.5}
           strokeDasharray="2 2"
           pointerEvents="none"
@@ -1211,8 +1226,8 @@ const PieceGroup = memo(function PieceGroup({
                 cx={pivot.x}
                 cy={pivot.y}
                 r={4.2 * ptPs}
-                fill="#333"
-                stroke="#fff"
+                fill={T.selection.pivotFill}
+                stroke={T.selection.pivotStroke}
                 strokeWidth={1 * ptPs}
                 pointerEvents="none"
               />
@@ -1221,7 +1236,7 @@ const PieceGroup = memo(function PieceGroup({
                 y1={pivot.y}
                 x2={pivot.x + 6 * ptPs}
                 y2={pivot.y}
-                stroke="#333"
+                stroke={T.selection.crosshairStroke}
                 strokeWidth={0.8 * ptPs}
                 pointerEvents="none"
               />
@@ -1230,7 +1245,7 @@ const PieceGroup = memo(function PieceGroup({
                 y1={pivot.y - 6 * ptPs}
                 x2={pivot.x}
                 y2={pivot.y + 6 * ptPs}
-                stroke="#333"
+                stroke={T.selection.crosshairStroke}
                 strokeWidth={0.8 * ptPs}
                 pointerEvents="none"
               />
@@ -1241,20 +1256,20 @@ const PieceGroup = memo(function PieceGroup({
                 cx={pivot.x}
                 cy={handleY}
                 r={10 * ptPs}
-                fill="#e3f2fd"
-                stroke="#1565c0"
+                fill={T.selection.rotationHandleFill}
+                stroke={T.selection.rotationHandleStroke}
                 strokeWidth={1.2 * ptPs}
               />
               <path
                 d={`M ${pivot.x + 5 * ptPs} ${handleY} A ${5 * ptPs} ${5 * ptPs} 0 0 1 ${pivot.x - 5 * ptPs} ${handleY}`}
                 fill="none"
-                stroke="#1565c0"
+                stroke={T.selection.rotationHandleStroke}
                 strokeWidth={1.1 * ptPs}
                 strokeLinecap="round"
               />
               <path
                 d={`M ${pivot.x - 5 * ptPs} ${handleY} L ${pivot.x - 6 * ptPs} ${handleY + 1.2 * ptPs} L ${pivot.x - 4.2 * ptPs} ${handleY + 0.4 * ptPs} Z`}
-                fill="#1565c0"
+                fill={T.selection.rotationHandleAccent}
               />
             </g>
           </>
@@ -1369,7 +1384,10 @@ export function WorkspaceCanvas() {
     removeWorkspaceNote,
     addProfileAssignment,
     setProfileDialogAssignmentId,
+    canvasThemeMode,
   } = useStore()
+  T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
+  const { COLOR_ECKPUNKT, COLOR_SOFT_PUNKT, COLOR_PUNKT_AUF_KURVE, NOTCH_STROKE } = getVertexColors()
   const { pieces, view, notes: workspaceNotesList } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
   const profileAssignments = workspace.profileAssignments ?? []
@@ -3649,14 +3667,7 @@ export function WorkspaceCanvas() {
       if (!hoveredDeletablePoint) return
       e.preventDefault()
       if (hoveredDeletablePoint.kind === 'vertex') {
-        const piece = pieces.find((x) => x.id === hoveredDeletablePoint.pieceId)
-        const isSoft = piece ? masterSoftVertexIndexSet(piece).has(hoveredDeletablePoint.vertexIndex) : false
-        if (isSoft) {
-          // Weiche Punkte (blau) werden per Entf nur ent-weichtet (blau -> rot), nicht geometrisch gelöscht.
-          setVertexSoft(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex, false)
-        } else {
-          removeVertex(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex)
-        }
+        removeVertex(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex)
       } else {
         convertBezierSegmentToLine(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.curveIndex)
       }
@@ -3993,6 +4004,7 @@ export function WorkspaceCanvas() {
       }}
       onWheel={handleWheel}
       style={{
+        ['--canvas-bg' as string]: T.background,
         touchAction: 'none',
         cursor:
           rulerMode
@@ -4010,7 +4022,7 @@ export function WorkspaceCanvas() {
                   tool === 'note'
                 ? 'crosshair'
                 : 'default',
-      }}
+      } as React.CSSProperties}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>
       <div
@@ -4704,10 +4716,10 @@ export function WorkspaceCanvas() {
                   height={GRID_SIZE}
                   patternUnits="userSpaceOnUse"
                 >
-                  <path d={`M ${GRID_SIZE} 0 V ${GRID_SIZE * 100} M 0 ${GRID_SIZE} H ${GRID_SIZE * 100}`} fill="none" stroke="#e0e0e0" strokeWidth={0.3} />
+                  <path d={`M ${GRID_SIZE} 0 V ${GRID_SIZE * 100} M 0 ${GRID_SIZE} H ${GRID_SIZE * 100}`} fill="none" stroke={T.grid.stroke} strokeWidth={T.grid.strokeWidth} />
                 </pattern>
               </defs>
-              <rect width="10000" height="10000" x="-5000" y="-5000" fill="url(#grid)" />
+              <rect width="10000" height="10000" x="-5000" y="-5000" fill="url(#grid)" opacity={T.grid.opacity} />
             </>
           )}
           {imageDigitizeSession &&
@@ -4751,7 +4763,7 @@ export function WorkspaceCanvas() {
                           width={lay.w}
                           height={lay.h}
                           fill="none"
-                          stroke={session.locked ? '#e65100' : '#1976d2'}
+                          stroke={session.locked ? T.workspaceImage.borderLocked : T.workspaceImage.border}
                           strokeWidth={1.2}
                           strokeDasharray="6 4"
                           vectorEffect="non-scaling-stroke"
@@ -4763,8 +4775,8 @@ export function WorkspaceCanvas() {
                               cx={c.cx}
                               cy={c.cy}
                               r={handleR}
-                              fill="#fff"
-                              stroke="#1976d2"
+                              fill={T.workspaceImage.handleFill}
+                              stroke={T.workspaceImage.handleStroke}
                               strokeWidth={1.2}
                               vectorEffect="non-scaling-stroke"
                             />
@@ -4835,6 +4847,7 @@ export function WorkspaceCanvas() {
                     }
                   : undefined
               }
+              themeMode={canvasThemeMode}
             />
             )
           })}
@@ -4846,11 +4859,11 @@ export function WorkspaceCanvas() {
               const z = 1 / Math.max(view.zoom, 1e-6)
               return (
                 <g key={wn.id} transform={`translate(${worldPos.x},${worldPos.y}) scale(${z})`} pointerEvents="none">
-                  <circle r={11} cx={0} cy={0} fill="#fff9c4" stroke="#f9a825" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                  <circle r={11} cx={0} cy={0} fill={T.workspaceNote.fill} stroke={T.workspaceNote.stroke} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                   <path
                     d="M -4,-3 L 4,-3 L 4,5 L 0,2 L -4,5 Z"
                     fill="none"
-                    stroke="#e65100"
+                    stroke={T.workspaceNote.pinStroke}
                     strokeWidth={1.2}
                     strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke"
@@ -4940,7 +4953,7 @@ export function WorkspaceCanvas() {
             return (
               <g transform={tx} pointerEvents="none">
                 {seamPreviewPaths?.fillD ? (
-                  <path d={seamPreviewPaths.fillD} fill="#fff" fillOpacity={0.55} stroke="none" />
+                  <path d={seamPreviewPaths.fillD} fill={T.notch.fill} fillOpacity={0.55} stroke="none" />
                 ) : null}
                 {seamPreviewPaths ? (
                   <path
@@ -4954,7 +4967,7 @@ export function WorkspaceCanvas() {
                     strokeDasharray="3 2"
                   />
                 ) : null}
-                {fillD ? <path d={fillD} fill="#fff" stroke="none" /> : null}
+                {fillD ? <path d={fillD} fill={T.notch.fill} stroke="none" /> : null}
                 <path
                   d={edgesD}
                   fill="none"
@@ -5013,6 +5026,7 @@ export function WorkspaceCanvas() {
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / Math.max(view.zoom, 1e-6)
+              const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
@@ -5024,17 +5038,21 @@ export function WorkspaceCanvas() {
                   const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
                   const w = pieceLocalToWorld(vertexPos, piece)
                   const isSoft = useSeamMaster ? softOnMaster.has(vi) : (piece.softVertices ?? []).includes(vi)
+                  const isHoveredPt = hoveredDeletablePoint?.pieceId === pieceId && hoveredDeletablePoint.kind === 'vertex' && hoveredDeletablePoint.vertexIndex === vi
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
-                  const eckSize = POINT_SCREEN_RECT * ps
+                  const scale = isHoveredPt ? HOVER_SCALE : 1
+                  const r = POINT_SCREEN_R * ps * scale
+                  const eckSize = POINT_SCREEN_RECT * ps * scale
+                  const sw = POINT_SCREEN_STROKE * ps * (isHoveredPt ? 1.3 : 1)
                   return isSoft ? (
                     <circle
                       key={`${pieceId}-v-${vi}`}
                       cx={w.x}
                       cy={w.y}
-                      r={POINT_SCREEN_R * ps}
-                      fill={fill}
+                      r={r}
+                      fill={isHoveredPt ? stroke : fill}
                       stroke={stroke}
-                      strokeWidth={POINT_SCREEN_STROKE * ps}
+                      strokeWidth={sw}
                       pointerEvents="none"
                     />
                   ) : (
@@ -5044,9 +5062,9 @@ export function WorkspaceCanvas() {
                       y={w.y - eckSize / 2}
                       width={eckSize}
                       height={eckSize}
-                      fill={fill}
+                      fill={isHoveredPt ? stroke : fill}
                       stroke={stroke}
-                      strokeWidth={POINT_SCREEN_STROKE * ps}
+                      strokeWidth={sw}
                       pointerEvents="none"
                     />
                   )
@@ -5058,6 +5076,7 @@ export function WorkspaceCanvas() {
           {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / Math.max(view.zoom, 1e-6)
+              const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
@@ -5067,15 +5086,17 @@ export function WorkspaceCanvas() {
                   if (c.type !== 'bezier') return []
                   const ptOnCurve = bezierAt(c, 0.5)
                   const w = pieceLocalToWorld(ptOnCurve, piece)
+                  const isHoveredPt = hoveredDeletablePoint?.pieceId === pieceId && hoveredDeletablePoint.kind === 'pointOnCurve' && hoveredDeletablePoint.curveIndex === ci
+                  const scale = isHoveredPt ? HOVER_SCALE : 1
                   return [
                     <circle
                       key={`${pieceId}-oncurve-${ci}`}
                       cx={w.x}
                       cy={w.y}
-                      r={POINT_SCREEN_R * ps}
-                      fill={fill}
+                      r={POINT_SCREEN_R * ps * scale}
+                      fill={isHoveredPt ? stroke : fill}
                       stroke={stroke}
-                      strokeWidth={POINT_SCREEN_STROKE * ps}
+                      strokeWidth={POINT_SCREEN_STROKE * ps * (isHoveredPt ? 1.3 : 1)}
                       pointerEvents="none"
                     />,
                   ]
@@ -5098,7 +5119,7 @@ export function WorkspaceCanvas() {
                     key={`dig-seg-${i}`}
                     x1={a.point.x} y1={a.point.y}
                     x2={b.point.x} y2={b.point.y}
-                    stroke="#1565c0" strokeWidth={0.8}
+                    stroke={T.digitize.segment} strokeWidth={T.digitize.segmentWidth}
                     pointerEvents="none"
                   />
                 )
@@ -5111,7 +5132,7 @@ export function WorkspaceCanvas() {
                   <path
                     key={`dig-seg-${i}`}
                     d={`M ${a.point.x} ${a.point.y} C ${cp1.x} ${cp1.y} ${cp2.x} ${cp2.y} ${b.point.x} ${b.point.y}`}
-                    fill="none" stroke="#1565c0" strokeWidth={0.8}
+                    fill="none" stroke={T.digitize.segment} strokeWidth={T.digitize.segmentWidth}
                     pointerEvents="none"
                   />
                 )
@@ -5126,15 +5147,15 @@ export function WorkspaceCanvas() {
                 handleElements.push(
                   <g key={`dig-handle-${i}`} pointerEvents="none">
                     <line x1={n.point.x} y1={n.point.y} x2={n.handleOut.x} y2={n.handleOut.y}
-                      stroke="#e65100" strokeWidth={0.5} strokeDasharray="2 1.5" opacity={0.7} />
+                      stroke={T.digitize.handleLine} strokeWidth={0.5} strokeDasharray="2 1.5" opacity={0.7} />
                     <line x1={n.point.x} y1={n.point.y} x2={reflected.x} y2={reflected.y}
-                      stroke="#e65100" strokeWidth={0.5} strokeDasharray="2 1.5" opacity={0.5} />
+                      stroke={T.digitize.handleLine} strokeWidth={0.5} strokeDasharray="2 1.5" opacity={0.5} />
                     <circle
                       cx={n.handleOut.x}
                       cy={n.handleOut.y}
                       r={DIGITIZE_HANDLE_R * dps}
-                      fill="#e65100"
-                      stroke="#fff"
+                      fill={T.digitize.handleFill}
+                      stroke={T.digitize.handleStroke}
                       strokeWidth={0.5 * dps}
                     />
                     <circle
@@ -5142,7 +5163,7 @@ export function WorkspaceCanvas() {
                       cy={reflected.y}
                       r={DIGITIZE_HANDLE_REFLECT_R * dps}
                       fill="none"
-                      stroke="#e65100"
+                      stroke={T.digitize.handleReflectStroke}
                       strokeWidth={0.45 * dps}
                       opacity={0.5}
                     />
@@ -5158,7 +5179,7 @@ export function WorkspaceCanvas() {
                   <line
                     x1={lastNode.point.x} y1={lastNode.point.y}
                     x2={digitizeMouseWorld.x} y2={digitizeMouseWorld.y}
-                    stroke="#1565c0" strokeWidth={0.6}
+                    stroke={T.digitize.preview} strokeWidth={T.digitize.previewWidth}
                     strokeDasharray="3 2" opacity={0.5}
                   />
                 )}
@@ -5168,8 +5189,8 @@ export function WorkspaceCanvas() {
                     cx={n.point.x}
                     cy={n.point.y}
                     r={(i === 0 && digitizeNearFirst ? DIGITIZE_NODE_R_NEAR : DIGITIZE_NODE_R) * dps}
-                    fill={i === 0 && digitizeNearFirst ? '#4caf50' : '#2196F3'}
-                    stroke={i === 0 && digitizeNearFirst ? '#1b5e20' : '#0d47a1'}
+                    fill={i === 0 && digitizeNearFirst ? T.digitize.nodeNearClose : T.digitize.nodeDefault}
+                    stroke={i === 0 && digitizeNearFirst ? T.digitize.nodeNearCloseStroke : T.digitize.nodeDefaultStroke}
                     strokeWidth={0.75 * dps}
                   />
                 ))}
@@ -5183,9 +5204,9 @@ export function WorkspaceCanvas() {
               width={Math.abs(dragging.current.x - dragging.start.x)}
               height={Math.abs(dragging.current.y - dragging.start.y)}
               fill="none"
-              stroke="#000"
-              strokeWidth={1}
-              strokeDasharray="4 2"
+              stroke={T.dragPreview.stroke}
+              strokeWidth={T.dragPreview.strokeWidth}
+              strokeDasharray={T.dragPreview.dash}
               pointerEvents="none"
             />
           )}
@@ -5195,9 +5216,9 @@ export function WorkspaceCanvas() {
               y={Math.min(dragging.start.y, dragging.current.y)}
               width={Math.abs(dragging.current.x - dragging.start.x)}
               height={Math.abs(dragging.current.y - dragging.start.y)}
-              fill="rgba(21,101,192,0.08)"
-              stroke="#1565c0"
-              strokeWidth={0.8}
+              fill={T.selection.marqueeFill}
+              stroke={T.selection.marqueeStroke}
+              strokeWidth={T.selection.marqueeStrokeWidth}
               strokeDasharray="5 3"
               pointerEvents="none"
             />
@@ -5208,7 +5229,7 @@ export function WorkspaceCanvas() {
               if (!piece) return null
               const key = batchTargetKey(t)
               const hi = batchUiHighlightByTargetId[key]
-              const ringStroke = hi ?? '#7b1fa2'
+              const ringStroke = hi ?? T.batch.ringStroke
               const ringFill = hi ? `${hi}55` : 'none'
               const ps = 1 / Math.max(view.zoom, 1e-6)
               const tx = `translate(${piece.transform.x},${piece.transform.y}) rotate(${piece.transform.rotation}) scale(${piece.transform.mirrored ? -1 : 1},1)`
@@ -5313,9 +5334,9 @@ export function WorkspaceCanvas() {
                 y1={w1.y}
                 x2={w2.x}
                 y2={w2.y}
-                stroke="#000"
-                strokeWidth={1}
-                strokeDasharray="4 2"
+                stroke={T.dragPreview.stroke}
+                strokeWidth={T.dragPreview.strokeWidth}
+                strokeDasharray={T.dragPreview.dash}
                 pointerEvents="none"
               />
             )
@@ -5396,7 +5417,7 @@ export function WorkspaceCanvas() {
             const dragIsLine = cutPts?.kind === 'line'
             return (
               <g pointerEvents="none">
-                {fillD ? <path d={fillD} fill="#fff" stroke="none" /> : null}
+                {fillD ? <path d={fillD} fill={T.notch.fill} stroke="none" /> : null}
                 <path
                   d={edgesD}
                   fill="none"
@@ -5425,8 +5446,8 @@ export function WorkspaceCanvas() {
                 cy={wc.y}
                 r={wr}
                 fill="none"
-                stroke="#000"
-                strokeWidth={0.5}
+                stroke={T.drill.stroke}
+                strokeWidth={T.drill.strokeWidth}
                 strokeDasharray="4 2"
                 pointerEvents="none"
               />
@@ -5448,9 +5469,9 @@ export function WorkspaceCanvas() {
                 cy={wc.y}
                 r={wr}
                 fill="none"
-                stroke="#1565c0"
-                strokeWidth={0.6}
-                strokeDasharray="4 3"
+                stroke={T.internalLine.stroke}
+                strokeWidth={T.internalLine.strokeWidth}
+                strokeDasharray={T.internalLine.dash}
                 pointerEvents="none"
               />
             )
@@ -5470,26 +5491,26 @@ export function WorkspaceCanvas() {
                   y1={start.y}
                   x2={end.x}
                   y2={end.y}
-                  stroke="#1565c0"
+                  stroke={T.ruler.stroke}
                   strokeWidth={1.2 * rps}
                 />
                 <circle
                   cx={start.x}
                   cy={start.y}
                   r={POINT_SCREEN_R * rps}
-                  fill="#1565c0"
-                  stroke="#fff"
+                  fill={T.ruler.endpointFill}
+                  stroke={T.ruler.endpointStroke}
                   strokeWidth={POINT_SCREEN_STROKE * rps}
                 />
                 <circle
                   cx={end.x}
                   cy={end.y}
                   r={POINT_SCREEN_R * rps}
-                  fill="#1565c0"
-                  stroke="#fff"
+                  fill={T.ruler.endpointFill}
+                  stroke={T.ruler.endpointStroke}
                   strokeWidth={POINT_SCREEN_STROKE * rps}
                 />
-                <text x={mx} y={my - 6} textAnchor="middle" fontSize={10} fill="#1565c0" fontWeight="600">
+                <text x={mx} y={my - 6} textAnchor="middle" fontSize={10} fill={T.ruler.text} fontWeight="600">
                   {len.toFixed(1)} mm
                 </text>
               </g>
@@ -5522,8 +5543,8 @@ export function WorkspaceCanvas() {
                 key="nahtzuordnung-hover"
                 d={d}
                 fill="none"
-                stroke="#1565c0"
-                strokeWidth={2.5}
+                stroke={T.seamAssignment.hoverStroke}
+                strokeWidth={T.seamAssignment.hoverWidth}
                 strokeOpacity={0.9}
                 pointerEvents="none"
               />
@@ -5552,16 +5573,16 @@ export function WorkspaceCanvas() {
                 <path
                   d={d}
                   fill="none"
-                  stroke="#e65100"
-                  strokeWidth={5}
-                  strokeOpacity={0.35}
+                  stroke={T.seamAssignment.edgePickHalo}
+                  strokeWidth={T.seamAssignment.edgePickHaloWidth}
+                  strokeOpacity={T.seamAssignment.edgePickHaloOpacity}
                   pointerEvents="none"
                 />
                 <path
                   d={d}
                   fill="none"
-                  stroke="#e65100"
-                  strokeWidth={2.5}
+                  stroke={T.seamAssignment.edgePickStroke}
+                  strokeWidth={T.seamAssignment.edgePickWidth}
                   strokeOpacity={0.9}
                   pointerEvents="none"
                 />
@@ -5592,7 +5613,7 @@ export function WorkspaceCanvas() {
                 key="profile-edge-hover"
                 d={d}
                 fill="none"
-                stroke="#7b1fa2"
+                stroke={T.accent.profile}
                 strokeWidth={3.5}
                 strokeOpacity={0.9}
                 pointerEvents="none"
@@ -5680,7 +5701,7 @@ export function WorkspaceCanvas() {
                 <path
                   d={d}
                   fill="none"
-                  stroke="#7b1fa2"
+                  stroke={T.accent.profile}
                   strokeWidth={2}
                   strokeOpacity={0.7}
                   strokeDasharray="6 3"
@@ -5690,7 +5711,7 @@ export function WorkspaceCanvas() {
                   y={keyW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fill="#7b1fa2"
+                  fill={T.accent.profile}
                   fontSize={5}
                   fontFamily="sans-serif"
                   fontWeight={700}
@@ -5703,7 +5724,7 @@ export function WorkspaceCanvas() {
                   y={detailW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fill="#7b1fa2"
+                  fill={T.accent.profile}
                   fontSize={3.2}
                   fontFamily="sans-serif"
                   fontWeight={400}
@@ -5794,16 +5815,16 @@ export function WorkspaceCanvas() {
                     y1={midA.y}
                     x2={midB.x}
                     y2={midB.y}
-                    stroke="#1565c0"
-                    strokeWidth={1}
+                    stroke={T.seamAssignment.connector}
+                    strokeWidth={T.seamAssignment.connectorWidth}
                     strokeDasharray="6 4"
                     pointerEvents="none"
                   />
                   <path
                     d={`M ${wing1.x} ${wing1.y} L ${midB.x} ${midB.y} L ${wing2.x} ${wing2.y}`}
                     fill="none"
-                    stroke="#1565c0"
-                    strokeWidth={1}
+                    stroke={T.seamAssignment.connector}
+                    strokeWidth={T.seamAssignment.connectorWidth}
                     pointerEvents="none"
                   />
                   {showLengthDiff && (
@@ -5812,7 +5833,7 @@ export function WorkspaceCanvas() {
                       y={labelY}
                       textAnchor="middle"
                       fontSize={9}
-                      fill="#c62828"
+                      fill={T.accent.error}
                       fontWeight="600"
                       fontFamily="sans-serif"
                       pointerEvents="none"
@@ -5826,7 +5847,7 @@ export function WorkspaceCanvas() {
                       y={labelY + (showLengthDiff ? 11 : 0)}
                       textAnchor="middle"
                       fontSize={9}
-                      fill="#e65100"
+                      fill={T.accent.warning}
                       fontWeight="600"
                       fontFamily="sans-serif"
                       pointerEvents="none"
@@ -5844,7 +5865,7 @@ export function WorkspaceCanvas() {
                       }
                       textAnchor="middle"
                       fontSize={9}
-                      fill="#e65100"
+                      fill={T.accent.warning}
                       fontWeight="600"
                       fontFamily="sans-serif"
                       pointerEvents="none"
@@ -5858,7 +5879,7 @@ export function WorkspaceCanvas() {
                       y={labelY + warnStack}
                       textAnchor="middle"
                       fontSize={8}
-                      fill="#1565c0"
+                      fill={T.seamAssignment.connector}
                       fontWeight="600"
                       fontFamily="sans-serif"
                       pointerEvents="none"
@@ -5868,7 +5889,7 @@ export function WorkspaceCanvas() {
                   )}
                   {subDiffs && subDiffs.map((sd, i) => {
                     const isMatch = Math.abs(sd.lenA - sd.lenB) < 0.1
-                    const color = isMatch ? '#2e7d32' : '#c62828'
+                    const color = isMatch ? T.accent.success : T.accent.error
                     const labelA = isMatch ? '✓' : `${sd.lenA.toFixed(1)}`
                     const labelB = isMatch ? '✓' : `${sd.lenB.toFixed(1)}`
                     return (
@@ -6208,8 +6229,14 @@ export function WorkspaceCanvas() {
         onConfirm={(mm) => {
           setEdgeSeamAllowance(edgeAllowancePopover.pieceId, edgeAllowancePopover.edgeIndex, mm)
           setEdgeAllowancePopover(null)
+          setHoveredEdgePicking(null)
+          setEdgeSeamPickingActive(false)
         }}
-        onCancel={() => setEdgeAllowancePopover(null)}
+        onCancel={() => {
+          setEdgeAllowancePopover(null)
+          setHoveredEdgePicking(null)
+          setEdgeSeamPickingActive(false)
+        }}
       />}
     </div>
   )

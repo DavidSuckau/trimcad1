@@ -13,6 +13,7 @@ import {
   computeWorkspaceOverviewViewBox,
   type OverviewImageSession,
 } from './workspaceOverviewBounds'
+import { canvasTheme as T } from '../theme/canvasTheme'
 
 function pieceGroupTransform(p: PatternPiece): string {
   const { x, y, rotation, mirrored } = p.transform
@@ -50,8 +51,10 @@ export function buildWorkspaceOverviewSvgDocument(
   }
   for (const p of pieces) {
     const tx = pieceGroupTransform(p)
-    const useFill = p.fillInterior !== false
-    const fill = useFill ? '#fef9c3' : 'none'
+    const useFill = p.fillInterior != null && p.fillInterior !== false
+    const fill = useFill
+      ? (typeof p.fillInterior === 'string' ? p.fillInterior : T.piece.fillSelected)
+      : T.piece.fill
     const fillOp = useFill ? '0.82' : '0'
 
     const mergedCut = cutLineWithNotchCutouts(p.cutLine, p.notches, p.seamLine)
@@ -63,17 +66,17 @@ export function buildWorkspaceOverviewSvgDocument(
     parts.push(`<g transform="${escapeXmlAttr(tx)}">`)
     if (hasSeam && cutPath && seamPath) {
       parts.push(
-        `<path d="${escapeXmlAttr(cutPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="#888888" stroke-width="0.5"/>`,
+        `<path d="${escapeXmlAttr(cutPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="${T.overview.strokeSeam}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
       parts.push(
-        `<path d="${escapeXmlAttr(seamPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="#1a1a1a" stroke-width="0.5"/>`,
+        `<path d="${escapeXmlAttr(seamPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
     } else if (cutPath) {
       parts.push(
-        `<path d="${escapeXmlAttr(cutPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="#1a1a1a" stroke-width="0.45"/>`,
+        `<path d="${escapeXmlAttr(cutPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidth}"/>`,
       )
     } else {
-      parts.push(`<circle cx="0" cy="0" r="3" fill="none" stroke="#bbbbbb" stroke-width="0.5"/>`)
+      parts.push(`<circle cx="0" cy="0" r="3" fill="none" stroke="${T.overview.empty}" stroke-width="0.5"/>`)
     }
 
     for (const n of p.notches) {
@@ -84,7 +87,7 @@ export function buildWorkspaceOverviewSvgDocument(
       const x2 = position.x + d * Math.cos(rad)
       const y2 = position.y + d * Math.sin(rad)
       parts.push(
-        `<line x1="${position.x}" y1="${position.y}" x2="${x2}" y2="${y2}" stroke="#1a1a1a" stroke-width="0.5" stroke-linecap="round" fill="none"/>`,
+        `<line x1="${position.x}" y1="${position.y}" x2="${x2}" y2="${y2}" stroke="${T.overview.stroke}" stroke-width="0.5" stroke-linecap="round" fill="none"/>`,
       )
     }
 
@@ -92,12 +95,12 @@ export function buildWorkspaceOverviewSvgDocument(
     if (grain && p.cutLine.length >= 3) {
       const { line, tickStart, tickEnd, triangleD } = grain
       parts.push(
-        `<line x1="${line.start.x}" y1="${line.start.y}" x2="${line.end.x}" y2="${line.end.y}" stroke="#333333" stroke-width="0.35" stroke-dasharray="5 3" fill="none"/>`,
+        `<line x1="${line.start.x}" y1="${line.start.y}" x2="${line.end.x}" y2="${line.end.y}" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}" stroke-dasharray="${T.grain.dash}" fill="none"/>`,
       )
       parts.push(
-        `<line x1="${tickStart.x}" y1="${tickStart.y}" x2="${tickEnd.x}" y2="${tickEnd.y}" stroke="#333333" stroke-width="0.35" fill="none"/>`,
+        `<line x1="${tickStart.x}" y1="${tickStart.y}" x2="${tickEnd.x}" y2="${tickEnd.y}" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}" fill="none"/>`,
       )
-      parts.push(`<path d="${escapeXmlAttr(triangleD)}" fill="none" stroke="#333333" stroke-width="0.35"/>`)
+      parts.push(`<path d="${escapeXmlAttr(triangleD)}" fill="none" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}"/>`)
     }
     const pieceProfiles = (profileAssignments ?? []).filter((pa) => pa.pieceId === p.id)
     for (const pa of pieceProfiles) {
@@ -137,7 +140,7 @@ export function buildWorkspaceOverviewSvgDocument(
       }
       if (pathD) {
         parts.push(
-          `<path d="${escapeXmlAttr(pathD)}" fill="none" stroke="#7b1fa2" stroke-width="1.5" stroke-opacity="0.7" stroke-dasharray="6 3"/>`,
+          `<path d="${escapeXmlAttr(pathD)}" fill="none" stroke="${T.accent.profile}" stroke-width="1.5" stroke-opacity="0.7" stroke-dasharray="6 3"/>`,
         )
         const firstSeg = curves[0]
         const lastSeg = curves[curves.length - 1]
@@ -152,7 +155,7 @@ export function buildWorkspaceOverviewSvgDocument(
         const ly = midY + ny
         const ang = (Math.atan2(edgeDy, edgeDx) * 180) / Math.PI
         parts.push(
-          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="#7b1fa2" font-size="9" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
+          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="${T.accent.profile}" font-size="9" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
         )
       }
     }
@@ -165,7 +168,7 @@ export function buildWorkspaceOverviewSvgDocument(
       const bh = bounds.maxY - bounds.minY
       const fontSize = Math.max(4, Math.min(16, Math.min(bw, bh) * 0.18))
       parts.push(
-        `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#1a1a1a" fill-opacity="0.7" font-size="${fontSize.toFixed(1)}" font-family="sans-serif" font-weight="700">${escapeXmlAttr(p.name)}</text>`,
+        `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="${T.overview.textFill}" fill-opacity="${T.overview.textOpacity}" font-size="${fontSize.toFixed(1)}" font-family="sans-serif" font-weight="700">${escapeXmlAttr(p.name)}</text>`,
       )
     }
 

@@ -291,6 +291,7 @@ type Store = {
   selectedPoint: { pieceId: string; curveIndex: number; pointKey: string } | null
   tool: Tool
   // UI
+  canvasThemeMode: 'light' | 'dark'
   showGrid: boolean
   showPoints: boolean
   showGrain: boolean
@@ -357,6 +358,7 @@ type Store = {
   deletePiece: (id: string) => void
   selectPiece: (id: string | null, addToSelection?: boolean) => void
   setTool: (t: Tool) => void
+  setCanvasThemeMode: (m: 'light' | 'dark') => void
   setShowGrid: (v: boolean) => void
   setShowPoints: (v: boolean) => void
   setShowGrain: (v: boolean) => void
@@ -660,6 +662,7 @@ export const useStore = create<Store>()(
   selectedPieceIds: ['p1'],
   selectedPoint: null,
   tool: 'select',
+  canvasThemeMode: 'light' as const,
   showGrid: true,
   showPoints: true,
   showGrain: true,
@@ -987,6 +990,7 @@ export const useStore = create<Store>()(
   },
 
   setTool: (t) => set({ tool: t }),
+  setCanvasThemeMode: (m: 'light' | 'dark') => set({ canvasThemeMode: m }),
   setShowGrid: (v) => set({ showGrid: v }),
   setShowPoints: (v) => set({ showPoints: v }),
   setShowGrain: (v) => set({ showGrain: v }),
