@@ -1,63 +1,115 @@
 import { useStore } from '../store/useStore'
 import { useShallow } from 'zustand/react/shallow'
 
-export function Sidebar() {
-  const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, setPiecePropertiesDialogPieceId } = useStore(
-    useShallow((s) => ({
-      workspace: s.workspace,
-      selectedPieceIds: s.selectedPieceIds,
-      addPiece: s.addPiece,
-      selectPiece: s.selectPiece,
-      deletePiece: s.deletePiece,
-      setPiecePropertiesDialogPieceId: s.setPiecePropertiesDialogPieceId,
-    }))
+function ChevronLeftIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8.5 3.5L5 7l3.5 3.5" />
+    </svg>
   )
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M5.5 3.5L9 7l-3.5 3.5" />
+    </svg>
+  )
+}
+
+export function Sidebar() {
+  const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, setPiecePropertiesDialogPieceId, sidebarCollapsed, setSidebarCollapsed } =
+    useStore(
+      useShallow((s) => ({
+        workspace: s.workspace,
+        selectedPieceIds: s.selectedPieceIds,
+        addPiece: s.addPiece,
+        selectPiece: s.selectPiece,
+        deletePiece: s.deletePiece,
+        setPiecePropertiesDialogPieceId: s.setPiecePropertiesDialogPieceId,
+        sidebarCollapsed: s.sidebarCollapsed,
+        setSidebarCollapsed: s.setSidebarCollapsed,
+      }))
+    )
   const { pieces } = workspace
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-section">
-        <h2 className="sidebar-heading">Teile</h2>
-        <ul className="piece-list">
-          {pieces.map((p) => (
-            <li
-              key={p.id}
-              className={`piece-item ${selectedPieceIds.includes(p.id) ? 'selected' : ''}`}
-              role="button"
-              tabIndex={0}
-              aria-selected={selectedPieceIds.includes(p.id)}
-              onClick={() => selectPiece(p.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectPiece(p.id) } }}
-            >
-              <span className="piece-number">{p.number}</span>
-              <span
-                className="piece-name"
-                onDoubleClick={(e) => {
-                  e.stopPropagation()
-                  setPiecePropertiesDialogPieceId(p.id)
-                }}
-                title="Doppelklick: Teil-Eigenschaften (Name, Nummer, Füllung …)"
-              >
-                {p.name}
-              </span>
-              <button
-                type="button"
-                className="piece-delete"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  deletePiece(p.id)
-                }}
-                aria-label="Teil löschen"
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-        <button type="button" className="sidebar-btn" onClick={() => addPiece()}>
-          + Teil hinzufügen
+    <aside className={`sidebar${sidebarCollapsed ? ' sidebar--collapsed' : ''}`} aria-label="Teileliste">
+      {sidebarCollapsed ? (
+        <button
+          type="button"
+          className="sidebar-expand-btn"
+          title="Teileliste einblenden"
+          aria-expanded={false}
+          onClick={() => setSidebarCollapsed(false)}
+        >
+          <ChevronRightIcon />
         </button>
-      </div>
+      ) : (
+        <>
+          <div className="sidebar-header-row">
+            <h2 className="sidebar-heading" id="sidebar-teile-heading">
+              Teile
+            </h2>
+            <button
+              type="button"
+              className="sidebar-collapse-btn"
+              title="Teileliste ausblenden (mehr Platz für die Arbeitsfläche)"
+              aria-expanded={true}
+              aria-controls="sidebar-piece-list-panel"
+              onClick={() => setSidebarCollapsed(true)}
+            >
+              <ChevronLeftIcon />
+            </button>
+          </div>
+          <div className="sidebar-section" id="sidebar-piece-list-panel" role="region" aria-labelledby="sidebar-teile-heading">
+            <ul className="piece-list">
+              {pieces.map((p) => (
+                <li
+                  key={p.id}
+                  className={`piece-item ${selectedPieceIds.includes(p.id) ? 'selected' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-selected={selectedPieceIds.includes(p.id)}
+                  onClick={() => selectPiece(p.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      selectPiece(p.id)
+                    }
+                  }}
+                >
+                  <span className="piece-number">{p.number}</span>
+                  <span
+                    className="piece-name"
+                    onDoubleClick={(e) => {
+                      e.stopPropagation()
+                      setPiecePropertiesDialogPieceId(p.id)
+                    }}
+                    title="Doppelklick: Teil-Eigenschaften (Name, Nummer, Füllung …)"
+                  >
+                    {p.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="piece-delete"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deletePiece(p.id)
+                    }}
+                    aria-label="Teil löschen"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="sidebar-btn" onClick={() => addPiece()}>
+              + Teil hinzufügen
+            </button>
+          </div>
+        </>
+      )}
     </aside>
   )
 }

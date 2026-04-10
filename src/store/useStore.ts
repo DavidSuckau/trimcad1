@@ -304,6 +304,8 @@ type Store = {
   showContourMeasurements: boolean
   /** Workspace-Notizzettel ein-/ausblenden (Daten bleiben erhalten). */
   showWorkspaceNotes: boolean
+  /** Linke Teileliste ein-/ausklappen (mehr Platz für die Arbeitsfläche). */
+  sidebarCollapsed: boolean
   rulerMode: boolean
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
@@ -369,6 +371,7 @@ type Store = {
   setShowProfiles: (v: boolean) => void
   setShowContourMeasurements: (v: boolean) => void
   setShowWorkspaceNotes: (v: boolean) => void
+  setSidebarCollapsed: (v: boolean) => void
   setRulerMode: (v: boolean) => void
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
@@ -673,6 +676,7 @@ export const useStore = create<Store>()(
   showProfiles: true,
   showContourMeasurements: false,
   showWorkspaceNotes: true,
+  sidebarCollapsed: false,
   rulerMode: false,
   rulerLine: null,
   pendingNahtzugabeClick: false,
@@ -1001,6 +1005,7 @@ export const useStore = create<Store>()(
   setShowProfiles: (v) => set({ showProfiles: v }),
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
+  setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
