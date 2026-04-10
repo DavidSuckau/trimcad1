@@ -860,6 +860,9 @@ body {
   cursor: default;
   opacity: 0.55;
 }
+.canvas-tool-btn.canvas-tool-btn--layout-only:not(:disabled) {
+  opacity: 0.4;
+}
 .canvas-tool-separator {
   width: 20px;
   height: 1px;

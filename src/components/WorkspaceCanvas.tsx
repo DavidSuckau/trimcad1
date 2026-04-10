@@ -1297,7 +1297,9 @@ export function WorkspaceCanvas() {
     showProfiles,
     showContourMeasurements,
     showWorkspaceNotes,
+    contourEditEnabled,
     rulerMode,
+    setRulerMode,
     rulerLine,
     setView,
     setRulerLine,
@@ -1608,6 +1610,31 @@ export function WorkspaceCanvas() {
     return () => clearTimeout(timer)
   }, [toastMessage, setToastMessage])
 
+  useEffect(() => {
+    if (!contourEditEnabled) {
+      setPendingNahtzugabeClick(false)
+      setEdgeSeamPickingActive(false)
+      setNahtzuordnungMode('idle')
+      setPendingNahtzuordnungFirst(null)
+      setRulerMode(false)
+      if (useStore.getState().digitizeState) cancelDigitize()
+    }
+  }, [
+    contourEditEnabled,
+    cancelDigitize,
+    setPendingNahtzugabeClick,
+    setEdgeSeamPickingActive,
+    setNahtzuordnungMode,
+    setPendingNahtzuordnungFirst,
+    setRulerMode,
+  ])
+
+  useEffect(() => {
+    if (!contourEditEnabled && tool !== 'select' && tool !== 'pan') {
+      setTool('select')
+    }
+  }, [contourEditEnabled, tool, setTool])
+
   const prevDraggingRef = useRef(dragging)
   useEffect(() => {
     const wasDragging = prevDraggingRef.current
@@ -1655,7 +1682,9 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (tool === 'massstab') {
+      const layoutOnly = !contourEditEnabled
+      if (layoutOnly && tool !== 'select') return
+      if (!layoutOnly && tool === 'massstab') {
         if (selectedPieceIds.length !== 1) {
           setToastMessage('error:Bitte genau ein Teil auswählen.')
           return
@@ -1687,14 +1716,14 @@ export function WorkspaceCanvas() {
         setMassstabDialog({ pieceId: p.id, curveIndices: resolved, currentLengthMm })
         return
       }
-      if (rulerMode) {
+      if (!layoutOnly && rulerMode) {
         setRulerLine(null)
         const start = snapRulerToNearestPoint(world, pieces)
         setDragging({ kind: 'ruler', start, current: start })
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
+      if (!layoutOnly && (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second')) {
         // Nahtzuordnung: Klick immer auf seamLine (wenn vorhanden), sonst cutLine. cutLine-Indices für Logik.
         let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
         for (const p of pieces) {
@@ -1747,7 +1776,7 @@ export function WorkspaceCanvas() {
           return
         }
       }
-      if (edgeSeamPickingActive && !edgeAllowancePopover && hoveredEdgePicking) {
+      if (!layoutOnly && edgeSeamPickingActive && !edgeAllowancePopover && hoveredEdgePicking) {
         const piece = pieces.find((p) => p.id === hoveredEdgePicking.pieceId)
         if (piece) {
           const currentMm = getAllowanceForCurveIndex(piece, hoveredEdgePicking.curveIndices[0])
@@ -1761,10 +1790,10 @@ export function WorkspaceCanvas() {
         }
         return
       }
-      if (edgeSeamPickingActive && edgeAllowancePopover) {
+      if (!layoutOnly && edgeSeamPickingActive && edgeAllowancePopover) {
         return
       }
-      if (tool === 'profil' && hoveredProfileEdge) {
+      if (!layoutOnly && tool === 'profil' && hoveredProfileEdge) {
         const existing = profileAssignments.find(
           (pa) => pa.pieceId === hoveredProfileEdge.pieceId && pa.edgeIndex === hoveredProfileEdge.edgeIndex
         )
@@ -1786,7 +1815,7 @@ export function WorkspaceCanvas() {
         }
         return
       }
-      if (pendingNahtzugabeClick) {
+      if (!layoutOnly && pendingNahtzugabeClick) {
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
@@ -1801,7 +1830,7 @@ export function WorkspaceCanvas() {
         return
       }
 
-      if (showWorkspaceNotes) {
+      if (!layoutOnly && showWorkspaceNotes) {
         const notes = workspace.notes ?? []
         /** Pixel-Treffer (wie Icon-Größe auf dem Bildschirm), unabhängig vom Zoom. */
         const NOTE_HIT_PX = 24
@@ -1825,7 +1854,7 @@ export function WorkspaceCanvas() {
         }
       }
 
-      if (showProfiles && (tool === 'select' || tool === 'profil') && profileAssignments.length > 0) {
+      if (!layoutOnly && showProfiles && (tool === 'select' || tool === 'profil') && profileAssignments.length > 0) {
         const PROFILE_HIT_MM = 8
         const PROFILE_LINE_OFF = 20
         for (const pa of profileAssignments) {
@@ -1865,7 +1894,7 @@ export function WorkspaceCanvas() {
       const VERTEX_HIT_SEAM = VERTEX_DRAG_HIT_SEAM_MM
       const POINT_ON_CURVE_HIT = POINT_ON_CURVE_DRAG_HIT_MM
       // Treffer: Seam-as-Master = Eckpunkte auf Innenkontur (seamLine); sonst cut/seam je nach Ansicht.
-      if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
+      if (!layoutOnly && showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
         let bestPointOnCurve: { dist: number; pieceId: string; curveIndex: number; t: number } | null = null
         let bestVertex: { dist: number; pieceId: string; vertexIndex: number; hitRadius: number } | null = null
         let bestNotchClick: { dist: number; pieceId: string; notchId: string } | null = null
@@ -2010,7 +2039,7 @@ export function WorkspaceCanvas() {
           }
         }
       }
-      if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
+      if (!layoutOnly && tool === 'curvepoint' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (piece) {
@@ -2044,7 +2073,7 @@ export function WorkspaceCanvas() {
         }
         return
       }
-      if (tool === 'point' && selectedPieceIds.length === 1) {
+      if (!layoutOnly && tool === 'point' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (piece) {
@@ -2074,7 +2103,7 @@ export function WorkspaceCanvas() {
         return
       }
       if (tool === 'select') {
-        if (hoveredDeletableNotch && e.altKey) {
+        if (contourEditEnabled && hoveredDeletableNotch && e.altKey) {
           e.preventDefault()
           setNotchEditTarget({
             pieceId: hoveredDeletableNotch.pieceId,
@@ -2082,7 +2111,7 @@ export function WorkspaceCanvas() {
           })
           return
         }
-        if (hoveredDeletableNotch) {
+        if (contourEditEnabled && hoveredDeletableNotch) {
           setDragging({
             kind: 'notchMove',
             pieceId: hoveredDeletableNotch.pieceId,
@@ -2130,6 +2159,7 @@ export function WorkspaceCanvas() {
             return
           }
         }
+        if (!contourEditEnabled) {
         const GRAIN_POINT_HIT = 14
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
@@ -2172,6 +2202,7 @@ export function WorkspaceCanvas() {
           containerRef.current?.setPointerCapture?.(e.pointerId)
           return
         }
+        }
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
@@ -2201,7 +2232,7 @@ export function WorkspaceCanvas() {
             return
           }
         }
-        if (imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
+        if (!layoutOnly && imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
           const session = imageDigitizeSession
           const lay = workspaceImageLayout(session)
           if (session.locked) {
@@ -2253,11 +2284,15 @@ export function WorkspaceCanvas() {
           }
         }
         setWorkspaceImageSelected(false)
-        setDragging({ kind: 'selectionMarquee', start: world, current: world })
-        ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+        if (layoutOnly) {
+          selectPiece(null)
+        } else {
+          setDragging({ kind: 'selectionMarquee', start: world, current: world })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+        }
         return
       }
-      if ((tool === 'line' || tool === 'internalLine') && selectedPieceIds.length === 1) {
+      if (!layoutOnly && (tool === 'line' || tool === 'internalLine') && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (!piece) return
@@ -2266,7 +2301,7 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (tool === 'notch' && selectedPieceIds.length === 1) {
+      if (!layoutOnly && tool === 'notch' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (!piece) {
@@ -2306,7 +2341,7 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (tool === 'drill' && selectedPieceIds.length === 1) {
+      if (!layoutOnly && tool === 'drill' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (!piece) return
@@ -2315,7 +2350,7 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (tool === 'internalCircle' && selectedPieceIds.length === 1) {
+      if (!layoutOnly && tool === 'internalCircle' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
         if (!piece) return
@@ -2324,12 +2359,12 @@ export function WorkspaceCanvas() {
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (tool === 'rectangle') {
+      if (!layoutOnly && tool === 'rectangle') {
         setDragging({ kind: 'rectangle', start: world, current: world })
         ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
-      if (tool === 'note') {
+      if (!layoutOnly && tool === 'note') {
         if (!showWorkspaceNotes) {
           setTool('select')
           return
@@ -2353,7 +2388,7 @@ export function WorkspaceCanvas() {
         setTool('select')
         return
       }
-      if (tool === 'digitize' && digitizeState) {
+      if (!layoutOnly && tool === 'digitize' && digitizeState) {
         const CLOSE_HIT = 8
         const nodes = digitizeState.nodes
         if (nodes.length >= 3) {
@@ -2386,6 +2421,7 @@ export function WorkspaceCanvas() {
       workspaceImageSelected,
       showPoints,
       showGrain,
+      contourEditEnabled,
       rulerMode,
       pendingNahtzugabeClick,
       setPendingNahtzugabeClick,
@@ -3280,6 +3316,7 @@ export function WorkspaceCanvas() {
   keydownHandlerRef.current = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      const layoutOnly = !contourEditEnabled
       if (!inInput && (e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
         undoAction()
@@ -3315,7 +3352,7 @@ export function WorkspaceCanvas() {
         setLineLengthEditor(null)
         return
       }
-      if (!inInput && dragging?.kind === 'line' && tool === 'internalLine' && e.key === ' ') {
+      if (contourEditEnabled && !inInput && dragging?.kind === 'line' && tool === 'internalLine' && e.key === ' ') {
         e.preventDefault()
         const len = Math.hypot(
           dragging.current.x - dragging.start.x,
@@ -3330,12 +3367,12 @@ export function WorkspaceCanvas() {
         })
         return
       }
-      if (!inInput && hoveredSeamAssignmentId && e.key === ' ') {
+      if (contourEditEnabled && !inInput && hoveredSeamAssignmentId && e.key === ' ') {
         e.preventDefault()
         setSeamAssignmentMetaDialogId(hoveredSeamAssignmentId)
         return
       }
-      if (!inInput && !dragging && hoveredInternalLine && !hoveredSeamAssignmentId && e.key === ' ') {
+      if (contourEditEnabled && !inInput && !dragging && hoveredInternalLine && !hoveredSeamAssignmentId && e.key === ' ') {
         const piece = pieces.find((p) => p.id === hoveredInternalLine.pieceId)
         const curve = piece?.internalLines[hoveredInternalLine.curveIndex]
         if (piece && curve) {
@@ -3427,7 +3464,7 @@ export function WorkspaceCanvas() {
         setGrainContextMenu({ pieceId: grainFlipHover.pieceId, clientX: grainFlipHover.clientX, clientY: grainFlipHover.clientY })
         return
       }
-      if (grainFlipHover && !grainContextMenu && !inInput && (e.key === 'l' || e.key === 'L')) {
+      if (contourEditEnabled && grainFlipHover && !grainContextMenu && !inInput && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
         setEdgeSeamPickingActive(true)
         return
@@ -3448,7 +3485,7 @@ export function WorkspaceCanvas() {
         })
         return
       }
-      if (!inInput && hoveredDeletablePoint) {
+      if (contourEditEnabled && !inInput && hoveredDeletablePoint) {
         const hp = hoveredDeletablePoint
         if (hp.kind === 'vertex') {
           if (e.key === 'p' || e.key === 'P') {
@@ -3488,7 +3525,7 @@ export function WorkspaceCanvas() {
           return
         }
       }
-      if (segmentActive && !inInput) {
+      if (contourEditEnabled && segmentActive && !inInput) {
         const parseMm = (): number => {
           const n = parseFloat(segmentMenuMm)
           return Number.isFinite(n) ? n : 5
@@ -3544,14 +3581,14 @@ export function WorkspaceCanvas() {
         }
         return
       }
-      if (e.key === 'n' || e.key === 'N') {
+      if (!layoutOnly && (e.key === 'n' || e.key === 'N')) {
         if (!inInput) {
           setTool('notch')
           e.preventDefault()
         }
         return
       }
-      if (e.key === 'c' || e.key === 'C') {
+      if (!layoutOnly && (e.key === 'c' || e.key === 'C')) {
         if (!inInput) {
           setTool('curvepoint')
           e.preventDefault()
@@ -3580,28 +3617,28 @@ export function WorkspaceCanvas() {
         e.preventDefault()
         return
       }
-      if (e.key === 'p' || e.key === 'P') {
+      if (!layoutOnly && (e.key === 'p' || e.key === 'P')) {
         if (!inInput) {
           setTool('point')
           e.preventDefault()
         }
         return
       }
-      if (e.key === 'k' || e.key === 'K') {
+      if (!layoutOnly && (e.key === 'k' || e.key === 'K')) {
         if (!inInput) {
           setTool('kante')
           e.preventDefault()
         }
         return
       }
-      if (e.key === 'm' || e.key === 'M') {
+      if (!layoutOnly && (e.key === 'm' || e.key === 'M')) {
         if (!inInput) {
           setTool('massstab')
           e.preventDefault()
         }
         return
       }
-      if (e.key === 'd' || e.key === 'D') {
+      if (!layoutOnly && (e.key === 'd' || e.key === 'D')) {
         if (!inInput && !e.altKey) {
           setTool('digitize')
           startDigitize()
@@ -3609,14 +3646,14 @@ export function WorkspaceCanvas() {
         }
         return
       }
-      if (e.key === 's' || e.key === 'S') {
+      if (!layoutOnly && (e.key === 's' || e.key === 'S')) {
         if (!inInput) {
           setPendingNahtzugabeClick(true)
           e.preventDefault()
         }
         return
       }
-      if ((e.key === 'l' || e.key === 'L') && !inInput && !grainFlipHover) {
+      if (!layoutOnly && (e.key === 'l' || e.key === 'L') && !inInput && !grainFlipHover) {
         e.preventDefault()
         setEdgeSeamPickingActive(true)
         return
@@ -3631,7 +3668,7 @@ export function WorkspaceCanvas() {
         selectedPieceIds.forEach((id) => alignPieceToGrain(id))
         return
       }
-      if ((e.key === 'e' || e.key === 'E') && !inInput && tool === 'select' && hoveredDeletableNotch && !dragging) {
+      if (contourEditEnabled && (e.key === 'e' || e.key === 'E') && !inInput && tool === 'select' && hoveredDeletableNotch && !dragging) {
         e.preventDefault()
         setNotchEditTarget({
           pieceId: hoveredDeletableNotch.pieceId,
@@ -3639,29 +3676,29 @@ export function WorkspaceCanvas() {
         })
         return
       }
-      if ((e.key === 'f' || e.key === 'F') && !inInput && hoveredDeletableNotch) {
+      if (contourEditEnabled && (e.key === 'f' || e.key === 'F') && !inInput && hoveredDeletableNotch) {
         e.preventDefault()
         toggleNotchAnchor(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
         return
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      if (!inInput && batchSelectionTargets.length > 0) {
+      if (contourEditEnabled && !inInput && batchSelectionTargets.length > 0) {
         e.preventDefault()
         batchDeleteFiltered()
         return
       }
-      if (workspaceImageSelected && imageDigitizeSession && !hoveredDeletablePoint) {
+      if (contourEditEnabled && workspaceImageSelected && imageDigitizeSession && !hoveredDeletablePoint) {
         e.preventDefault()
         cancelImageSession()
         return
       }
-      if (hoveredSeamAssignmentId) {
+      if (contourEditEnabled && hoveredSeamAssignmentId) {
         e.preventDefault()
         removeSeamAssignment(hoveredSeamAssignmentId)
         setHoveredSeamAssignmentId(null)
         return
       }
-      if (hoveredDeletableNotch) {
+      if (contourEditEnabled && hoveredDeletableNotch) {
         e.preventDefault()
         removeNotch(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
         setNotchEditTarget((prev) =>
@@ -3674,13 +3711,13 @@ export function WorkspaceCanvas() {
         setHoveredDeletableNotch(null)
         return
       }
-      if (hoveredInternalLine) {
+      if (contourEditEnabled && hoveredInternalLine) {
         e.preventDefault()
         removeInternalLine(hoveredInternalLine.pieceId, hoveredInternalLine.curveIndex)
         setHoveredInternalLine(null)
         return
       }
-      if (!hoveredDeletablePoint) return
+      if (!contourEditEnabled || !hoveredDeletablePoint) return
       e.preventDefault()
       if (hoveredDeletablePoint.kind === 'vertex') {
         removeVertex(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex)

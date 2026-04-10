@@ -17,6 +17,8 @@ const iconProps = {
 export const CanvasToolbar: React.FC = () => {
   const tool = useStore((s) => s.tool)
   const setTool = useStore((s) => s.setTool)
+  const contourEditEnabled = useStore((s) => s.contourEditEnabled)
+  const setToastMessage = useStore((s) => s.setToastMessage)
   const rulerMode = useStore((s) => s.rulerMode)
   const setRulerMode = useStore((s) => s.setRulerMode)
   const pendingNahtzugabeClick = useStore((s) => s.pendingNahtzugabeClick)
@@ -25,9 +27,17 @@ export const CanvasToolbar: React.FC = () => {
   const setEdgeSeamPickingActive = useStore((s) => s.setEdgeSeamPickingActive)
   const selectedPieceIds = useStore((s) => s.selectedPieceIds)
 
+  const layoutOnly = !contourEditEnabled
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation()
 
+  const guardContourEdit = (): boolean => {
+    if (!layoutOnly) return true
+    setToastMessage('warn:Layout-Modus: Unten „Kontur bearbeiten“ einschalten.')
+    return false
+  }
+
   const handleNahtzugabe = () => {
+    if (!guardContourEdit()) return
     if (pendingNahtzugabeClick) {
       setPendingNahtzugabeClick(false)
     } else {
@@ -37,6 +47,7 @@ export const CanvasToolbar: React.FC = () => {
   }
 
   const handleEdgeSeam = () => {
+    if (!guardContourEdit()) return
     if (selectedPieceIds.length !== 1) return
     if (edgeSeamPickingActive) {
       setEdgeSeamPickingActive(false)
@@ -47,10 +58,12 @@ export const CanvasToolbar: React.FC = () => {
   }
 
   const handleRuler = () => {
+    if (!guardContourEdit()) return
     setRulerMode(!rulerMode)
   }
 
   const isActive = (t: string) => tool === t && !rulerMode && !pendingNahtzugabeClick && !edgeSeamPickingActive
+  const dim = layoutOnly ? ' canvas-tool-btn--layout-only' : ''
 
   return (
     <div
@@ -61,6 +74,7 @@ export const CanvasToolbar: React.FC = () => {
       onWheel={stopPropagation}
     >
       <button
+        type="button"
         className={`canvas-tool-btn${isActive('select') ? ' active' : ''}`}
         title="Auswahl (V)"
         onClick={() => { setTool('select'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
@@ -71,6 +85,7 @@ export const CanvasToolbar: React.FC = () => {
         </svg>
       </button>
       <button
+        type="button"
         className={`canvas-tool-btn${isActive('pan') ? ' active' : ''}`}
         title="Verschieben (H)"
         onClick={() => { setTool('pan'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
@@ -84,9 +99,13 @@ export const CanvasToolbar: React.FC = () => {
       <div className="canvas-tool-separator" />
 
       <button
-        className={`canvas-tool-btn${isActive('point') ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${isActive('point') ? ' active' : ''}${dim}`}
         title="Punkt (P)"
-        onClick={() => { setTool('point'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          if (!guardContourEdit()) return
+          setTool('point'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <circle cx="10" cy="10" r="6" opacity={0.45} />
@@ -94,9 +113,13 @@ export const CanvasToolbar: React.FC = () => {
         </svg>
       </button>
       <button
-        className={`canvas-tool-btn${isActive('curvepoint') ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${isActive('curvepoint') ? ' active' : ''}${dim}`}
         title="Kurvenpunkt (C)"
-        onClick={() => { setTool('curvepoint'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          if (!guardContourEdit()) return
+          setTool('curvepoint'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <path d="M3.5 14.5C3.5 8 16.5 12 16.5 5.5" />
@@ -105,9 +128,13 @@ export const CanvasToolbar: React.FC = () => {
         </svg>
       </button>
       <button
-        className={`canvas-tool-btn${isActive('notch') ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${isActive('notch') ? ' active' : ''}${dim}`}
         title="Kerbe / Notch (N)"
-        onClick={() => { setTool('notch'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          if (!guardContourEdit()) return
+          setTool('notch'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <path d="M3.5 5.5h13" />
@@ -118,7 +145,8 @@ export const CanvasToolbar: React.FC = () => {
       <div className="canvas-tool-separator" />
 
       <button
-        className={`canvas-tool-btn${pendingNahtzugabeClick ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${pendingNahtzugabeClick ? ' active' : ''}${dim}`}
         title="Nahtzugabe (S)"
         onClick={handleNahtzugabe}
       >
@@ -128,7 +156,8 @@ export const CanvasToolbar: React.FC = () => {
         </svg>
       </button>
       <button
-        className={`canvas-tool-btn${edgeSeamPickingActive ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${edgeSeamPickingActive ? ' active' : ''}${dim}`}
         title="Nahtzugabe pro Kante (L)"
         disabled={selectedPieceIds.length !== 1}
         onClick={handleEdgeSeam}
@@ -144,9 +173,13 @@ export const CanvasToolbar: React.FC = () => {
       <div className="canvas-tool-separator" />
 
       <button
-        className={`canvas-tool-btn${isActive('profil') ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${isActive('profil') ? ' active' : ''}${dim}`}
         title="Profil zuordnen"
-        onClick={() => { setTool('profil'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          if (!guardContourEdit()) return
+          setTool('profil'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <path d="M2.5 14.5c2-2.8 4.2 2.2 7.5 0s5.5 2.8 7.5 0" />
@@ -154,9 +187,13 @@ export const CanvasToolbar: React.FC = () => {
         </svg>
       </button>
       <button
-        className={`canvas-tool-btn${isActive('kante') ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${isActive('kante') ? ' active' : ''}${dim}`}
         title="Kante (K)"
-        onClick={() => { setTool('kante'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          if (!guardContourEdit()) return
+          setTool('kante'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <path d="M4.5 15.5L15.5 4.5" />
@@ -168,7 +205,8 @@ export const CanvasToolbar: React.FC = () => {
       <div className="canvas-tool-separator" />
 
       <button
-        className={`canvas-tool-btn${rulerMode ? ' active' : ''}`}
+        type="button"
+        className={`canvas-tool-btn${rulerMode ? ' active' : ''}${dim}`}
         title="Lineal"
         onClick={handleRuler}
       >

@@ -306,6 +306,11 @@ type Store = {
   showWorkspaceNotes: boolean
   /** Linke Teileliste ein-/ausklappen (mehr Platz für die Arbeitsfläche). */
   sidebarCollapsed: boolean
+  /**
+   * true: volle Konturbearbeitung (Punkte, Kerben, …); Fadenlauf-Geometrie nicht per Ziehen ändern.
+   * false: nur Teil verschieben, drehen, Drehpunkt und Fadenlauf anpassen (Layout-Modus).
+   */
+  contourEditEnabled: boolean
   rulerMode: boolean
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
@@ -372,6 +377,7 @@ type Store = {
   setShowContourMeasurements: (v: boolean) => void
   setShowWorkspaceNotes: (v: boolean) => void
   setSidebarCollapsed: (v: boolean) => void
+  setContourEditEnabled: (v: boolean) => void
   setRulerMode: (v: boolean) => void
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
@@ -677,6 +683,7 @@ export const useStore = create<Store>()(
   showContourMeasurements: false,
   showWorkspaceNotes: true,
   sidebarCollapsed: false,
+  contourEditEnabled: true,
   rulerMode: false,
   rulerLine: null,
   pendingNahtzugabeClick: false,
@@ -1006,6 +1013,7 @@ export const useStore = create<Store>()(
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+  setContourEditEnabled: (v) => set({ contourEditEnabled: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),

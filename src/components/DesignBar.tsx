@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 export function DesignBar() {
   const {
+    contourEditEnabled, setContourEditEnabled,
     showGrid, setShowGrid,
     showPoints, setShowPoints,
     showGrain, setShowGrain,
@@ -14,6 +15,8 @@ export function DesignBar() {
     showContourMeasurements, setShowContourMeasurements,
     showWorkspaceNotes, setShowWorkspaceNotes,
   } = useStore(useShallow((s) => ({
+    contourEditEnabled: s.contourEditEnabled,
+    setContourEditEnabled: s.setContourEditEnabled,
     showGrid: s.showGrid, setShowGrid: s.setShowGrid,
     showPoints: s.showPoints, setShowPoints: s.setShowPoints,
     showGrain: s.showGrain, setShowGrain: s.setShowGrain,
@@ -27,6 +30,7 @@ export function DesignBar() {
   })))
 
   const items: { label: string; checked: boolean; toggle: (v: boolean) => void }[] = [
+    { label: 'Kontur bearbeiten', checked: contourEditEnabled, toggle: setContourEditEnabled },
     { label: 'Raster', checked: showGrid, toggle: setShowGrid },
     { label: 'Punkte', checked: showPoints, toggle: setShowPoints },
     { label: 'Laufrichtung', checked: showGrain, toggle: setShowGrain },
