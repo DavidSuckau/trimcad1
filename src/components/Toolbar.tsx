@@ -102,6 +102,7 @@ export function Toolbar() {
     batchSelectionTargets,
     batchDeleteMarqueeCompletePieces,
     setEdgeSeamPickingActive,
+    setHorizontalLevelPickingActive,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
@@ -805,6 +806,7 @@ export function Toolbar() {
                   className="menubar-dropdown-btn"
                   disabled={!workspace.pieces.some((p) => p.seamAllowanceMm != null && p.seamLine.length >= 3)}
                   onClick={() => {
+                    setHorizontalLevelPickingActive(false)
                     setEdgeSeamPickingActive(true)
                     closeMenu()
                   }}

@@ -27,7 +27,14 @@ import {
   validateContourAfterVertexMove,
 } from '../geometry/offset'
 import type { DeriveCutLineFromSeamResult } from '../geometry/offset'
-import { hasVariableAllowance, buildCurveIndexAllowanceMap, remapEdgeSeamAllowances, remapProfileAssignmentsForPiece } from '../geometry/edgeEnumeration'
+import {
+  hasVariableAllowance,
+  buildCurveIndexAllowanceMap,
+  remapEdgeSeamAllowances,
+  remapProfileAssignmentsForPiece,
+  enumerateEdges,
+} from '../geometry/edgeEnumeration'
+import { deltaMinimalDegToHorizontal, masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
 import {
   getSubSegments,
@@ -319,6 +326,8 @@ type Store = {
   piecePropertiesDialogPieceId: string | null
   /** Interaktiver Modus: Kante auf dem Canvas anklicken, um Nahtzugabe pro Kante festzulegen. */
   edgeSeamPickingActive: boolean
+  /** Gerade Master-Kante wählen → Teil drehen, bis die Kante waagerecht ist. */
+  horizontalLevelPickingActive: boolean
   /** Nahtzuordnung: 'first' = erste Naht anklicken, 'second' = zweite Naht (anderes Teil) anklicken */
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
@@ -384,6 +393,7 @@ type Store = {
   setNahtzugabeDialogPieceId: (v: string | null) => void
   setPiecePropertiesDialogPieceId: (v: string | null) => void
   setEdgeSeamPickingActive: (v: boolean) => void
+  setHorizontalLevelPickingActive: (v: boolean) => void
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
@@ -485,6 +495,11 @@ type Store = {
   setGrainLine: (pieceId: string, line: Line) => void
   /** Teil so drehen, dass der Laufrichtungspfeil senkrecht ausgerichtet ist. */
   alignPieceToGrain: (pieceId: string) => void
+  /**
+   * Teil so drehen, dass die angegebene Master-Kante (nur gerade Linienkette) waagerecht liegt.
+   * @returns true bei Erfolg
+   */
+  alignPieceEdgeHorizontal: (pieceId: string, edgeIndex: number) => boolean
   /** Einzelnes Kontur-Segment um deltaMm verschieben (Außenrichtung = positiv). */
   offsetSegment: (pieceId: string, curveIndex: number, deltaMm: number) => void
   /** SeamLine eines Teils neu berechnen (nach Drag-Ende aufrufen). */
@@ -690,6 +705,7 @@ export const useStore = create<Store>()(
   nahtzugabeDialogPieceId: null,
   piecePropertiesDialogPieceId: null,
   edgeSeamPickingActive: false,
+  horizontalLevelPickingActive: false,
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   profileDialogAssignmentId: null,
@@ -1020,6 +1036,7 @@ export const useStore = create<Store>()(
   setNahtzugabeDialogPieceId: (v) => set({ nahtzugabeDialogPieceId: v }),
   setPiecePropertiesDialogPieceId: (v) => set({ piecePropertiesDialogPieceId: v }),
   setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
+  setHorizontalLevelPickingActive: (v) => set({ horizontalLevelPickingActive: v }),
   setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
@@ -2497,6 +2514,31 @@ export const useStore = create<Store>()(
     get().setPieceRotation(pieceId, piece.transform.rotation + delta)
   },
 
+  alignPieceEdgeHorizontal: (pieceId, edgeIndex) => {
+    const piece = get().workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece || piece.cutLine.length < 3) return false
+    const curves = getCurvesForSeamEdge(piece)
+    const edges = enumerateEdges(piece)
+    const edge = edges.find((ed) => ed.edgeIndex === edgeIndex)
+    if (!edge || !masterEdgeIsStraightLine(curves, edge)) return false
+    const firstCi = edge.curveIndices[0]
+    const lastCi = edge.curveIndices[edge.curveIndices.length - 1]
+    const startLocal = curves[firstCi]?.start
+    const endLocal = curves[lastCi]?.end
+    if (!startLocal || !endLocal) return false
+    const t = piece.transform
+    const p0 = pieceLocalToWorld(startLocal, t)
+    const p1 = pieceLocalToWorld(endLocal, t)
+    const dx = p1.x - p0.x
+    const dy = p1.y - p0.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-9) return false
+    const thetaDeg = (Math.atan2(dy, dx) * 180) / Math.PI
+    const delta = deltaMinimalDegToHorizontal(thetaDeg)
+    get().setPieceRotation(pieceId, piece.transform.rotation + delta)
+    return true
+  },
+
   startDigitize: () => set({ digitizeState: { nodes: [], isDragging: false, dragPosition: null } }),
 
   addDigitizeNode: (point) =>
@@ -2540,6 +2582,7 @@ export const useStore = create<Store>()(
       nahtzugabeDialogPieceId: null,
       piecePropertiesDialogPieceId: null,
       edgeSeamPickingActive: false,
+      horizontalLevelPickingActive: false,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       profileDialogAssignmentId: null,
@@ -2705,6 +2748,7 @@ export const useStore = create<Store>()(
       nahtzugabeDialogPieceId: null,
       piecePropertiesDialogPieceId: null,
       edgeSeamPickingActive: false,
+      horizontalLevelPickingActive: false,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       rulerMode: false,

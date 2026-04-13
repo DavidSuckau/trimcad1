@@ -9,6 +9,7 @@ describe('exitAllModes', () => {
       nahtzugabeDialogPieceId: 'p1',
       piecePropertiesDialogPieceId: 'p2',
       edgeSeamPickingActive: true,
+      horizontalLevelPickingActive: true,
       profileDialogAssignmentId: 'prof-1',
       rulerMode: true,
       rulerLine: { start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
@@ -68,6 +69,7 @@ describe('exitAllModes', () => {
     const s = useStore.getState()
     expect(s.pendingNahtzugabeClick).toBe(false)
     expect(s.edgeSeamPickingActive).toBe(false)
+    expect(s.horizontalLevelPickingActive).toBe(false)
     expect(s.rulerMode).toBe(false)
     expect(s.rulerLine).toBeNull()
     expect(s.toastMessage).toBeNull()

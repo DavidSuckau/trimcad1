@@ -25,6 +25,8 @@ export const CanvasToolbar: React.FC = () => {
   const setPendingNahtzugabeClick = useStore((s) => s.setPendingNahtzugabeClick)
   const edgeSeamPickingActive = useStore((s) => s.edgeSeamPickingActive)
   const setEdgeSeamPickingActive = useStore((s) => s.setEdgeSeamPickingActive)
+  const horizontalLevelPickingActive = useStore((s) => s.horizontalLevelPickingActive)
+  const setHorizontalLevelPickingActive = useStore((s) => s.setHorizontalLevelPickingActive)
   const selectedPieceIds = useStore((s) => s.selectedPieceIds)
 
   const layoutOnly = !contourEditEnabled
@@ -42,6 +44,7 @@ export const CanvasToolbar: React.FC = () => {
       setPendingNahtzugabeClick(false)
     } else {
       setEdgeSeamPickingActive(false)
+      setHorizontalLevelPickingActive(false)
       setPendingNahtzugabeClick(true)
     }
   }
@@ -53,16 +56,37 @@ export const CanvasToolbar: React.FC = () => {
       setEdgeSeamPickingActive(false)
     } else {
       setPendingNahtzugabeClick(false)
+      setHorizontalLevelPickingActive(false)
       setEdgeSeamPickingActive(true)
     }
   }
 
   const handleRuler = () => {
     if (!guardContourEdit()) return
-    setRulerMode(!rulerMode)
+    const next = !rulerMode
+    setRulerMode(next)
+    if (next) setHorizontalLevelPickingActive(false)
   }
 
-  const isActive = (t: string) => tool === t && !rulerMode && !pendingNahtzugabeClick && !edgeSeamPickingActive
+  const handleHorizontalLevel = () => {
+    if (selectedPieceIds.length !== 1) return
+    if (horizontalLevelPickingActive) {
+      setHorizontalLevelPickingActive(false)
+    } else {
+      setTool('select')
+      setRulerMode(false)
+      setPendingNahtzugabeClick(false)
+      setEdgeSeamPickingActive(false)
+      setHorizontalLevelPickingActive(true)
+    }
+  }
+
+  const isActive = (t: string) =>
+    tool === t &&
+    !rulerMode &&
+    !pendingNahtzugabeClick &&
+    !edgeSeamPickingActive &&
+    !horizontalLevelPickingActive
   const dim = layoutOnly ? ' canvas-tool-btn--layout-only' : ''
 
   return (
@@ -77,7 +101,13 @@ export const CanvasToolbar: React.FC = () => {
         type="button"
         className={`canvas-tool-btn${isActive('select') ? ' active' : ''}`}
         title="Auswahl (V)"
-        onClick={() => { setTool('select'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          setTool('select')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <path d="M4 3.5l6.2 14.5 1.4-5.2 5.2-1.4L4 3.5z" />
@@ -88,7 +118,13 @@ export const CanvasToolbar: React.FC = () => {
         type="button"
         className={`canvas-tool-btn${isActive('pan') ? ' active' : ''}`}
         title="Verschieben (H)"
-        onClick={() => { setTool('pan'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false) }}
+        onClick={() => {
+          setTool('pan')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
+        }}
       >
         <svg {...iconProps}>
           <path d="M10 3.5v3M10 13.5v3M3.5 10h3M13.5 10h3" />
@@ -104,7 +140,11 @@ export const CanvasToolbar: React.FC = () => {
         title="Punkt (P)"
         onClick={() => {
           if (!guardContourEdit()) return
-          setTool('point'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+          setTool('point')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
         }}
       >
         <svg {...iconProps}>
@@ -118,7 +158,11 @@ export const CanvasToolbar: React.FC = () => {
         title="Kurvenpunkt (C)"
         onClick={() => {
           if (!guardContourEdit()) return
-          setTool('curvepoint'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+          setTool('curvepoint')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
         }}
       >
         <svg {...iconProps}>
@@ -133,7 +177,11 @@ export const CanvasToolbar: React.FC = () => {
         title="Kerbe / Notch (N)"
         onClick={() => {
           if (!guardContourEdit()) return
-          setTool('notch'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+          setTool('notch')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
         }}
       >
         <svg {...iconProps}>
@@ -178,7 +226,11 @@ export const CanvasToolbar: React.FC = () => {
         title="Profil zuordnen"
         onClick={() => {
           if (!guardContourEdit()) return
-          setTool('profil'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+          setTool('profil')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
         }}
       >
         <svg {...iconProps}>
@@ -192,7 +244,11 @@ export const CanvasToolbar: React.FC = () => {
         title="Kante (K)"
         onClick={() => {
           if (!guardContourEdit()) return
-          setTool('kante'); setRulerMode(false); setPendingNahtzugabeClick(false); setEdgeSeamPickingActive(false)
+          setTool('kante')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
         }}
       >
         <svg {...iconProps}>
@@ -213,6 +269,20 @@ export const CanvasToolbar: React.FC = () => {
         <svg {...iconProps}>
           <path d="M4.5 14.5l11-11" />
           <path d="M5.8 13.2l1.1-1.1M8.2 10.8l1.1-1.1M10.6 8.4l1.1-1.1M13 6l1.1-1.1" opacity={0.7} />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`canvas-tool-btn${horizontalLevelPickingActive ? ' active' : ''}`}
+        title="Wasserwaage: gerade Kante waagerecht ausrichten"
+        disabled={selectedPieceIds.length !== 1}
+        onClick={handleHorizontalLevel}
+      >
+        <svg {...iconProps}>
+          <rect x="3.5" y="7" width="13" height="7" rx="1.5" />
+          <circle cx="10" cy="10.5" r="2.2" fill="currentColor" stroke="none" opacity={0.35} />
+          <circle cx="10" cy="10.5" r="1.1" fill="currentColor" stroke="none" />
+          <path d="M3.5 5h13" opacity={0.55} />
         </svg>
       </button>
     </div>

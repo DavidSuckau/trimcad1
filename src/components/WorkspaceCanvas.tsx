@@ -47,6 +47,7 @@ import {
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
+import { masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
@@ -1367,6 +1368,9 @@ export function WorkspaceCanvas() {
     setNahtzugabeDialogPieceId,
     edgeSeamPickingActive,
     setEdgeSeamPickingActive,
+    horizontalLevelPickingActive,
+    setHorizontalLevelPickingActive,
+    alignPieceEdgeHorizontal,
     nahtzuordnungMode,
     setNahtzuordnungMode,
     pendingNahtzuordnungFirst,
@@ -1572,6 +1576,11 @@ export function WorkspaceCanvas() {
     edgeIndex: number
     curveIndices: number[]
   } | null>(null)
+  const [hoveredHorizontalLevelEdge, setHoveredHorizontalLevelEdge] = useState<{
+    pieceId: string
+    edgeIndex: number
+    curveIndices: number[]
+  } | null>(null)
   const [edgeAllowancePopover, setEdgeAllowancePopover] = useState<{
     pieceId: string
     edgeIndex: number
@@ -1670,6 +1679,16 @@ export function WorkspaceCanvas() {
   }, [toastMessage, setToastMessage])
 
   useEffect(() => {
+    if (horizontalLevelPickingActive && selectedPieceIds.length !== 1) {
+      setHorizontalLevelPickingActive(false)
+    }
+  }, [horizontalLevelPickingActive, selectedPieceIds, setHorizontalLevelPickingActive])
+
+  useEffect(() => {
+    if (!horizontalLevelPickingActive) setHoveredHorizontalLevelEdge(null)
+  }, [horizontalLevelPickingActive])
+
+  useEffect(() => {
     if (!contourEditEnabled) {
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
@@ -1677,6 +1696,11 @@ export function WorkspaceCanvas() {
       setPendingNahtzuordnungFirst(null)
       setRulerMode(false)
       if (useStore.getState().digitizeState) cancelDigitize()
+      setHoveredDeletablePoint(null)
+      setHoveredDeletableNotch(null)
+      setPointPreview(null)
+      setHoveredCurvepointSegment(null)
+      setGrainFlipHover(null)
     }
   }, [
     contourEditEnabled,
@@ -1726,6 +1750,10 @@ export function WorkspaceCanvas() {
           setHoveredEdgePicking(null)
           setEdgeSeamPickingActive(false)
         }
+        if (horizontalLevelPickingActive) {
+          setHoveredHorizontalLevelEdge(null)
+          setHorizontalLevelPickingActive(false)
+        }
         return
       }
       e.preventDefault()
@@ -1742,6 +1770,19 @@ export function WorkspaceCanvas() {
         return
       }
       const layoutOnly = !contourEditEnabled
+      if (horizontalLevelPickingActive) {
+        if (selectedPieceIds.length === 1 && hoveredHorizontalLevelEdge?.pieceId === selectedPieceIds[0]) {
+          const ok = alignPieceEdgeHorizontal(selectedPieceIds[0], hoveredHorizontalLevelEdge.edgeIndex)
+          if (ok) {
+            setHorizontalLevelPickingActive(false)
+            setHoveredHorizontalLevelEdge(null)
+            setToastMessage('success:Kante waagerecht ausgerichtet.')
+          } else {
+            setToastMessage('warn:Nur gerade Kanten (Liniensegmente) können waagerecht ausgerichtet werden.')
+          }
+          return
+        }
+      }
       if (layoutOnly && tool !== 'select') return
       if (!layoutOnly && tool === 'massstab') {
         if (selectedPieceIds.length !== 1) {
@@ -2229,28 +2270,30 @@ export function WorkspaceCanvas() {
             return
           }
         }
-        if (!contourEditEnabled) {
-        const GRAIN_POINT_HIT = 14
-        for (let i = pieces.length - 1; i >= 0; i--) {
-          const p = pieces[i]
-          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-          const grain = getPieceGrainLine(p)
-          const startWorld = pieceLocalToWorld(grain.start, p)
-          const endWorld = pieceLocalToWorld(grain.end, p)
-          const dStart = Math.hypot(world.x - startWorld.x, world.y - startWorld.y)
-          const dEnd = Math.hypot(world.x - endWorld.x, world.y - endWorld.y)
-          if (dStart < GRAIN_POINT_HIT) {
-            setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'start' })
-            containerRef.current?.setPointerCapture?.(e.pointerId)
-            return
-          }
-          if (dEnd < GRAIN_POINT_HIT) {
-            setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'end' })
-            containerRef.current?.setPointerCapture?.(e.pointerId)
-            return
+        if (contourEditEnabled && showGrain) {
+          const GRAIN_POINT_HIT = 14
+          for (let i = pieces.length - 1; i >= 0; i--) {
+            const p = pieces[i]
+            if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+            const grain = getPieceGrainLine(p)
+            const startWorld = pieceLocalToWorld(grain.start, p)
+            const endWorld = pieceLocalToWorld(grain.end, p)
+            const dStart = Math.hypot(world.x - startWorld.x, world.y - startWorld.y)
+            const dEnd = Math.hypot(world.x - endWorld.x, world.y - endWorld.y)
+            if (dStart < GRAIN_POINT_HIT) {
+              setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'start' })
+              containerRef.current?.setPointerCapture?.(e.pointerId)
+              return
+            }
+            if (dEnd < GRAIN_POINT_HIT) {
+              setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'end' })
+              containerRef.current?.setPointerCapture?.(e.pointerId)
+              return
+            }
           }
         }
-        const GRAIN_SHAFT_HIT = GRAIN_POINT_HIT
+        if (!contourEditEnabled) {
+        const GRAIN_SHAFT_HIT = 14
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
@@ -2532,6 +2575,10 @@ export function WorkspaceCanvas() {
       addProfileAssignment,
       setProfileDialogAssignmentId,
       showProfiles,
+      horizontalLevelPickingActive,
+      hoveredHorizontalLevelEdge,
+      alignPieceEdgeHorizontal,
+      setHorizontalLevelPickingActive,
     ]
   )
 
@@ -2702,7 +2749,44 @@ export function WorkspaceCanvas() {
         } else {
           setHoveredProfileEdge(null)
         }
-        if (showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
+        if (horizontalLevelPickingActive && selectedPieceIds.length === 1) {
+          const world = toWorld(e.clientX, e.clientY)
+          const selId = selectedPieceIds[0]
+          const p = pieces.find((x) => x.id === selId)
+          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+          if (p) {
+            const masterK = getCurvesForSeamEdge(p)
+            if (masterK.length >= 3) {
+              const local = worldToPieceLocal(world, p)
+              const nearest = nearestCurveIndexAndPoint(local, masterK)
+              if (nearest && nearest.distance < SEAM_HIT_MM) {
+                const edges = enumerateEdges(p)
+                for (const edge of edges) {
+                  if (edge.curveIndices.includes(nearest.curveIndex)) {
+                    if (masterEdgeIsStraightLine(masterK, edge)) {
+                      bestEdge = {
+                        pieceId: p.id,
+                        edgeIndex: edge.edgeIndex,
+                        curveIndices: edge.curveIndices,
+                        distance: nearest.distance,
+                      }
+                    }
+                    break
+                  }
+                }
+              }
+            }
+          }
+          setHoveredHorizontalLevelEdge(bestEdge)
+        } else {
+          setHoveredHorizontalLevelEdge(null)
+        }
+        if (
+          contourEditEnabled &&
+          showPoints &&
+          (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+          selectedPieceIds.length > 0
+        ) {
           const world = toWorld(e.clientX, e.clientY)
           const piecesForHover = pieces.filter((p) => selectedPieceIds.includes(p.id))
           const piecesForNotchHover =
@@ -3271,6 +3355,7 @@ export function WorkspaceCanvas() {
       movePointOnCurve,
       updateNotch,
       toggleNotchAnchor,
+      contourEditEnabled,
       showPoints,
       selectedPieceIds,
       setNotchPreview,
@@ -3288,6 +3373,8 @@ export function WorkspaceCanvas() {
       imageDigitizeSession,
       setHoveredWorkspaceImage,
       updateWorkspaceNote,
+      horizontalLevelPickingActive,
+      selectedPieceIds,
     ]
   )
 
@@ -3369,6 +3456,7 @@ export function WorkspaceCanvas() {
     setHoveredInternalLine(null)
     setHoveredSeamAssignmentId(null)
     setHoveredCurvepointSegment(null)
+    setHoveredHorizontalLevelEdge(null)
     closeSegmentMenu()
     setWorkspaceNoteEditor(null)
     setNotchEditTarget(null)
@@ -3492,11 +3580,13 @@ export function WorkspaceCanvas() {
         setWorkspaceImageQuickMenu(null)
         return
       }
-      if (!inInput && e.key === 'Escape' && (edgeSeamPickingActive || edgeAllowancePopover)) {
+      if (!inInput && e.key === 'Escape' && (edgeSeamPickingActive || edgeAllowancePopover || horizontalLevelPickingActive)) {
         e.preventDefault()
         setEdgeAllowancePopover(null)
         setHoveredEdgePicking(null)
         setEdgeSeamPickingActive(false)
+        setHoveredHorizontalLevelEdge(null)
+        setHorizontalLevelPickingActive(false)
         return
       }
       if (!inInput && e.key === 'Escape' && tool === 'profil') {
@@ -3558,6 +3648,8 @@ export function WorkspaceCanvas() {
       }
       if (contourEditEnabled && grainFlipHover && !grainContextMenu && !inInput && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
+        setHorizontalLevelPickingActive(false)
+        setHoveredHorizontalLevelEdge(null)
         setEdgeSeamPickingActive(true)
         return
       }
@@ -3747,6 +3839,8 @@ export function WorkspaceCanvas() {
       }
       if (!layoutOnly && (e.key === 'l' || e.key === 'L') && !inInput && !grainFlipHover) {
         e.preventDefault()
+        setHorizontalLevelPickingActive(false)
+        setHoveredHorizontalLevelEdge(null)
         setEdgeSeamPickingActive(true)
         return
       }
@@ -4956,7 +5050,7 @@ export function WorkspaceCanvas() {
               onPointerDown={handlePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
               showGrain={showGrain}
-              showGrainDragHandles={!contourEditEnabled && selectedPieceIds.includes(piece.id) && showGrain}
+              showGrainDragHandles={contourEditEnabled && selectedPieceIds.includes(piece.id) && showGrain}
               showNotches={showNotches}
               showDrills={showDrills}
               showInternalLines={showInternalLines}
@@ -5150,7 +5244,7 @@ export function WorkspaceCanvas() {
             )
           })()}
           {/* Punkt-Vorschau: wo der neue Punkt (P) gesetzt wird, wenn Maus auf der Linie ist */}
-          {pointPreview && (() => {
+          {contourEditEnabled && pointPreview && (() => {
             const piece = pieces.find((p) => p.id === pointPreview.pieceId)
             if (!piece) return null
             const w = pieceLocalToWorld(pointPreview.point, piece)
@@ -5169,7 +5263,9 @@ export function WorkspaceCanvas() {
             )
           })()}
           {/* Eckpunkte: Seam-as-Master = auf seamLine; sonst cut/seam je nach Ansicht */}
-          {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+          {contourEditEnabled &&
+            showPoints &&
+            (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / Math.max(view.zoom, 1e-6)
               const HOVER_SCALE = 1.3
@@ -5219,7 +5315,9 @@ export function WorkspaceCanvas() {
             })()
           }
           {/* Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur */}
-          {showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+          {contourEditEnabled &&
+            showPoints &&
+            (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
               const ps = 1 / Math.max(view.zoom, 1e-6)
               const HOVER_SCALE = 1.3
@@ -5369,7 +5467,8 @@ export function WorkspaceCanvas() {
               pointerEvents="none"
             />
           )}
-          {filteredBatchTargets.length > 0 &&
+          {contourEditEnabled &&
+            filteredBatchTargets.length > 0 &&
             filteredBatchTargets.map((t) => {
               const piece = pieces.find((p) => p.id === t.pieceId)
               if (!piece) return null
@@ -5766,6 +5865,46 @@ export function WorkspaceCanvas() {
                 strokeOpacity={0.9}
                 pointerEvents="none"
               />
+            )
+          })()}
+          {horizontalLevelPickingActive && hoveredHorizontalLevelEdge && (() => {
+            const piece = pieces.find((p) => p.id === hoveredHorizontalLevelEdge.pieceId)
+            if (!piece) return null
+            const masterK = getCurvesForSeamEdge(piece)
+            const curves = hoveredHorizontalLevelEdge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+            let d = ''
+            for (const seg of curves) {
+              if (!seg) continue
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              if (seg.type === 'line') {
+                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+              } else {
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+              }
+            }
+            if (!d) return null
+            return (
+              <g key="horizontal-level-hover">
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={T.seamAssignment.edgePickHalo}
+                  strokeWidth={T.seamAssignment.edgePickHaloWidth}
+                  strokeOpacity={T.seamAssignment.edgePickHaloOpacity}
+                  pointerEvents="none"
+                />
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#0d9488"
+                  strokeWidth={3.5}
+                  strokeOpacity={0.95}
+                  pointerEvents="none"
+                />
+              </g>
             )
           })()}
           {showProfiles && profileAssignments.length > 0 && profileAssignments.map((pa) => {
@@ -6356,6 +6495,45 @@ export function WorkspaceCanvas() {
             onClick={() => {
               setEdgeSeamPickingActive(false)
               setHoveredEdgePicking(null)
+            }}
+            style={{
+              background: 'rgba(255,255,255,0.25)',
+              border: 'none',
+              color: '#fff',
+              padding: '2px 10px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >
+            Abbrechen
+          </button>
+        </div>
+      )}
+      {horizontalLevelPickingActive && (
+        <div style={{
+          position: 'fixed',
+          top: 48,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#0f766e',
+          color: '#fff',
+          padding: '6px 18px',
+          borderRadius: 6,
+          fontSize: 13,
+          fontFamily: 'sans-serif',
+          zIndex: 3000,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+        }}>
+          <span>Gerade Kante anklicken — Teil wird waagerecht ausgerichtet</span>
+          <button
+            type="button"
+            onClick={() => {
+              setHorizontalLevelPickingActive(false)
+              setHoveredHorizontalLevelEdge(null)
             }}
             style={{
               background: 'rgba(255,255,255,0.25)',
