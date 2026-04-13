@@ -83,11 +83,12 @@ export const canvasTheme = {
   // ── Interne Linien ───────────────────────────────────────────────
   internalLine: {
     stroke: '#1565c0',
-    strokeWidth: 0.6,
+    /** Soll mit `* (1/view.zoom)` multipliziert werden → dünne, zoom-unabhängige Strichstärke auf dem Bildschirm. */
+    strokeWidth: 0.4,
     dash: '4 3',
     opacity: 0.55,
     strokeHover: '#e53935',
-    strokeWidthHover: 1.2,
+    strokeWidthHover: 0.9,
   },
 
   // ── Text-Beschriftungen ──────────────────────────────────────────
@@ -268,11 +269,11 @@ export const canvasThemeDark: CanvasTheme = {
 
   internalLine: {
     stroke: '#4AA5FF',
-    strokeWidth: 0.6,
+    strokeWidth: 0.4,
     dash: '4 3',
     opacity: 0.55,
     strokeHover: '#FF5050',
-    strokeWidthHover: 1.2,
+    strokeWidthHover: 0.9,
   },
 
   text: {

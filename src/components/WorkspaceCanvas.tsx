@@ -76,6 +76,19 @@ const DIGITIZE_HANDLE_REFLECT_R = 1.9
 const WORKSPACE_IMAGE_OPACITY = 0.42
 const IMAGE_CORNER_HIT_MM = 12
 
+/** strokeDasharray in Nutzerkoordinaten skalieren (Faktor typisch 1/zoom), damit Striche unter `scale(zoom)` optisch gleich bleiben. */
+function scaleSvgDashArray(dash: string, factor: number): string {
+  return dash
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((p) => {
+      const n = Number(p)
+      return Number.isFinite(n) ? String(n * factor) : p
+    })
+    .join(' ')
+}
+
 /** Snapshot für Kerben-Resync erst beim Loslassen (Seam-Master + Nahtzugabe). */
 function cloneVertexDragCutLine(curves: Curve[]): Curve[] {
   return curves.map((c) =>
@@ -856,7 +869,7 @@ const PieceGroup = memo(function PieceGroup({
           fill={interiorFill}
           fillOpacity={interiorFillOpacity}
           stroke={T.piece.strokeDashed}
-          strokeWidth={T.piece.strokeWidthDashed}
+          strokeWidth={T.piece.strokeWidthDashed * ptPs}
           opacity={T.piece.dashOpacity}
           pointerEvents="none"
         />
@@ -867,7 +880,7 @@ const PieceGroup = memo(function PieceGroup({
           fill={interiorFill}
           fillOpacity={interiorFillOpacity}
           stroke={solidStroke}
-          strokeWidth={solidStrokeWidth}
+          strokeWidth={solidStrokeWidth * ptPs}
           pointerEvents="none"
         />
       )}
@@ -879,7 +892,7 @@ const PieceGroup = memo(function PieceGroup({
           ])}
           fill="none"
           stroke={T.piece.strokeSegmentHover}
-          strokeWidth={T.piece.strokeWidthSegmentHover}
+          strokeWidth={T.piece.strokeWidthSegmentHover * ptPs}
           strokeLinecap="round"
           opacity={0.95}
           pointerEvents="none"
@@ -898,14 +911,15 @@ const PieceGroup = memo(function PieceGroup({
       )}
       {showInternalLines !== false && internalLines.map((curve, i) => {
         const isHovered = hoveredInternalLineCurveIndex === i
+        const w = (isHovered ? T.internalLine.strokeWidthHover : T.internalLine.strokeWidth) * ptPs
         return (
           <path
             key={`internal-${i}`}
             d={curveToPathD([curve])}
             fill="none"
             stroke={isHovered ? T.internalLine.strokeHover : T.internalLine.stroke}
-            strokeWidth={isHovered ? T.internalLine.strokeWidthHover : T.internalLine.strokeWidth}
-            strokeDasharray={T.internalLine.dash}
+            strokeWidth={w}
+            strokeDasharray={scaleSvgDashArray(T.internalLine.dash, ptPs)}
             opacity={isHovered ? 1 : T.internalLine.opacity}
             pointerEvents="none"
           />
@@ -5350,8 +5364,8 @@ export function WorkspaceCanvas() {
                       d={curveToPathD([curve])}
                       fill="none"
                       stroke={ringStroke}
-                      strokeWidth={2.2}
-                      strokeDasharray="4 2"
+                      strokeWidth={T.internalLine.strokeWidthHover * ps}
+                      strokeDasharray={scaleSvgDashArray(T.internalLine.dash, ps)}
                       opacity={0.95}
                     />
                   </g>
@@ -5383,6 +5397,7 @@ export function WorkspaceCanvas() {
             if (!piece) return null
             const w1 = pieceLocalToWorld(dragging.start, piece)
             const w2 = pieceLocalToWorld(dragging.current, piece)
+            const lps = 1 / Math.max(view.zoom, 1e-6)
             return (
               <line
                 x1={w1.x}
@@ -5390,8 +5405,8 @@ export function WorkspaceCanvas() {
                 x2={w2.x}
                 y2={w2.y}
                 stroke={T.dragPreview.stroke}
-                strokeWidth={T.dragPreview.strokeWidth}
-                strokeDasharray={T.dragPreview.dash}
+                strokeWidth={T.dragPreview.strokeWidth * lps}
+                strokeDasharray={scaleSvgDashArray(T.dragPreview.dash, lps)}
                 pointerEvents="none"
               />
             )
@@ -5518,6 +5533,7 @@ export function WorkspaceCanvas() {
               pieceLocalToWorld({ x: center.x + r, y: center.y }, piece).x - wc.x,
               pieceLocalToWorld({ x: center.x + r, y: center.y }, piece).y - wc.y
             )
+            const cps = 1 / Math.max(view.zoom, 1e-6)
             return (
               <circle
                 cx={wc.x}
@@ -5525,8 +5541,8 @@ export function WorkspaceCanvas() {
                 r={wr}
                 fill="none"
                 stroke={T.internalLine.stroke}
-                strokeWidth={T.internalLine.strokeWidth}
-                strokeDasharray={T.internalLine.dash}
+                strokeWidth={T.internalLine.strokeWidth * cps}
+                strokeDasharray={scaleSvgDashArray(T.internalLine.dash, cps)}
                 pointerEvents="none"
               />
             )
