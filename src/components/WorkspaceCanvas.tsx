@@ -230,7 +230,8 @@ function isWorldInsideWorkspaceImage(
 /** t vom Vertex weghalten, damit ein verschobener Notch nicht exakt auf einen Eckpunkt fällt. */
 const NOTCH_MOVE_T_MIN = 0.05
 const NOTCH_MOVE_T_MAX = 0.95
-const POINT_INSERT_HIT_MM = 15
+/** Fallback, wenn Container fehlt (sollte selten sein). */
+const POINT_INSERT_HIT_FALLBACK_MM = 15
 
 function pointOnCurveAt(c: Curve, t: number): Point {
   if (c.type === 'line') {
@@ -252,11 +253,11 @@ function nearestPointForMasterPointEditing(piece: PatternPiece, local: Point, hi
   const seamPc = useSeamLineForPointCurveEditing(piece)
   const master = seamPc ? piece.seamLine : piece.cutLine
   if (master.length === 0) return null
-  // Nahtzugabe: Maus oft auf der äußeren cutLine; Abstand zur seamLine ≈ Nahtzugabe → Trefferradius anpassen.
+  // Nahtzugabe: Maus oft auf der äußeren cutLine; minimaler Zusatz in mm (Screen-Basis liefert `hitMm` beim Zoom).
   const hitMaster =
-    seamPc && piece.seamAllowanceMm != null ? Math.max(hitMm, piece.seamAllowanceMm + 6) : hitMm
+    seamPc && piece.seamAllowanceMm != null ? Math.max(hitMm, piece.seamAllowanceMm + 2) : hitMm
   const hitCut =
-    seamPc && piece.seamAllowanceMm != null ? Math.max(hitMm, piece.seamAllowanceMm + 6) : hitMm
+    seamPc && piece.seamAllowanceMm != null ? Math.max(hitMm, piece.seamAllowanceMm + 2) : hitMm
   const nearestMaster = nearestCurveIndexAndPoint(local, master)
   if (nearestMaster && nearestMaster.distance <= hitMaster) return nearestMaster
   const seamMasterActive = master === piece.seamLine && piece.cutLine.length > 0
@@ -533,14 +534,11 @@ function snapRulerToNearestPoint(world: Point, pieces: PatternPiece[]): Point {
 /** Treffer-/Hover-Distanz (mm) für Nahtzuordnung: Klick oder Zeiger auf Konturlinie (Kante von Punkt zu Punkt) */
 const SEAM_HIT_MM = 28
 
-/** Eckpunkt ziehen/löschen: max. Abstand Maus→Ecke (mm). Klein = Klick muss näher am Eckpunkt sitzen. */
-const VERTEX_DRAG_HIT_MM = 5
-/** Gleiches bei Naht als Master-Kontur (Nahtpolylinie ggf. dichter). */
-const VERTEX_DRAG_HIT_SEAM_MM = 8
-/** Bézier-Mitte („Kurvenpunkt“) greifen: etwas großzügiger als Ecke, damit beides unterscheidbar bleibt. */
-const POINT_ON_CURVE_DRAG_HIT_MM = 10
-/** Hover für Entf-Löschen / Hervorhebung Ecke – an Klick-Toleranz angeglichen. */
-const VERTEX_HOVER_DELETE_MM = 5
+/** Trefferradius in Bildschirm-px (Radius); wird über `worldHitRadiusFromScreenPx` in Welt-mm umgerechnet. */
+const VERTEX_HIT_RADIUS_PX = 8
+const VERTEX_HIT_SEAM_RADIUS_PX = 10
+const POINT_ON_CURVE_HIT_RADIUS_PX = 10
+const POINT_INSERT_HIT_RADIUS_PX = 14
 /** Kerbe: gleiche Toleranz wie Hover zum Verschieben/Löschen. */
 const PIVOT_SNAP_NOTCH_MM = 6
 
@@ -558,7 +556,7 @@ function mergeDeletableHoverVertexVsCurve(
   bestCurve: { dist: number; value: DeletableHoverTarget | null }
 ): { dist: number; value: DeletableHoverTarget | null } {
   if (bestCurve.value == null && bestVertex.value == null) {
-    return { dist: VERTEX_HOVER_DELETE_MM + 1, value: null }
+    return { dist: 1e15, value: null }
   }
   if (bestCurve.value == null) return bestVertex
   if (bestVertex.value == null) return bestCurve
@@ -570,16 +568,30 @@ function mergeDeletableHoverVertexVsCurve(
  * Nächstgelegene Kerbe, Ecke oder Bézier-Mitte unter dem Mauszeiger (Drehpunkt für Alt+D).
  * Entspricht der Hover-Logik für „Punkte anzeigen“, ohne dass diese Option aktiv sein muss.
  */
-function findPivotSnapTargetAtWorld(world: Point, pieces: PatternPiece[]): { pieceId: string; pivotLocal: Point } | null {
-  const HOVER_DELETE_HIT = VERTEX_HOVER_DELETE_MM
+function findPivotSnapTargetAtWorld(
+  world: Point,
+  pieces: PatternPiece[],
+  view: { zoom: number; panX: number; panY: number },
+  svgEl: SVGElement | null,
+  container: HTMLElement | null
+): { pieceId: string; pivotLocal: Point } | null {
   const NOTCH_HOVER_HIT = PIVOT_SNAP_NOTCH_MM
+  const hoverVertexHitMm = container
+    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgEl, container))
+    : 5
+  const hoverVertexSeamHitMm = container
+    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgEl, container))
+    : 8
+  const hoverCurveMidHitMm = container
+    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX, view, svgEl, container))
+    : 10
 
   let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
-    dist: VERTEX_HOVER_DELETE_MM + 1,
+    dist: 1e15,
     value: null,
   }
   let bestCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
-    dist: VERTEX_HOVER_DELETE_MM + 1,
+    dist: 1e15,
     value: null,
   }
 
@@ -645,7 +657,15 @@ function findPivotSnapTargetAtWorld(world: Point, pieces: PatternPiece[]): { pie
     }
   }
 
-  const vertexInRange = bestVertex.value != null && bestVertex.dist <= HOVER_DELETE_HIT
+  const pieceForPivot = bestVertex.value ? pieces.find((p) => p.id === bestVertex.value!.pieceId) : null
+  const useSeamPivot = pieceForPivot != null && useSeamLineForVertexEditing(pieceForPivot)
+  const pivotHoverMaxDist =
+    bestVertex.value == null
+      ? 0
+      : bestVertex.value.kind === 'vertex'
+        ? (useSeamPivot ? hoverVertexSeamHitMm : hoverVertexHitMm)
+        : hoverCurveMidHitMm
+  const vertexInRange = bestVertex.value != null && bestVertex.dist <= pivotHoverMaxDist
   const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
 
   let pickNotch: boolean
@@ -776,6 +796,30 @@ function worldToClientPoint(
   }
   const rect = container.getBoundingClientRect()
   return { x: rect.left + svgUserX, y: rect.top + svgUserY }
+}
+
+/**
+ * Radius in Browser-Pixeln → zulässiger Abstand in Welt-mm (wie `getScreenPoint`).
+ * So bleibt die sichtbare Klick-/Hover-Fläche beim Zoomen etwa konstant statt mit fester mm-Toleranz riesig zu werden.
+ */
+function worldHitRadiusFromScreenPx(
+  radiusPx: number,
+  view: { zoom: number; panX: number; panY: number },
+  svgEl: SVGElement | null,
+  container: HTMLElement
+): number {
+  if (radiusPx <= 0) return 0
+  let scale = Math.min(container.getBoundingClientRect().width / VIEWBOX_WIDTH, container.getBoundingClientRect().height / VIEWBOX_HEIGHT)
+  if (svgEl) {
+    const svgRect = svgEl.getBoundingClientRect()
+    scale = Math.min(svgRect.width / VIEWBOX_WIDTH, svgRect.height / VIEWBOX_HEIGHT)
+  }
+  return radiusPx / (Math.max(scale, 1e-9) * Math.max(view.zoom, 1e-6))
+}
+
+/** Extremzoom / Mini-Zoom begrenzen, damit Punkte greifbar bleiben ohne riesige Toleranz. */
+function clampPointHitWorldMm(r: number): number {
+  return Math.min(Math.max(r, 0.2), 12)
 }
 
 const PieceGroup = memo(function PieceGroup({
@@ -1905,9 +1949,20 @@ export function WorkspaceCanvas() {
         }
       }
 
-      const VERTEX_HIT = VERTEX_DRAG_HIT_MM
-      const VERTEX_HIT_SEAM = VERTEX_DRAG_HIT_SEAM_MM
-      const POINT_ON_CURVE_HIT = POINT_ON_CURVE_DRAG_HIT_MM
+      const ctnHit = containerRef.current
+      const svgHit = svgRef.current
+      const vHitWorld = ctnHit
+        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgHit, ctnHit))
+        : 5
+      const vHitSeamWorld = ctnHit
+        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgHit, ctnHit))
+        : 8
+      const pocHitWorld = ctnHit
+        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX, view, svgHit, ctnHit))
+        : 10
+      const pointInsertHitMmDown = ctnHit
+        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX, view, svgHit, ctnHit))
+        : POINT_INSERT_HIT_FALLBACK_MM
       // Treffer: Seam-as-Master = Eckpunkte auf Innenkontur (seamLine); sonst cut/seam je nach Ansicht.
       if (!layoutOnly && showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
         let bestPointOnCurve: { dist: number; pieceId: string; curveIndex: number; t: number } | null = null
@@ -1920,7 +1975,7 @@ export function WorkspaceCanvas() {
           const curvesForVertices = useSeamMaster ? p!.seamLine : p?.cutLine ?? []
           if (!p || curvesForVertices.length === 0) continue
           const local = worldToPieceLocal(world, p)
-          const vertexHitR = useSeamMaster ? VERTEX_HIT_SEAM : VERTEX_HIT
+          const vertexHitR = useSeamMaster ? vHitSeamWorld : vHitWorld
           const curvesForPointCurve = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           // Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur
           for (let ci = 0; ci < curvesForPointCurve.length; ci++) {
@@ -1928,7 +1983,7 @@ export function WorkspaceCanvas() {
             if (c.type !== 'bezier') continue
             const ptOnCurve = bezierAt(c, 0.5)
             const d = Math.hypot(local.x - ptOnCurve.x, local.y - ptOnCurve.y)
-            if (d < POINT_ON_CURVE_HIT && (!bestPointOnCurve || d < bestPointOnCurve.dist)) {
+            if (d < pocHitWorld && (!bestPointOnCurve || d < bestPointOnCurve.dist)) {
               bestPointOnCurve = { dist: d, pieceId: p.id, curveIndex: ci, t: 0.5 }
             }
           }
@@ -2061,7 +2116,7 @@ export function WorkspaceCanvas() {
         const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
         if (masterPc.length > 0) {
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestPointForMasterPointEditing(piece, local, POINT_INSERT_HIT_MM)
+          const nearest = nearestPointForMasterPointEditing(piece, local, pointInsertHitMmDown)
           if (nearest) {
             const curve = masterPc[nearest.curveIndex]
             if (curve.type === 'line') {
@@ -2095,7 +2150,7 @@ export function WorkspaceCanvas() {
         const masterPt = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
         if (masterPt.length > 0) {
           const local = worldToPieceLocal(world, piece)
-          const nearest = nearestPointForMasterPointEditing(piece, local, POINT_INSERT_HIT_MM)
+          const nearest = nearestPointForMasterPointEditing(piece, local, pointInsertHitMmDown)
           if (nearest) {
             const curve = masterPt[nearest.curveIndex]
             let inserted = false
@@ -2480,7 +2535,6 @@ export function WorkspaceCanvas() {
     ]
   )
 
-  const HOVER_DELETE_HIT = VERTEX_HOVER_DELETE_MM
   /** Hover/Klick auf Notch – bei Überlappung mit Eckpunkt gewinnt der nähere. */
   const NOTCH_HOVER_HIT = 6
   const NOTCH_CLICK_HIT = 6
@@ -2538,6 +2592,20 @@ export function WorkspaceCanvas() {
         return
       }
       if (!dragging) {
+        const ctnM = containerRef.current
+        const svgM = svgRef.current
+        const hoverVertexHitMm = ctnM
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgM, ctnM))
+          : 5
+        const hoverVertexSeamHitMm = ctnM
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgM, ctnM))
+          : 8
+        const hoverCurveMidHitMm = ctnM
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX, view, svgM, ctnM))
+          : 10
+        const pointInsertHitMmMove = ctnM
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX, view, svgM, ctnM))
+          : POINT_INSERT_HIT_FALLBACK_MM
         const worldImg = toWorld(e.clientX, e.clientY)
         lastPointerClientRef.current = { x: e.clientX, y: e.clientY }
         let imgHover = false
@@ -2640,11 +2708,11 @@ export function WorkspaceCanvas() {
           const piecesForNotchHover =
             piecesForHover.some((p) => p.notches.length > 0) ? piecesForHover : pieces
           let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
-            dist: VERTEX_HOVER_DELETE_MM + 1,
+            dist: 1e15,
             value: null,
           }
           let bestCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
-            dist: VERTEX_HOVER_DELETE_MM + 1,
+            dist: 1e15,
             value: null,
           }
           for (const p of piecesForHover) {
@@ -2706,7 +2774,15 @@ export function WorkspaceCanvas() {
               }
             }
           }
-          const vertexInRange = bestVertex.value != null && bestVertex.dist <= HOVER_DELETE_HIT
+          const pieceForHoverDel = bestVertex.value ? pieces.find((p) => p.id === bestVertex.value!.pieceId) : null
+          const useSeamHoverDel = pieceForHoverDel != null && useSeamLineForVertexEditing(pieceForHoverDel)
+          const hoverDelMaxDist =
+            bestVertex.value == null
+              ? 0
+              : bestVertex.value.kind === 'vertex'
+                ? (useSeamHoverDel ? hoverVertexSeamHitMm : hoverVertexHitMm)
+                : hoverCurveMidHitMm
+          const vertexInRange = bestVertex.value != null && bestVertex.dist <= hoverDelMaxDist
           const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
           if (vertexInRange && notchInRange) {
             setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
@@ -2927,7 +3003,7 @@ export function WorkspaceCanvas() {
           const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           if (masterPv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const nearest = nearestPointForMasterPointEditing(p, local, POINT_INSERT_HIT_MM)
+            const nearest = nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove)
             if (nearest) {
               setPointPreview({ pieceId: p.id, point: nearest.point })
             } else {
@@ -2950,7 +3026,7 @@ export function WorkspaceCanvas() {
           const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
           if (masterCv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const r = nearestPointForMasterPointEditing(p, local, POINT_INSERT_HIT_MM)
+            const r = nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove)
             if (r && masterCv[r.curveIndex]?.type === 'line') {
               setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: r.curveIndex })
             } else {
@@ -3186,6 +3262,7 @@ export function WorkspaceCanvas() {
     [
       dragging,
       tool,
+      view,
       toWorld,
       setView,
       movePiece,
@@ -3617,7 +3694,7 @@ export function WorkspaceCanvas() {
         const world = toWorld(lastPointerClientRef.current.x, lastPointerClientRef.current.y)
         const snapped =
           piecesForPivot.length > 0
-            ? findPivotSnapTargetAtWorld(world, piecesForPivot)
+            ? findPivotSnapTargetAtWorld(world, piecesForPivot, view, svgRef.current, containerRef.current)
             : null
         if (snapped && selectedPieceIds.includes(snapped.pieceId)) {
           setPiecePivot(snapped.pieceId, snapped.pivotLocal)

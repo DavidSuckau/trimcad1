@@ -54,6 +54,49 @@ describe('removeVertex', () => {
     expect(piece.cutLine.some((c) => c.type === 'bezier')).toBe(true)
   })
 
+  it('behält Bezier beim Löschen auch wenn KP2/KP1 am gemeinsamen Eck liegen (grüne Kurvenpunkte)', () => {
+    const degenerateAtCorner: Curve[] = [
+      { type: 'bezier', start: { x: 0, y: 0 }, cp1: { x: 10, y: 0 }, cp2: { x: 50, y: 0 }, end: { x: 50, y: 0 } },
+      { type: 'bezier', start: { x: 50, y: 0 }, cp1: { x: 50, y: 0 }, cp2: { x: 50, y: 30 }, end: { x: 50, y: 50 } },
+      { type: 'line', start: { x: 50, y: 50 }, end: { x: 0, y: 50 } },
+      { type: 'line', start: { x: 0, y: 50 }, end: { x: 0, y: 0 } },
+    ]
+    useStore.setState({
+      workspace: {
+        id: 'ws-remove-vertex',
+        name: 'Test',
+        pieces: [
+          {
+            id: 'p1',
+            number: '001',
+            name: 'Teil',
+            cutLine: degenerateAtCorner,
+            seamLine: [],
+            seamAllowanceMm: null,
+            notches: [],
+            drills: [],
+            grainLine: null,
+            internalLines: [],
+            layer: 'CUT',
+            transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+            softVertices: [],
+            fillInterior: true,
+            material: '',
+            bomQuantity: 1,
+          },
+        ],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+      },
+      selectedPieceIds: ['p1'],
+    })
+    const { removeVertex } = useStore.getState()
+    removeVertex('p1', 1)
+    const piece = pieceById('p1')
+    expect(piece.cutLine.length).toBe(3)
+    expect(piece.cutLine.some((c) => c.type === 'bezier')).toBe(true)
+  })
+
   it('ignoriert ungültige Vertex-Indizes (kein unbeabsichtigtes Springen/Löschen)', () => {
     const before = pieceById('p1')
     const beforeJson = JSON.stringify(before.cutLine)

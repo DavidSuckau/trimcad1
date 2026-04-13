@@ -173,17 +173,53 @@ export function splitBezierAt(b: BezierCurve, t: number): [BezierCurve, BezierCu
 }
 
 /**
+ * Liegt `cp2` praktisch auf dem End-Eck, liefert Join oft null → Kontur wird beim Vertex-Löschen begradigt.
+ * Minimaler Schub entlang der erwarteten Tangente (Richtung cp1→Ecke bzw. Ecke→cp2).
+ */
+function nudgeBezierJoinCp2TowardInterior(seg1: BezierCurve, minDist: number): Point {
+  const B = seg1.cp1
+  const C = seg1.cp2
+  const D = seg1.end
+  const dx = D.x - C.x
+  const dy = D.y - C.y
+  if (Math.hypot(dx, dy) >= minDist) return C
+  const bx = D.x - B.x
+  const by = D.y - B.y
+  const bl = Math.hypot(bx, by)
+  if (bl < 1e-12) return { x: D.x - minDist, y: D.y }
+  const s = minDist / bl
+  return { x: D.x - bx * s, y: D.y - by * s }
+}
+
+function nudgeBezierJoinCp1TowardInterior(seg2: BezierCurve, minDist: number): Point {
+  const D = seg2.start
+  const E = seg2.cp1
+  const F = seg2.cp2
+  const dx = E.x - D.x
+  const dy = E.y - D.y
+  if (Math.hypot(dx, dy) >= minDist) return E
+  const fx = F.x - D.x
+  const fy = F.y - D.y
+  const fl = Math.hypot(fx, fy)
+  if (fl < 1e-12) return { x: D.x + minDist, y: D.y }
+  const s = minDist / fl
+  return { x: D.x + fx * s, y: D.y + fy * s }
+}
+
+/**
  * Vereinigt zwei benachbarte kubische Bézier-Segmente (De-Casteljau-Rückführung).
  * Voraussetzung: seg1.end === seg2.start. Gibt null zurück bei numerischer Instabilität.
  */
 export function joinBezierSegments(seg1: BezierCurve, seg2: BezierCurve): BezierCurve | null {
   const A = seg1.start
   const B = seg1.cp1
-  const C = seg1.cp2
   const D = seg1.end
-  const E = seg2.cp1
   const F = seg2.cp2
   const G = seg2.end
+  const chord = Math.hypot(G.x - A.x, G.y - A.y)
+  const minDist = Math.max(1e-5, chord * 1e-7)
+  const C = nudgeBezierJoinCp2TowardInterior(seg1, minDist)
+  const E = nudgeBezierJoinCp1TowardInterior(seg2, minDist)
   const dxDC = D.x - C.x
   const dyDC = D.y - C.y
   const dxED = E.x - D.x
