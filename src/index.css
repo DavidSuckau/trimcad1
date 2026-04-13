@@ -45,6 +45,9 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* Eigenes Stacking: Canvas-Overlays (hohe z-index) liegen nicht über dem Hauptmenü */
+  position: relative;
+  z-index: 0;
 }
 
 /* Menüleiste: fix oben, wird nie gezoomt oder verkleinert */
@@ -56,6 +59,8 @@ body {
   padding: 0 0.25rem;
   border-bottom: 1px solid #e0e0e0;
   background: #fafafa;
+  position: relative;
+  z-index: 100;
 }
 
 .menubar-logo {

@@ -21,6 +21,7 @@ import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { StuecklisteModal } from './StuecklisteModal'
 import { ProfileAssignmentDialog } from './ProfileAssignmentDialog'
+import logoTrimtexUrl from '../assets/logo-trimtex.png'
 
 type ToolId =
   | 'select'
@@ -316,7 +317,7 @@ export function Toolbar() {
 
   return (
     <header className="menubar" ref={menuRef}>
-      <img src="/logo-trimcad.png" alt="TrimCAD" className="menubar-logo" />
+      <img src={logoTrimtexUrl} alt="TrimTex" className="menubar-logo" />
       <input
         ref={jsonImportInputRef}
         type="file"

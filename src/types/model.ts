@@ -129,7 +129,7 @@ export const SEAM_ASSIGNMENT_KIND_IDS = [
 export type SeamAssignmentKindId = (typeof SEAM_ASSIGNMENT_KIND_IDS)[number]
 
 export const SEAM_ASSIGNMENT_KIND_LABELS: Record<SeamAssignmentKindId, string> = {
-  schluessel: 'Schlisnaht',
+  schluessel: 'Schliessnaht / Standardnaht',
   saum: 'Saumnaht',
   kapp: 'Kappnaht',
   doppelkapp: 'Doppelkappnaht',

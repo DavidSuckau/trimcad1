@@ -54,7 +54,7 @@ describe('buildNaehplanRows', () => {
     }
     const rows = buildNaehplanRows(ws)
     expect(rows).toHaveLength(2)
-    expect(rows[0].line).toMatch(/1\..*Schlisnaht.*Teil 001 an Teil 002/)
+    expect(rows[0].line).toMatch(/1\..*Schliessnaht \/ Standardnaht.*Teil 001 an Teil 002/)
     expect(rows[1].line).toMatch(/2\..*Saumnaht.*Teil 001 an Teil 002/)
   })
 
