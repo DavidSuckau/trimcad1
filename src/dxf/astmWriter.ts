@@ -4,8 +4,9 @@ import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   EOL, fmt,
+  applyTransform,
   curveToPolylinePoints, workspaceExtents,
-  closeContour,
+  closeContour, dist,
   projectPointOntoClosedPolylineWithSegment,
   dxfPolyline, dxfCircle, dxfLine, dxfText,
   sanitizeBlockName, makeExportFilename, downloadBlob,
@@ -18,8 +19,10 @@ import {
  * **Header und Skalierung** sind an `aamaWriter.ts` angeglichen (`$INSUNITS` = 5, `dxfExportScale` × mm),
  * damit AccuMark dieselbe Datei-„Sprache“ wie beim bewährten AAMA-Export sieht und Teile wieder importiert.
  *
- * Abweichungen zu AAMA: numerische ASTM-Layer (1, 14, …), Kerben als LINE auf Layer 5+7 (Gerber),
- * kein Fadenlauf.
+ * Abweichungen zu AAMA: numerische ASTM-Layer (1, 14, …), kein Fadenlauf.
+ *
+ * **Kerben:** LINE auf Layer 5+7 nur in **ENTITIES** (Weltkoordinaten nach INSERT-Logik) —
+ * AccuMark erkennt Kerben in Block-Definitionen häufig nicht; Kontur bleibt im BLOCK wie AAMA.
  */
 
 const ASTM_LAYER = {
@@ -50,6 +53,12 @@ function notchDepthFileMmClamped(depthMm: number, fileScale: number): number {
   return d * fileScale
 }
 
+/** Modell-mm → Datei-Welt (wie workspaceExtents / INSERT zusammengesetzt). */
+function localMmToWorldFile(p: Pt, transform: PatternPiece['transform'], fileScale: number): Pt {
+  const w = applyTransform(p.x, p.y, transform)
+  return { x: w.x * fileScale, y: w.y * fileScale }
+}
+
 function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]): number {
   const dx = b.x - a.x
   const dy = b.y - a.y
@@ -76,25 +85,40 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
   return dot1 >= dot2 ? (Math.atan2(ny1, nx1) * 180) / Math.PI : (Math.atan2(ny2, nx2) * 180) / Math.PI
 }
 
-/** Kerben im Block: lokale Dateikoordinaten (wie Kontur). */
-function emitGerberNotchLinesLocal(
+/**
+ * Kerben nur für ENTITIES: Welt-Dateikoordinaten, damit AccuMark die LINEs als Kerben werten kann.
+ * Liegen nicht im BLOCK (dort werden sie oft ignoriert).
+ */
+function emitGerberNotchLinesWorld(
   notch: Notch,
   piece: PatternPiece,
   fileScale: number,
-  boundaryRingLocal: Pt[],
-  polygonOpenLocal: Pt[],
+  boundaryRingWorld: Pt[],
+  polygonOpenWorld: Pt[],
 ): string {
-  if (boundaryRingLocal.length < 2 || polygonOpenLocal.length < 3) return ''
+  if (boundaryRingWorld.length < 2 || polygonOpenWorld.length < 3) return ''
 
   const { position } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
-  const anchorLocal = { x: position.x * fileScale, y: position.y * fileScale }
-  const { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
-    boundaryRingLocal,
-    anchorLocal,
+  const anchorWorld = localMmToWorldFile(position, piece.transform, fileScale)
+  let { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
+    boundaryRingWorld,
+    anchorWorld,
   )
-  const a = boundaryRingLocal[segIndex]
-  const b = boundaryRingLocal[segIndex + 1]
-  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenLocal)
+  const tol = Math.max(0.002, fileScale * 1e-4)
+  let nearestV = snapped
+  let nearestD = Infinity
+  for (let i = 0; i < boundaryRingWorld.length - 1; i++) {
+    const v = boundaryRingWorld[i]
+    const d = dist(snapped, v)
+    if (d < nearestD) {
+      nearestD = d
+      nearestV = v
+    }
+  }
+  if (nearestD <= tol) snapped = nearestV
+  const a = boundaryRingWorld[segIndex]
+  const b = boundaryRingWorld[segIndex + 1]
+  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenWorld)
   const rad = (angleDeg * Math.PI) / 180
   const depthF = notchDepthFileMmClamped(notch.depth, fileScale)
   const x1 = snapped.x
@@ -106,15 +130,23 @@ function emitGerberNotchLinesLocal(
     + dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
 }
 
+function notchEntitiesWorld(piece: PatternPiece, fileScale: number): string {
+  const cutPts = curveToPolylinePoints(piece.cutLine)
+  const cutWorld = cutPts.map((p) => localMmToWorldFile(p, piece.transform, fileScale))
+  const boundaryRing = cutWorld.length >= 2 ? closeContour([...cutWorld]) : []
+  const polygonOpen = cutWorld.length >= 3 ? cutWorld.map((p) => ({ ...p })) : []
+  let s = ''
+  for (const notch of piece.notches) {
+    s += emitGerberNotchLinesWorld(notch, piece, fileScale, boundaryRing, polygonOpen)
+  }
+  return s
+}
+
 function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const out: string[] = []
 
   const cutPts = curveToPolylinePoints(piece.cutLine)
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
-  const boundaryRing =
-    scaledCutPts.length >= 2 ? closeContour([...scaledCutPts]) : []
-  const polygonOpen =
-    scaledCutPts.length >= 3 ? scaledCutPts.map((p) => ({ ...p })) : []
 
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY, scaledCutPts, true))
 
@@ -128,10 +160,6 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     const seamPts = curveToPolylinePoints(seamCurves)
     const scaledSeamPts = seamPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
     out.push(dxfPolyline(ASTM_LAYER.SEW, scaledSeamPts, true))
-  }
-
-  for (const notch of piece.notches) {
-    out.push(emitGerberNotchLinesLocal(notch, piece, fileScale, boundaryRing, polygonOpen))
   }
 
   for (const drill of piece.drills) {
@@ -203,6 +231,10 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
       + '41' + EOL + (t.mirrored ? '-1' : '1') + EOL
       + '42' + EOL + '1' + EOL
       + '50' + EOL + fmt(t.rotation) + EOL)
+  }
+
+  for (const piece of workspace.pieces) {
+    out.push(notchEntitiesWorld(piece, s))
   }
 
   out.push('0' + EOL + 'ENDSEC' + EOL + '0' + EOL + 'EOF' + EOL)
