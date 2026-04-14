@@ -18,16 +18,17 @@ import {
  * - BLOCK-Flag **70 = 64** (wie Gerber-Referenzdatei).
  * - Schnitt **Layer 1** + identische Kopie **Layer 84**; Naht **14** + Kopie **87**.
  * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
- * - Kerbe: zuerst **LINE Layer 7**, dann **LINE Layer 5** (Duplikat), beides im **Block** in lokalen Koordinaten.
+ * - Kerbe: zuerst **LINE Layer 7**, dann **LINE Layer 5** (Duplikat), im **Block** (lokal).
  *
- * Header/Skalierung wie AAMA (`$INSUNITS` = 5, `dxfExportScale` × mm).
+ * Hinweis: AccuMark-Versionen unterscheiden sich; früher wurden Kerben testweise nur in ENTITIES
+ * ausgegeben — die aktuelle Struktur folgt dem internen Gerber-Beispiel (alles im Block).
+ *
+ * Header/Skalierung wie AAMA (`$INSUNITS` = 5, Koordinaten = Modell-mm × `dxfExportScale`).
  */
 
 const ASTM_LAYER = {
   BOUNDARY: '1',
-  /** AccuMark-Duplikat der Außenkontur (Beispiel-Export). */
   BOUNDARY_DUP: '84',
-  /** Hilfs-/Eckpunkte (Beispiel: Layer 2). */
   POINT_AUX: '2',
   INTERNAL: '8',
   DRILL: '13',
@@ -45,13 +46,48 @@ const NOTCH_DEPTH_MAX_MM = 10.16
 /** BLOCK-Definition: Bit wie in Gerber-Beispieldatei (70 = 64). */
 const BLOCK_DEF_FLAG_GERBER = '64'
 
+/** Vertex-Snap: Mindestabstand in Datei-Einheiten; zusätzlich skaliert mit `fileScale`. */
+const SNAP_TOLERANCE_MIN_FILE = 0.002
+const SNAP_TOLERANCE_FILE_PER_SCALE = 1e-4
+
+/** Abstand für Punkt-in-Polygon-Test zur Kante (Normalenwahl). */
+const NORMAL_TEST_EPS_MIN = 0.05
+const NORMAL_TEST_EPS_EDGE_RATIO = 1e-4
+
+const BLOCK_LABEL_OFFSET_Y = 10
+
+const BLOCK_TEXT_HEIGHT_MM = 5
+
+const BLOCK_MIN_VERTICES = 2
+
+/** Shoelace-Fläche; Vorzeichen = Umlauf (CCW positiv bei mathematischer y-Achse nach oben). */
+function signedPolygonAreaOpen(pts: Pt[]): number {
+  const n = pts.length
+  if (n < 3) return 0
+  let sum = 0
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y
+  }
+  return sum / 2
+}
+
 function pieceBlockName(piece: PatternPiece, index: number): string {
   const raw = piece.name || piece.number || `Piece_${index}`
   return sanitizeBlockName(raw)
 }
 
-function toAscii(s: string): string {
-  return s.replace(/[^\x20-\x7E]/g, '_')
+/** DXF 7-bit + einfache Umlaut-Umschrift (lesbarer als nur `_`). */
+function dxfSafeLabel(s: string): string {
+  return s
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/Ä/g, 'Ae')
+    .replace(/Ö/g, 'Oe')
+    .replace(/Ü/g, 'Ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[^\x20-\x7E]/g, '_')
 }
 
 function notchDepthFileMmClamped(depthMm: number, fileScale: number): number {
@@ -59,6 +95,14 @@ function notchDepthFileMmClamped(depthMm: number, fileScale: number): number {
   return d * fileScale
 }
 
+function isFinitePt(p: Pt): boolean {
+  return Number.isFinite(p.x) && Number.isFinite(p.y)
+}
+
+/**
+ * Innen-Normale zur Kante a→b: zuerst Punkt-in-Polygon auf beide Normalen,
+ * bei Gleichstand Vorzeichen der Polygonfläche (CCW → linke Normale).
+ */
 function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]): number {
   const dx = b.x - a.x
   const dy = b.y - a.y
@@ -69,13 +113,21 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
   const nx2 = dy / len
   const ny2 = -dx / len
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
-  const eps = Math.max(0.05, len * 1e-4)
+  const eps = Math.max(NORMAL_TEST_EPS_MIN, len * NORMAL_TEST_EPS_EDGE_RATIO)
   const test1 = { x: mid.x + nx1 * eps, y: mid.y + ny1 * eps }
   const test2 = { x: mid.x + nx2 * eps, y: mid.y + ny2 * eps }
   const in1 = polygonOpen.length >= 3 && isPointInPolygon(test1, polygonOpen)
   const in2 = polygonOpen.length >= 3 && isPointInPolygon(test2, polygonOpen)
   if (in1 && !in2) return (Math.atan2(ny1, nx1) * 180) / Math.PI
   if (in2 && !in1) return (Math.atan2(ny2, nx2) * 180) / Math.PI
+
+  const area = signedPolygonAreaOpen(polygonOpen)
+  if (Math.abs(area) > 1e-12) {
+    return area > 0
+      ? (Math.atan2(ny1, nx1) * 180) / Math.PI
+      : (Math.atan2(ny2, nx2) * 180) / Math.PI
+  }
+
   const cx = polygonOpen.reduce((s, p) => s + p.x, 0) / Math.max(1, polygonOpen.length)
   const cy = polygonOpen.reduce((s, p) => s + p.y, 0) / Math.max(1, polygonOpen.length)
   const cdx = cx - mid.x
@@ -85,9 +137,6 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
   return dot1 >= dot2 ? (Math.atan2(ny1, nx1) * 180) / Math.PI : (Math.atan2(ny2, nx2) * 180) / Math.PI
 }
 
-/**
- * Kerbe im Block: LINE 7 → LINE 5 (Reihenfolge wie Gerber-Beispiel), POINT 2 an beiden Enden.
- */
 function emitGerberNotchPackLocal(
   notch: Notch,
   piece: PatternPiece,
@@ -98,12 +147,14 @@ function emitGerberNotchPackLocal(
   if (boundaryRingLocal.length < 2 || polygonOpenLocal.length < 3) return ''
 
   const { position } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+  if (!isFinitePt(position)) return ''
+
   const anchorLocal = { x: position.x * fileScale, y: position.y * fileScale }
   let { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
     boundaryRingLocal,
     anchorLocal,
   )
-  const tol = Math.max(0.002, fileScale * 1e-4)
+  const tol = Math.max(SNAP_TOLERANCE_MIN_FILE, fileScale * SNAP_TOLERANCE_FILE_PER_SCALE)
   let nearestV = snapped
   let nearestD = Infinity
   for (let i = 0; i < boundaryRingLocal.length - 1; i++) {
@@ -126,25 +177,34 @@ function emitGerberNotchPackLocal(
   const x2 = x1 + depthF * Math.cos(rad)
   const y2 = y1 + depthF * Math.sin(rad)
 
-  return dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
-    + dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2)
-    + dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1)
-    + dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2)
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return ''
+
+  const parts = [
+    dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2),
+    dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2),
+    dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1),
+    dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2),
+  ]
+  return parts.join('')
 }
 
 function emitPointsAlongPolylineOpen(pts: Pt[], layer: string): string {
   if (pts.length < 1) return ''
-  let s = ''
+  const chunks: string[] = []
   for (const p of pts) {
-    s += dxfPoint(layer, p.x, p.y)
+    chunks.push(dxfPoint(layer, p.x, p.y))
   }
-  return s
+  return chunks.join('')
 }
 
 function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const out: string[] = []
 
   const cutPts = curveToPolylinePoints(piece.cutLine)
+  if (cutPts.length < BLOCK_MIN_VERTICES) {
+    return ''
+  }
+
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
   const boundaryRing =
     scaledCutPts.length >= 2 ? closeContour([...scaledCutPts]) : []
@@ -174,12 +234,11 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   }
 
   for (const drill of piece.drills) {
-    out.push(dxfCircle(
-      ASTM_LAYER.DRILL,
-      drill.center.x * fileScale,
-      drill.center.y * fileScale,
-      drill.radius * fileScale,
-    ))
+    const cx = drill.center.x * fileScale
+    const cy = drill.center.y * fileScale
+    const r = drill.radius * fileScale
+    if (![cx, cy, r].every(Number.isFinite)) continue
+    out.push(dxfCircle(ASTM_LAYER.DRILL, cx, cy, r))
   }
 
   if (piece.internalLines.length > 0) {
@@ -191,7 +250,15 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const label = piece.name || piece.number || ''
   if (label && scaledCutPts[0]) {
     const firstCut = scaledCutPts[0]
-    out.push(dxfText(ASTM_LAYER.TEXT, firstCut.x, firstCut.y + 10, toAscii(label)))
+    out.push(
+      dxfText(
+        ASTM_LAYER.TEXT,
+        firstCut.x,
+        firstCut.y + BLOCK_LABEL_OFFSET_Y,
+        dxfSafeLabel(label),
+        BLOCK_TEXT_HEIGHT_MM,
+      ),
+    )
   }
 
   return out.join('')
@@ -202,6 +269,10 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
  */
 export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 1): string {
   const s = dxfExportScale
+  if (!Number.isFinite(s) || s <= 0) {
+    return ''
+  }
+
   const out: string[] = []
   const ext = workspaceExtents(workspace, s)
 
@@ -237,11 +308,14 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
   for (let i = 0; i < workspace.pieces.length; i++) {
     const piece = workspace.pieces[i]
     const t = piece.transform
+    const ix = Number.isFinite(t.x * s) ? t.x * s : 0
+    const iy = Number.isFinite(t.y * s) ? t.y * s : 0
+    const rot = Number.isFinite(t.rotation) ? t.rotation : 0
     out.push('0' + EOL + 'INSERT' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + blockNames[i] + EOL
-      + '10' + EOL + fmt(t.x * s) + EOL + '20' + EOL + fmt(t.y * s) + EOL
+      + '10' + EOL + fmt(ix) + EOL + '20' + EOL + fmt(iy) + EOL
       + '41' + EOL + (t.mirrored ? '-1' : '1') + EOL
       + '42' + EOL + '1' + EOL
-      + '50' + EOL + fmt(t.rotation) + EOL)
+      + '50' + EOL + fmt(rot) + EOL)
   }
 
   out.push('0' + EOL + 'ENDSEC' + EOL + '0' + EOL + 'EOF' + EOL)
