@@ -241,7 +241,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Datei',
     name: 'ASTM-DXF exportieren',
     description:
-      'ASTM-DXF: wie AAMA im Block; Kerben als LINE Layer 5+7 in ENTITIES (Weltkoordinaten) für AccuMark. Kein Fadenlauf.',
+      'ASTM-DXF: AccuMark-ähnlich (Layer 1/84, 14/87, POINT 2, Kerben LINE 7+5 im Block). Kein Fadenlauf.',
     access: 'Menü Datei → Exportieren → ASTM-DXF (Gerber)',
     shortcut: undefined,
   },

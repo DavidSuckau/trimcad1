@@ -4,32 +4,35 @@ import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   EOL, fmt,
-  applyTransform,
   curveToPolylinePoints, workspaceExtents,
   closeContour, dist,
   projectPointOntoClosedPolylineWithSegment,
-  dxfPolyline, dxfCircle, dxfLine, dxfText,
+  dxfPolyline, dxfCircle, dxfLine, dxfPoint, dxfText,
   sanitizeBlockName, makeExportFilename, downloadBlob,
   type Pt,
 } from './dxfShared'
 
 /**
- * ASTM-DXF für Gerber AccuMark: DXF R12 (AC1009).
+ * ASTM-DXF für Gerber AccuMark – an typischem AccuMark-DXF ausgerichtet (Beispiel-Export):
  *
- * **Header und Skalierung** sind an `aamaWriter.ts` angeglichen (`$INSUNITS` = 5, `dxfExportScale` × mm),
- * damit AccuMark dieselbe Datei-„Sprache“ wie beim bewährten AAMA-Export sieht und Teile wieder importiert.
+ * - BLOCK-Flag **70 = 64** (wie Gerber-Referenzdatei).
+ * - Schnitt **Layer 1** + identische Kopie **Layer 84**; Naht **14** + Kopie **87**.
+ * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
+ * - Kerbe: zuerst **LINE Layer 7**, dann **LINE Layer 5** (Duplikat), beides im **Block** in lokalen Koordinaten.
  *
- * Abweichungen zu AAMA: numerische ASTM-Layer (1, 14, …), kein Fadenlauf.
- *
- * **Kerben:** LINE auf Layer 5+7 nur in **ENTITIES** (Weltkoordinaten nach INSERT-Logik) —
- * AccuMark erkennt Kerben in Block-Definitionen häufig nicht; Kontur bleibt im BLOCK wie AAMA.
+ * Header/Skalierung wie AAMA (`$INSUNITS` = 5, `dxfExportScale` × mm).
  */
 
 const ASTM_LAYER = {
   BOUNDARY: '1',
+  /** AccuMark-Duplikat der Außenkontur (Beispiel-Export). */
+  BOUNDARY_DUP: '84',
+  /** Hilfs-/Eckpunkte (Beispiel: Layer 2). */
+  POINT_AUX: '2',
   INTERNAL: '8',
   DRILL: '13',
   SEW: '14',
+  SEW_DUP: '87',
   TEXT: '15',
 } as const
 
@@ -38,6 +41,9 @@ const GERBER_NOTCH_DUP = '7'
 
 const NOTCH_DEPTH_MIN_MM = 2.54
 const NOTCH_DEPTH_MAX_MM = 10.16
+
+/** BLOCK-Definition: Bit wie in Gerber-Beispieldatei (70 = 64). */
+const BLOCK_DEF_FLAG_GERBER = '64'
 
 function pieceBlockName(piece: PatternPiece, index: number): string {
   const raw = piece.name || piece.number || `Piece_${index}`
@@ -51,12 +57,6 @@ function toAscii(s: string): string {
 function notchDepthFileMmClamped(depthMm: number, fileScale: number): number {
   const d = Math.min(NOTCH_DEPTH_MAX_MM, Math.max(NOTCH_DEPTH_MIN_MM, depthMm))
   return d * fileScale
-}
-
-/** Modell-mm → Datei-Welt (wie workspaceExtents / INSERT zusammengesetzt). */
-function localMmToWorldFile(p: Pt, transform: PatternPiece['transform'], fileScale: number): Pt {
-  const w = applyTransform(p.x, p.y, transform)
-  return { x: w.x * fileScale, y: w.y * fileScale }
 }
 
 function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]): number {
@@ -86,29 +86,28 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
 }
 
 /**
- * Kerben nur für ENTITIES: Welt-Dateikoordinaten, damit AccuMark die LINEs als Kerben werten kann.
- * Liegen nicht im BLOCK (dort werden sie oft ignoriert).
+ * Kerbe im Block: LINE 7 → LINE 5 (Reihenfolge wie Gerber-Beispiel), POINT 2 an beiden Enden.
  */
-function emitGerberNotchLinesWorld(
+function emitGerberNotchPackLocal(
   notch: Notch,
   piece: PatternPiece,
   fileScale: number,
-  boundaryRingWorld: Pt[],
-  polygonOpenWorld: Pt[],
+  boundaryRingLocal: Pt[],
+  polygonOpenLocal: Pt[],
 ): string {
-  if (boundaryRingWorld.length < 2 || polygonOpenWorld.length < 3) return ''
+  if (boundaryRingLocal.length < 2 || polygonOpenLocal.length < 3) return ''
 
   const { position } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
-  const anchorWorld = localMmToWorldFile(position, piece.transform, fileScale)
+  const anchorLocal = { x: position.x * fileScale, y: position.y * fileScale }
   let { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
-    boundaryRingWorld,
-    anchorWorld,
+    boundaryRingLocal,
+    anchorLocal,
   )
   const tol = Math.max(0.002, fileScale * 1e-4)
   let nearestV = snapped
   let nearestD = Infinity
-  for (let i = 0; i < boundaryRingWorld.length - 1; i++) {
-    const v = boundaryRingWorld[i]
+  for (let i = 0; i < boundaryRingLocal.length - 1; i++) {
+    const v = boundaryRingLocal[i]
     const d = dist(snapped, v)
     if (d < nearestD) {
       nearestD = d
@@ -116,9 +115,10 @@ function emitGerberNotchLinesWorld(
     }
   }
   if (nearestD <= tol) snapped = nearestV
-  const a = boundaryRingWorld[segIndex]
-  const b = boundaryRingWorld[segIndex + 1]
-  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenWorld)
+
+  const a = boundaryRingLocal[segIndex]
+  const b = boundaryRingLocal[segIndex + 1]
+  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenLocal)
   const rad = (angleDeg * Math.PI) / 180
   const depthF = notchDepthFileMmClamped(notch.depth, fileScale)
   const x1 = snapped.x
@@ -126,18 +126,17 @@ function emitGerberNotchLinesWorld(
   const x2 = x1 + depthF * Math.cos(rad)
   const y2 = y1 + depthF * Math.sin(rad)
 
-  return dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2)
-    + dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
+  return dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
+    + dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2)
+    + dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1)
+    + dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2)
 }
 
-function notchEntitiesWorld(piece: PatternPiece, fileScale: number): string {
-  const cutPts = curveToPolylinePoints(piece.cutLine)
-  const cutWorld = cutPts.map((p) => localMmToWorldFile(p, piece.transform, fileScale))
-  const boundaryRing = cutWorld.length >= 2 ? closeContour([...cutWorld]) : []
-  const polygonOpen = cutWorld.length >= 3 ? cutWorld.map((p) => ({ ...p })) : []
+function emitPointsAlongPolylineOpen(pts: Pt[], layer: string): string {
+  if (pts.length < 1) return ''
   let s = ''
-  for (const notch of piece.notches) {
-    s += emitGerberNotchLinesWorld(notch, piece, fileScale, boundaryRing, polygonOpen)
+  for (const p of pts) {
+    s += dxfPoint(layer, p.x, p.y)
   }
   return s
 }
@@ -147,8 +146,14 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
 
   const cutPts = curveToPolylinePoints(piece.cutLine)
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
+  const boundaryRing =
+    scaledCutPts.length >= 2 ? closeContour([...scaledCutPts]) : []
+  const polygonOpen =
+    scaledCutPts.length >= 3 ? scaledCutPts.map((p) => ({ ...p })) : []
 
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY, scaledCutPts, true))
+  out.push(dxfPolyline(ASTM_LAYER.BOUNDARY_DUP, scaledCutPts, true))
+  out.push(emitPointsAlongPolylineOpen(scaledCutPts, ASTM_LAYER.POINT_AUX))
 
   const seamCurves =
     piece.seamLine.length > 0
@@ -160,6 +165,12 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     const seamPts = curveToPolylinePoints(seamCurves)
     const scaledSeamPts = seamPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
     out.push(dxfPolyline(ASTM_LAYER.SEW, scaledSeamPts, true))
+    out.push(dxfPolyline(ASTM_LAYER.SEW_DUP, scaledSeamPts, true))
+    out.push(emitPointsAlongPolylineOpen(scaledSeamPts, ASTM_LAYER.POINT_AUX))
+  }
+
+  for (const notch of piece.notches) {
+    out.push(emitGerberNotchPackLocal(notch, piece, fileScale, boundaryRing, polygonOpen))
   }
 
   for (const drill of piece.drills) {
@@ -212,7 +223,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
     blockNames.push(bName)
 
     out.push('0' + EOL + 'BLOCK' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + bName + EOL
-      + '70' + EOL + '0' + EOL + '10' + EOL + '0' + EOL + '20' + EOL + '0' + EOL)
+      + '70' + EOL + BLOCK_DEF_FLAG_GERBER + EOL + '10' + EOL + '0' + EOL + '20' + EOL + '0' + EOL)
 
     out.push(buildBlockContent(piece, s))
 
@@ -231,10 +242,6 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
       + '41' + EOL + (t.mirrored ? '-1' : '1') + EOL
       + '42' + EOL + '1' + EOL
       + '50' + EOL + fmt(t.rotation) + EOL)
-  }
-
-  for (const piece of workspace.pieces) {
-    out.push(notchEntitiesWorld(piece, s))
   }
 
   out.push('0' + EOL + 'ENDSEC' + EOL + '0' + EOL + 'EOF' + EOL)
