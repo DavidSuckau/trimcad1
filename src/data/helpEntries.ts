@@ -240,7 +240,8 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Datei',
     name: 'ASTM-DXF exportieren',
-    description: 'Export im ASTM-DXF-Format (z. B. Gerber).',
+    description:
+      'ASTM-DXF für Gerber AccuMark: Einheiten Zoll, Kerben als LINE auf Layer 5 und 7 (Duplikat). Fadenlauf wird nicht exportiert.',
     access: 'Menü Datei → Exportieren → ASTM-DXF (Gerber)',
     shortcut: undefined,
   },

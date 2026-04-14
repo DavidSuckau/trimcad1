@@ -73,6 +73,38 @@ export function closeContour(pts: Pt[]): Pt[] {
   return pts
 }
 
+/** Nächstliegender Punkt auf dem Segment a–b zu p (alle Koordinaten in derselben Einheit). */
+export function closestPointOnSegment(a: Pt, b: Pt, p: Pt): Pt {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const apx = p.x - a.x
+  const apy = p.y - a.y
+  const ab2 = abx * abx + aby * aby
+  if (ab2 < 1e-18) return { x: a.x, y: a.y }
+  let t = (apx * abx + apy * aby) / ab2
+  t = Math.max(0, Math.min(1, t))
+  return { x: a.x + t * abx, y: a.y + t * aby }
+}
+
+/**
+ * Projektion auf geschlossene Polylinie (wie nach closeContour: erster Vertex == letzter).
+ * Segmente: (0,1) … (n-2, n-1).
+ */
+export function projectPointOntoClosedPolyline(ptsClosed: Pt[], p: Pt): Pt {
+  if (ptsClosed.length < 2) return p
+  let best = ptsClosed[0]
+  let bestD = Infinity
+  for (let i = 0; i < ptsClosed.length - 1; i++) {
+    const q = closestPointOnSegment(ptsClosed[i], ptsClosed[i + 1], p)
+    const d = dist(p, q)
+    if (d < bestD) {
+      bestD = d
+      best = q
+    }
+  }
+  return best
+}
+
 export function applyTransform(x: number, y: number, t: PatternPiece['transform']): Pt {
   let xx = x
   let yy = y
