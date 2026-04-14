@@ -7,7 +7,7 @@ import {
   curveToPolylinePoints, workspaceExtents,
   closeContour, dist,
   projectPointOntoClosedPolylineWithSegment,
-  dxfPolyline, dxfCircle, dxfLine, dxfPoint, dxfText,
+  dxfPolyline, dxfCircle, dxfLine, dxfPoint, dxfAstmNotchPoint, dxfText,
   sanitizeBlockName, makeExportFilename, downloadBlob,
   type Pt,
 } from './dxfShared'
@@ -18,7 +18,8 @@ import {
  * - BLOCK-Flag **70 = 64** (wie Gerber-Referenzdatei).
  * - Schnitt **Layer 1** + identische Kopie **Layer 84**; Naht **14** + Kopie **87**.
  * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
- * - Kerbe: zuerst **LINE Layer 7**, dann **LINE Layer 5** (Duplikat), im **Block** (lokal).
+ * - Kerbe: **LINE Layer 4** (ASTM D6673 Slit/V-Notch), zusätzlich **LINE 7 + 5** (Gerber-Beispiel),
+ *   optional **POINT Layer 4** mit 30/39/50 (ASTM-„method c“), im **Block** (lokal).
  *
  * Hinweis: AccuMark-Versionen unterscheiden sich; früher wurden Kerben testweise nur in ENTITIES
  * ausgegeben — die aktuelle Struktur folgt dem internen Gerber-Beispiel (alles im Block).
@@ -37,6 +38,8 @@ const ASTM_LAYER = {
   TEXT: '15',
 } as const
 
+/** ASTM D6673: Notches (Slit / V-Notch) — AccuMark/DCU erwartet Kerben typischerweise hier. */
+const ASTM_NOTCH_LAYER = '4'
 const GERBER_NOTCH_PRIMARY = '5'
 const GERBER_NOTCH_DUP = '7'
 
@@ -179,9 +182,15 @@ function emitGerberNotchPackLocal(
 
   if (![x1, y1, x2, y2].every(Number.isFinite)) return ''
 
+  const angleDegFromX = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI
+  const widthMm = notch.width ?? 6
+  const widthF = Math.max(0, widthMm * fileScale)
+
   const parts = [
+    dxfLine(ASTM_NOTCH_LAYER, x1, y1, x2, y2),
     dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2),
     dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2),
+    dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX),
     dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1),
     dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2),
   ]

@@ -194,6 +194,23 @@ export function dxfPoint(layer: string, x: number, y: number): string {
   return '0' + EOL + 'POINT' + EOL + '8' + EOL + layer + EOL + '10' + EOL + fmt(x) + EOL + '20' + EOL + fmt(y) + EOL
 }
 
+/**
+ * ASTM D6673 / ePattern: Kerbe als POINT auf Layer 4 — Gruppe 30 Tiefe, 39 Breite an der Kante, 50 Winkel (Grad, CCW von +X).
+ */
+export function dxfAstmNotchPoint(
+  x: number,
+  y: number,
+  depthFileUnits: number,
+  widthFileUnits: number,
+  angleDegFromPositiveX: number,
+): string {
+  return '0' + EOL + 'POINT' + EOL + '8' + EOL + '4' + EOL
+    + '10' + EOL + fmt(x) + EOL + '20' + EOL + fmt(y) + EOL
+    + '30' + EOL + fmt(depthFileUnits) + EOL
+    + '39' + EOL + fmt(widthFileUnits) + EOL
+    + '50' + EOL + fmt(angleDegFromPositiveX) + EOL
+}
+
 /** DXF CIRCLE entity. */
 export function dxfCircle(layer: string, cx: number, cy: number, r: number): string {
   return '0' + EOL + 'CIRCLE' + EOL + '8' + EOL + layer + EOL + '10' + EOL + fmt(cx) + EOL + '20' + EOL + fmt(cy) + EOL + '40' + EOL + fmt(r) + EOL
