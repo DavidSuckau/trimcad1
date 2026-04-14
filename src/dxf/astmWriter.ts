@@ -3,13 +3,12 @@ import {
   getNotchPositionAndAngleOnCutLine,
   notchCutoutPoints,
   resolveNotchCutLineAnchor,
-  seamLineWithNotchCutouts,
 } from '../geometry/notchOnCurve'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   EOL, fmt,
-  curveToPolylinePoints, workspaceExtents, getExportContour,
+  curveToPolylinePoints, workspaceExtents,
   closeContour, dist,
   projectPointOntoClosedPolylineWithSegment,
   dxfPolyline, dxfCircle, dxfLine, dxfPoint, dxfAstmNotchPoint, dxfText,
@@ -25,7 +24,8 @@ import {
  * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
  * - Kerbe: **LINE Layer 4** (+ 7 + 5): Strich = eine Linie; **V / Doppel** = zwei Linien zur Spitze
  *   (wie `notchCutoutPoints`), optional **POINT Layer 4** mit 30/39/50 nur bei Strich-Kerbe.
- * - Schnittkontur wie in der App: `getExportContour` (V-Einschnitte in der POLYLINE); Naht analog mit Kerben.
+ * - Schnitt/Naht-POLYLINE: **glatte** `cutLine` / `seamLine` **ohne** Kerb-Vertices — sonst mappt Gerber
+ *   V-Kerben nur auf die Außenkontur. Kerb-Geometrie nur über LINEs (4/7/5) + Hilfs-POINTs.
  *
  * Hinweis: AccuMark-Versionen unterscheiden sich; früher wurden Kerben testweise nur in ENTITIES
  * ausgegeben — die aktuelle Struktur folgt dem internen Gerber-Beispiel (alles im Block).
@@ -253,19 +253,16 @@ function emitPointsAlongPolylineOpen(pts: Pt[], layer: string): string {
 function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const out: string[] = []
 
-  const exportContour = getExportContour(piece)
-  const cutPts = curveToPolylinePoints(exportContour)
+  const cutPts = curveToPolylinePoints(piece.cutLine)
   if (cutPts.length < BLOCK_MIN_VERTICES) {
     return ''
   }
 
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
-  const rawCutPts = curveToPolylinePoints(piece.cutLine)
-  const scaledRawCutPts = rawCutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
   const boundaryRing =
-    scaledRawCutPts.length >= 2 ? closeContour([...scaledRawCutPts]) : []
+    scaledCutPts.length >= 2 ? closeContour([...scaledCutPts]) : []
   const polygonOpen =
-    scaledRawCutPts.length >= 3 ? scaledRawCutPts.map((p) => ({ ...p })) : []
+    scaledCutPts.length >= 3 ? scaledCutPts.map((p) => ({ ...p })) : []
 
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY, scaledCutPts, true))
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY_DUP, scaledCutPts, true))
@@ -273,7 +270,7 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
 
   const seamCurves =
     piece.seamLine.length >= 3
-      ? seamLineWithNotchCutouts(piece.cutLine, piece.notches, piece.seamLine)
+      ? piece.seamLine
       : piece.seamAllowanceMm != null && piece.cutLine.length >= 3
         ? offsetCurvesInwardForSeam(piece.cutLine, piece.seamAllowanceMm)
         : []
