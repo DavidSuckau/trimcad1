@@ -15,13 +15,11 @@ import {
 /**
  * ASTM-DXF für Gerber AccuMark: DXF R12 (AC1009).
  *
- * - **Einheiten:** Millimeter (`$INSUNITS` = 4), `dxfExportScale` × Modell-mm (wie AAMA).
- * - **BLOCK + INSERT:** gesamte Geometrie inkl. Kerben im **gleichen** Block in **lokalen**
- *   Koordinaten — identisch zur Darstellung in TrimTex, keine getrennte Welt-/Entity-Ebene.
- * - **Kerben:** LINE auf Layer 5 und 7 (Duplikat), Endpunkt auf Kontur-Polylinie, Normale aus Kante.
- * - **Naht:** wie AAMA aus `curveToPolylinePoints` (kein künstliches Resampling).
+ * **Header und Skalierung** sind an `aamaWriter.ts` angeglichen (`$INSUNITS` = 5, `dxfExportScale` × mm),
+ * damit AccuMark dieselbe Datei-„Sprache“ wie beim bewährten AAMA-Export sieht und Teile wieder importiert.
  *
- * Fadenlauf wird nicht exportiert.
+ * Abweichungen zu AAMA: numerische ASTM-Layer (1, 14, …), Kerben als LINE auf Layer 5+7 (Gerber),
+ * kein Fadenlauf.
  */
 
 const ASTM_LAYER = {
@@ -151,10 +149,10 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     out.push(dxfPolyline(ASTM_LAYER.INTERNAL, scaledIntPts, false))
   }
 
-  const label = toAscii(piece.name || piece.number || '')
+  const label = piece.name || piece.number || ''
   if (label && scaledCutPts[0]) {
     const firstCut = scaledCutPts[0]
-    out.push(dxfText(ASTM_LAYER.TEXT, firstCut.x, firstCut.y + 10 * fileScale, label, 5 * fileScale))
+    out.push(dxfText(ASTM_LAYER.TEXT, firstCut.x, firstCut.y + 10, toAscii(label)))
   }
 
   return out.join('')
@@ -170,7 +168,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
 
   out.push('0' + EOL + 'SECTION' + EOL + '2' + EOL + 'HEADER' + EOL)
   out.push('9' + EOL + '$ACADVER' + EOL + '1' + EOL + 'AC1009' + EOL)
-  out.push('9' + EOL + '$INSUNITS' + EOL + '70' + EOL + '4' + EOL)
+  out.push('9' + EOL + '$INSUNITS' + EOL + '70' + EOL + '5' + EOL)
   if (ext) {
     out.push('9' + EOL + '$EXTMIN' + EOL + '10' + EOL + fmt(ext.minX) + EOL + '20' + EOL + fmt(ext.minY) + EOL + '30' + EOL + '0' + EOL)
     out.push('9' + EOL + '$EXTMAX' + EOL + '10' + EOL + fmt(ext.maxX) + EOL + '20' + EOL + fmt(ext.maxY) + EOL + '30' + EOL + '0' + EOL)
@@ -185,7 +183,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
     const bName = pieceBlockName(piece, i)
     blockNames.push(bName)
 
-    out.push('0' + EOL + 'BLOCK' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + toAscii(bName) + EOL
+    out.push('0' + EOL + 'BLOCK' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + bName + EOL
       + '70' + EOL + '0' + EOL + '10' + EOL + '0' + EOL + '20' + EOL + '0' + EOL)
 
     out.push(buildBlockContent(piece, s))
@@ -200,7 +198,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
   for (let i = 0; i < workspace.pieces.length; i++) {
     const piece = workspace.pieces[i]
     const t = piece.transform
-    out.push('0' + EOL + 'INSERT' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + toAscii(blockNames[i]) + EOL
+    out.push('0' + EOL + 'INSERT' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + blockNames[i] + EOL
       + '10' + EOL + fmt(t.x * s) + EOL + '20' + EOL + fmt(t.y * s) + EOL
       + '41' + EOL + (t.mirrored ? '-1' : '1') + EOL
       + '42' + EOL + '1' + EOL
