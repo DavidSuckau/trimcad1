@@ -1,10 +1,15 @@
 import type { Workspace, PatternPiece, Notch } from '../types/model'
-import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import {
+  getNotchPositionAndAngleOnCutLine,
+  notchCutoutPoints,
+  resolveNotchCutLineAnchor,
+  seamLineWithNotchCutouts,
+} from '../geometry/notchOnCurve'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   EOL, fmt,
-  curveToPolylinePoints, workspaceExtents,
+  curveToPolylinePoints, workspaceExtents, getExportContour,
   closeContour, dist,
   projectPointOntoClosedPolylineWithSegment,
   dxfPolyline, dxfCircle, dxfLine, dxfPoint, dxfAstmNotchPoint, dxfText,
@@ -18,8 +23,9 @@ import {
  * - BLOCK-Flag **70 = 64** (wie Gerber-Referenzdatei).
  * - Schnitt **Layer 1** + identische Kopie **Layer 84**; Naht **14** + Kopie **87**.
  * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
- * - Kerbe: **LINE Layer 4** (ASTM D6673 Slit/V-Notch), zusätzlich **LINE 7 + 5** (Gerber-Beispiel),
- *   optional **POINT Layer 4** mit 30/39/50 (ASTM-„method c“), im **Block** (lokal).
+ * - Kerbe: **LINE Layer 4** (+ 7 + 5): Strich = eine Linie; **V / Doppel** = zwei Linien zur Spitze
+ *   (wie `notchCutoutPoints`), optional **POINT Layer 4** mit 30/39/50 nur bei Strich-Kerbe.
+ * - Schnittkontur wie in der App: `getExportContour` (V-Einschnitte in der POLYLINE); Naht analog mit Kerben.
  *
  * Hinweis: AccuMark-Versionen unterscheiden sich; früher wurden Kerben testweise nur in ENTITIES
  * ausgegeben — die aktuelle Struktur folgt dem internen Gerber-Beispiel (alles im Block).
@@ -140,6 +146,13 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
   return dot1 >= dot2 ? (Math.atan2(ny1, nx1) * 180) / Math.PI : (Math.atan2(ny2, nx2) * 180) / Math.PI
 }
 
+/** Dieselbe Geometrie auf 4 / 7 / 5 (ASTM + Gerber-Beispiel). */
+function emitNotchLineTriple(x1: number, y1: number, x2: number, y2: number): string {
+  return dxfLine(ASTM_NOTCH_LAYER, x1, y1, x2, y2)
+    + dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
+    + dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2)
+}
+
 function emitGerberNotchPackLocal(
   notch: Notch,
   piece: PatternPiece,
@@ -149,8 +162,42 @@ function emitGerberNotchPackLocal(
 ): string {
   if (boundaryRingLocal.length < 2 || polygonOpenLocal.length < 3) return ''
 
-  const { position } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+  const { position, angle } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
   if (!isFinitePt(position)) return ''
+
+  const anchor = resolveNotchCutLineAnchor(notch, piece.cutLine)
+  const widthMm = notch.width ?? 6
+  const depthMmClamped = Math.min(NOTCH_DEPTH_MAX_MM, Math.max(NOTCH_DEPTH_MIN_MM, notch.depth))
+
+  if (notch.type !== 'single') {
+    const geom = notchCutoutPoints(
+      position,
+      angle,
+      depthMmClamped,
+      widthMm,
+      piece.cutLine,
+      anchor,
+      notch.type,
+    )
+    if (!geom || geom.kind !== 'v') return ''
+
+    const lx = geom.left.x * fileScale
+    const ly = geom.left.y * fileScale
+    const rx = geom.right.x * fileScale
+    const ry = geom.right.y * fileScale
+    const tx = geom.tip.x * fileScale
+    const ty = geom.tip.y * fileScale
+    if (![lx, ly, rx, ry, tx, ty].every(Number.isFinite)) return ''
+
+    const parts = [
+      emitNotchLineTriple(lx, ly, tx, ty),
+      emitNotchLineTriple(rx, ry, tx, ty),
+      dxfPoint(ASTM_LAYER.POINT_AUX, lx, ly),
+      dxfPoint(ASTM_LAYER.POINT_AUX, rx, ry),
+      dxfPoint(ASTM_LAYER.POINT_AUX, tx, ty),
+    ]
+    return parts.join('')
+  }
 
   const anchorLocal = { x: position.x * fileScale, y: position.y * fileScale }
   let { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
@@ -183,13 +230,10 @@ function emitGerberNotchPackLocal(
   if (![x1, y1, x2, y2].every(Number.isFinite)) return ''
 
   const angleDegFromX = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI
-  const widthMm = notch.width ?? 6
   const widthF = Math.max(0, widthMm * fileScale)
 
   const parts = [
-    dxfLine(ASTM_NOTCH_LAYER, x1, y1, x2, y2),
-    dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2),
-    dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2),
+    emitNotchLineTriple(x1, y1, x2, y2),
     dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX),
     dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1),
     dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2),
@@ -209,24 +253,27 @@ function emitPointsAlongPolylineOpen(pts: Pt[], layer: string): string {
 function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const out: string[] = []
 
-  const cutPts = curveToPolylinePoints(piece.cutLine)
+  const exportContour = getExportContour(piece)
+  const cutPts = curveToPolylinePoints(exportContour)
   if (cutPts.length < BLOCK_MIN_VERTICES) {
     return ''
   }
 
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
+  const rawCutPts = curveToPolylinePoints(piece.cutLine)
+  const scaledRawCutPts = rawCutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
   const boundaryRing =
-    scaledCutPts.length >= 2 ? closeContour([...scaledCutPts]) : []
+    scaledRawCutPts.length >= 2 ? closeContour([...scaledRawCutPts]) : []
   const polygonOpen =
-    scaledCutPts.length >= 3 ? scaledCutPts.map((p) => ({ ...p })) : []
+    scaledRawCutPts.length >= 3 ? scaledRawCutPts.map((p) => ({ ...p })) : []
 
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY, scaledCutPts, true))
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY_DUP, scaledCutPts, true))
   out.push(emitPointsAlongPolylineOpen(scaledCutPts, ASTM_LAYER.POINT_AUX))
 
   const seamCurves =
-    piece.seamLine.length > 0
-      ? piece.seamLine
+    piece.seamLine.length >= 3
+      ? seamLineWithNotchCutouts(piece.cutLine, piece.notches, piece.seamLine)
       : piece.seamAllowanceMm != null && piece.cutLine.length >= 3
         ? offsetCurvesInwardForSeam(piece.cutLine, piece.seamAllowanceMm)
         : []
