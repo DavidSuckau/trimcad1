@@ -105,6 +105,34 @@ export function projectPointOntoClosedPolyline(ptsClosed: Pt[], p: Pt): Pt {
   return best
 }
 
+/** Wie `projectPointOntoClosedPolyline`, liefert zusätzlich Segmentindex und Parameter t ∈ [0,1] auf dem Segment. */
+export function projectPointOntoClosedPolylineWithSegment(
+  ptsClosed: Pt[],
+  p: Pt,
+): { closest: Pt; segIndex: number; t: number } {
+  if (ptsClosed.length < 2) return { closest: p, segIndex: 0, t: 0 }
+  let best = ptsClosed[0]
+  let bestD = Infinity
+  let bestI = 0
+  let bestT = 0
+  for (let i = 0; i < ptsClosed.length - 1; i++) {
+    const a = ptsClosed[i]
+    const b = ptsClosed[i + 1]
+    const q = closestPointOnSegment(a, b, p)
+    const d = dist(p, q)
+    if (d < bestD) {
+      bestD = d
+      best = q
+      bestI = i
+      const abx = b.x - a.x
+      const aby = b.y - a.y
+      const ab2 = abx * abx + aby * aby
+      bestT = ab2 < 1e-18 ? 0 : ((q.x - a.x) * abx + (q.y - a.y) * aby) / ab2
+    }
+  }
+  return { closest: best, segIndex: bestI, t: bestT }
+}
+
 export function applyTransform(x: number, y: number, t: PatternPiece['transform']): Pt {
   let xx = x
   let yy = y
