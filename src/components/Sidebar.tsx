@@ -17,6 +17,15 @@ function ChevronRightIcon() {
   )
 }
 
+function TrashIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  )
+}
+
 export function Sidebar() {
   const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, setPiecePropertiesDialogPieceId, sidebarCollapsed, setSidebarCollapsed } =
     useStore(
@@ -63,48 +72,50 @@ export function Sidebar() {
             </button>
           </div>
           <div className="sidebar-section" id="sidebar-piece-list-panel" role="region" aria-labelledby="sidebar-teile-heading">
-            <ul className="piece-list">
-              {pieces.map((p) => (
-                <li
-                  key={p.id}
-                  className={`piece-item ${selectedPieceIds.includes(p.id) ? 'selected' : ''}`}
-                  role="button"
-                  tabIndex={0}
-                  aria-selected={selectedPieceIds.includes(p.id)}
-                  onClick={() => selectPiece(p.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      selectPiece(p.id)
-                    }
-                  }}
-                >
-                  <span className="piece-number">{p.number}</span>
-                  <span
-                    className="piece-name"
-                    onDoubleClick={(e) => {
-                      e.stopPropagation()
-                      setPiecePropertiesDialogPieceId(p.id)
+            <div className="piece-list-card">
+              <ul className="piece-list">
+                {pieces.map((p) => (
+                  <li
+                    key={p.id}
+                    className={`piece-item ${selectedPieceIds.includes(p.id) ? 'selected' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-selected={selectedPieceIds.includes(p.id)}
+                    onClick={() => selectPiece(p.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        selectPiece(p.id)
+                      }
                     }}
-                    title="Doppelklick: Teil-Eigenschaften (Name, Nummer, Füllung …)"
                   >
-                    {p.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="piece-delete"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      deletePiece(p.id)
-                    }}
-                    aria-label="Teil löschen"
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <button type="button" className="sidebar-btn" onClick={() => addPiece()}>
+                    <span className="piece-number">{p.number}</span>
+                    <span
+                      className="piece-name"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        setPiecePropertiesDialogPieceId(p.id)
+                      }}
+                      title="Doppelklick: Teil-Eigenschaften (Name, Nummer, Füllung …)"
+                    >
+                      {p.name}
+                    </span>
+                    <button
+                      type="button"
+                      className="piece-delete"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deletePiece(p.id)
+                      }}
+                      aria-label="Teil löschen"
+                    >
+                      <TrashIcon />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <button type="button" className="sidebar-btn sidebar-btn--add" onClick={() => addPiece()}>
               + Teil hinzufügen
             </button>
           </div>

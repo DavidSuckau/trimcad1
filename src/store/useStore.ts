@@ -35,7 +35,13 @@ import {
   enumerateEdges,
 } from '../geometry/edgeEnumeration'
 import { deltaMinimalDegToHorizontal, masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
-import { splitBezierAt, joinBezierSegments, adjustControlPointsForPointOnCurve, pointAtPathLength } from '../geometry/curveToPath'
+import {
+  splitBezierAt,
+  joinBezierSegments,
+  lineSegmentToCollinearBezier,
+  adjustControlPointsForPointOnCurve,
+  pointAtPathLength,
+} from '../geometry/curveToPath'
 import {
   getSubSegments,
   countNotchesOnEdge,
@@ -163,6 +169,16 @@ function mergeAdjacentSegments(prev: Curve, next: Curve): Curve {
   }
   if (prev.type === 'bezier' && next.type === 'bezier') {
     const joined = joinBezierSegments(prev, next)
+    if (joined) return joined
+  }
+  if (prev.type === 'line' && next.type === 'bezier') {
+    const asBez = lineSegmentToCollinearBezier(prev)
+    const joined = joinBezierSegments(asBez, next)
+    if (joined) return joined
+  }
+  if (prev.type === 'bezier' && next.type === 'line') {
+    const asBez = lineSegmentToCollinearBezier(next)
+    const joined = joinBezierSegments(prev, asBez)
     if (joined) return joined
   }
   return { type: 'line', start: { ...prev.start }, end: { ...next.end } }
@@ -311,6 +327,8 @@ type Store = {
   showContourMeasurements: boolean
   /** Workspace-Notizzettel ein-/ausblenden (Daten bleiben erhalten). */
   showWorkspaceNotes: boolean
+  /** Ausgewählte Teile: vorherige Kontur(en) aus Undo-Verlauf halbtransparent unterlegen. */
+  showContourChangePreview: boolean
   /** Linke Teileliste ein-/ausklappen (mehr Platz für die Arbeitsfläche). */
   sidebarCollapsed: boolean
   /**
@@ -385,6 +403,7 @@ type Store = {
   setShowProfiles: (v: boolean) => void
   setShowContourMeasurements: (v: boolean) => void
   setShowWorkspaceNotes: (v: boolean) => void
+  setShowContourChangePreview: (v: boolean) => void
   setSidebarCollapsed: (v: boolean) => void
   setContourEditEnabled: (v: boolean) => void
   setRulerMode: (v: boolean) => void
@@ -697,6 +716,7 @@ export const useStore = create<Store>()(
   showProfiles: true,
   showContourMeasurements: false,
   showWorkspaceNotes: true,
+  showContourChangePreview: false,
   sidebarCollapsed: false,
   contourEditEnabled: true,
   rulerMode: false,
@@ -1028,6 +1048,7 @@ export const useStore = create<Store>()(
   setShowProfiles: (v) => set({ showProfiles: v }),
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
+  setShowContourChangePreview: (v) => set({ showContourChangePreview: v }),
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   setContourEditEnabled: (v) => set({ contourEditEnabled: v }),
   setRulerMode: (v) => set({ rulerMode: v }),

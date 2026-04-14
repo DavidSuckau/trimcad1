@@ -1,4 +1,4 @@
-import type { Curve, BezierCurve, Point } from '../types/model'
+import type { Curve, BezierCurve, Point, LineSegment } from '../types/model'
 import { lerpPt as lerp } from './geometryConstants'
 
 /** Kubische Bézier bei t auswerten: B(t). */
@@ -235,6 +235,22 @@ export function joinBezierSegments(seg1: BezierCurve, seg2: BezierCurve): Bezier
   const P = { x: k1 * B.x - k * A.x, y: k1 * B.y - k * A.y }
   const Q = { x: (k1 / k) * F.x - (1 / k) * G.x, y: (k1 / k) * F.y - (1 / k) * G.y }
   return { type: 'bezier', start: { ...A }, end: { ...G }, cp1: P, cp2: Q }
+}
+
+/**
+ * Gerades Liniensegment als kubische Bézier (Kontrollpunkte auf der Strecke).
+ * Ermöglicht `joinBezierSegments` über eine Linie und ein echtes Bézier hinweg.
+ */
+export function lineSegmentToCollinearBezier(line: LineSegment): BezierCurve {
+  const S = line.start
+  const E = line.end
+  return {
+    type: 'bezier',
+    start: { ...S },
+    end: { ...E },
+    cp1: { x: S.x + (E.x - S.x) / 3, y: S.y + (E.y - S.y) / 3 },
+    cp2: { x: S.x + (2 * (E.x - S.x)) / 3, y: S.y + (2 * (E.y - S.y)) / 3 },
+  }
 }
 
 export type CurveToPathDOptions = { closed?: boolean }

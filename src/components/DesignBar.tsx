@@ -14,6 +14,7 @@ export function DesignBar() {
     showProfiles, setShowProfiles,
     showContourMeasurements, setShowContourMeasurements,
     showWorkspaceNotes, setShowWorkspaceNotes,
+    showContourChangePreview, setShowContourChangePreview,
   } = useStore(useShallow((s) => ({
     contourEditEnabled: s.contourEditEnabled,
     setContourEditEnabled: s.setContourEditEnabled,
@@ -27,6 +28,8 @@ export function DesignBar() {
     showProfiles: s.showProfiles, setShowProfiles: s.setShowProfiles,
     showContourMeasurements: s.showContourMeasurements, setShowContourMeasurements: s.setShowContourMeasurements,
     showWorkspaceNotes: s.showWorkspaceNotes, setShowWorkspaceNotes: s.setShowWorkspaceNotes,
+    showContourChangePreview: s.showContourChangePreview,
+    setShowContourChangePreview: s.setShowContourChangePreview,
   })))
 
   const items: { label: string; checked: boolean; toggle: (v: boolean) => void }[] = [
@@ -41,6 +44,7 @@ export function DesignBar() {
     { label: 'Profile', checked: showProfiles, toggle: setShowProfiles },
     { label: 'Konturmaße', checked: showContourMeasurements, toggle: setShowContourMeasurements },
     { label: 'Notizen', checked: showWorkspaceNotes, toggle: setShowWorkspaceNotes },
+    { label: 'Kontur: Vorher', checked: showContourChangePreview, toggle: setShowContourChangePreview },
   ]
 
   return (

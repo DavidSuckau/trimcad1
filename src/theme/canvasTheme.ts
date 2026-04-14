@@ -49,6 +49,10 @@ export const canvasTheme = {
     strokeWidthSegmentHover: 1.8,
     /** Leeres Teil (kein cutLine) */
     strokeEmpty: '#cccccc',
+    /** „Vorher“-Overlay: Kontur vor letzter Änderung (Undo-Stack), nur Anzeige */
+    strokeChangePreview: '#1565c0',
+    strokeChangePreviewOlder: '#90a4ae',
+    strokeWidthChangePreview: 0.45,
   },
 
   // ── Vertex-Farben ────────────────────────────────────────────────
@@ -240,6 +244,9 @@ export const canvasThemeDark: CanvasTheme = {
     strokeSegmentHover: '#4AA5FF',
     strokeWidthSegmentHover: 1.8,
     strokeEmpty: '#555555',
+    strokeChangePreview: '#64b5f6',
+    strokeChangePreviewOlder: '#546e7a',
+    strokeWidthChangePreview: 0.45,
   },
 
   vertex: {

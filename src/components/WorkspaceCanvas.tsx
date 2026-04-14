@@ -6,7 +6,6 @@ import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import type { NotchSetting } from '../store/useStore'
 import { CanvasToolbar } from './CanvasToolbar'
 import {
-  closedPathD,
   curveToPathD,
   bezierAt,
   bezierDerivativeAt,
@@ -28,8 +27,6 @@ import {
   notchTriangleCorners,
   notchCutoutPoints,
   type NotchCutoutGeom,
-  cutLineWithNotchCutouts,
-  seamLineWithNotchCutouts,
 } from '../geometry/notchOnCurve'
 import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
@@ -55,6 +52,7 @@ import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLa
 import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
+import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
 
 let T: CanvasTheme = canvasTheme
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
@@ -878,22 +876,18 @@ const PieceGroup = memo(function PieceGroup({
 }) {
   void _themeMode
   const { NOTCH_STROKE } = getVertexColors()
-  const { cutLine, seamLine, notches, drills, internalLines, transform } = piece
+  const { cutLine, seamLine, notches, drills, internalLines } = piece
   const ptPs = 1 / Math.max(viewZoom, 1e-6)
-  const tx = `translate(${transform.x},${transform.y}) rotate(${transform.rotation}) scale(${transform.mirrored ? -1 : 1},1)`
-  const notchesForCutouts = notchIdBeingDragged ? notches.filter((n) => n.id !== notchIdBeingDragged) : notches
-  const mergedCutLine = cutLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
-  const cutPath = closedPathD(mergedCutLine)
-  const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
-  const seamPath = closedPathD(mergedSeamLine)
+  const tx = pieceGroupTransformAttr(piece)
+  const { solidPath, dashedPath, hasSeam } = getPieceContourDisplayPaths(
+    piece,
+    !!cutSeamSwapped,
+    notchIdBeingDragged ?? undefined,
+  )
   const interiorFill = piece.fillInterior != null && piece.fillInterior !== false
     ? (typeof piece.fillInterior === 'string' ? piece.fillInterior : T.piece.fillSelected)
     : isSelected ? T.piece.fillSelected : T.piece.fill
   const interiorFillOpacity = interiorFill === 'none' ? undefined : (isSelected && T.piece.fill === 'none' ? 1 : 0.82)
-  const hasSeam = !!(seamPath && seamLine.length >= 3)
-  const solidIsCut = !hasSeam || !!cutSeamSwapped
-  const solidPath = solidIsCut ? cutPath : seamPath
-  const dashedPath = solidIsCut ? seamPath : cutPath
 
   const solidStroke = isHovered ? T.piece.strokeHover
     : isSelected ? T.piece.strokeSelected
@@ -1357,6 +1351,7 @@ export function WorkspaceCanvas() {
     showProfiles,
     showContourMeasurements,
     showWorkspaceNotes,
+    showContourChangePreview,
     contourEditEnabled,
     rulerMode,
     setRulerMode,
@@ -1457,11 +1452,12 @@ export function WorkspaceCanvas() {
   const { pieces, view, notes: workspaceNotesList } = workspace
   const seamAssignments = workspace.seamAssignments ?? []
   const profileAssignments = workspace.profileAssignments ?? []
-  const canUndo = useZustandStore(useStore.temporal, (s) => s.pastStates.length > 0)
-  const canRedo = useZustandStore(useStore.temporal, (s) => s.futureStates.length > 0)
+  const pastStates = useZustandStore(useStore.temporal, (s) => s.pastStates)
 
   const prevDragKindRef = useRef<string | null>(null)
   const dragSnapshotRef = useRef<{ workspace: typeof workspace } | null>(null)
+  /** Workspace zu Drag-Beginn – Re-Render für „Vorher“-Kontur beim Ziehen (Vertex, Kurve, …). */
+  const [contourDragSnapshotWorkspace, setContourDragSnapshotWorkspace] = useState<typeof workspace | null>(null)
   const [grainFlipHover, setGrainFlipHover] = useState<{
     pieceId: string
     clientX: number
@@ -1627,9 +1623,12 @@ export function WorkspaceCanvas() {
     const wasData = prevKind != null && STORE_MODIFYING_DRAGS.has(prevKind)
     const isData = currentKind != null && STORE_MODIFYING_DRAGS.has(currentKind)
     if (isData && !wasData) {
-      dragSnapshotRef.current = { workspace: useStore.getState().workspace }
+      const ws = useStore.getState().workspace
+      dragSnapshotRef.current = { workspace: ws }
+      setContourDragSnapshotWorkspace(ws)
       useStore.temporal.getState().pause()
     } else if (!isData && wasData && dragSnapshotRef.current) {
+      setContourDragSnapshotWorkspace(null)
       const snapshot = dragSnapshotRef.current
       dragSnapshotRef.current = null
       const temporal = useStore.temporal.getState()
@@ -1643,6 +1642,69 @@ export function WorkspaceCanvas() {
       }
     }
   }, [dragging, STORE_MODIFYING_DRAGS])
+
+  const cutSeamSwappedKey = useMemo(() => [...cutSeamSwappedSet].sort().join(','), [cutSeamSwappedSet])
+
+  const contourHistoryPreviewPaths = useMemo(() => {
+    if (!showContourChangePreview || pastStates.length === 0) return []
+    const steps = pastStates.slice(-2) as { workspace: typeof workspace }[]
+    const pt = T.piece
+    const rows: {
+      key: string
+      pieceId: string
+      d: string
+      transform: string
+      opacity: number
+      stroke: string
+    }[] = []
+    for (let si = 0; si < steps.length; si++) {
+      const snap = steps[si]
+      const isOlder = steps.length === 2 && si === 0
+      const opacity = isOlder ? 0.28 : 0.42
+      const stroke = isOlder ? pt.strokeChangePreviewOlder : pt.strokeChangePreview
+      for (const pieceId of selectedPieceIds) {
+        const pastPiece = snap.workspace.pieces.find((p) => p.id === pieceId)
+        if (!pastPiece) continue
+        const d = pieceSolidContourPathD(pastPiece, cutSeamSwappedSet.has(pieceId))
+        if (!d) continue
+        rows.push({
+          key: `hist-${pieceId}-${si}`,
+          pieceId,
+          d,
+          transform: pieceGroupTransformAttr(pastPiece),
+          opacity,
+          stroke,
+        })
+      }
+    }
+    return rows
+  }, [showContourChangePreview, pastStates, selectedPieceIds, cutSeamSwappedKey, canvasThemeMode])
+
+  const contourDragGhostPath = useMemo(() => {
+    if (!showContourChangePreview || !contourDragSnapshotWorkspace || !dragging) return null
+    const dk = dragging.kind
+    if (dk !== 'vertex' && dk !== 'pointOnCurve' && dk !== 'controlpoint' && dk !== 'notchMove') return null
+    const pieceId = dragging.pieceId
+    if (!selectedPieceIds.includes(pieceId)) return null
+    const pastPiece = contourDragSnapshotWorkspace.pieces.find((p) => p.id === pieceId)
+    if (!pastPiece) return null
+    const excludeNotch = dk === 'notchMove' ? dragging.notchId : undefined
+    const d = pieceSolidContourPathD(pastPiece, cutSeamSwappedSet.has(pieceId), excludeNotch)
+    if (!d) return null
+    return { d, transform: pieceGroupTransformAttr(pastPiece), pieceId }
+  }, [
+    showContourChangePreview,
+    contourDragSnapshotWorkspace,
+    dragging,
+    selectedPieceIds,
+    cutSeamSwappedKey,
+    canvasThemeMode,
+  ])
+
+  const contourHistoryPreviewPathsDeduped = useMemo(() => {
+    if (!contourDragGhostPath) return contourHistoryPreviewPaths
+    return contourHistoryPreviewPaths.filter((r) => r.pieceId !== contourDragGhostPath.pieceId)
+  }, [contourHistoryPreviewPaths, contourDragGhostPath])
 
   const segmentMenuVisible =
     (hoveredSegment != null && hoveredSegmentPos != null) ||
@@ -2405,13 +2467,36 @@ export function WorkspaceCanvas() {
         }
         return
       }
-      if (!layoutOnly && (tool === 'line' || tool === 'internalLine') && selectedPieceIds.length === 1) {
-        const pieceId = selectedPieceIds[0]
-        const piece = pieces.find((x) => x.id === pieceId)
-        if (!piece) return
-        const local = worldToPieceLocal(world, piece)
-        setDragging({ kind: 'line', pieceId, start: local, current: local })
-        ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+      if (!layoutOnly && (tool === 'line' || tool === 'internalLine')) {
+        let pieceUnderCursor: PatternPiece | null = null
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          const local = worldToPieceLocal(world, p)
+          if (isPointInsidePiece(local, p)) {
+            pieceUnderCursor = p
+            break
+          }
+        }
+        if (pieceUnderCursor) {
+          selectPiece(pieceUnderCursor.id)
+          const local = worldToPieceLocal(world, pieceUnderCursor)
+          setDragging({ kind: 'line', pieceId: pieceUnderCursor.id, start: local, current: local })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+        if (selectedPieceIds.length === 1) {
+          const pieceId = selectedPieceIds[0]
+          const piece = pieces.find((x) => x.id === pieceId)
+          if (piece) {
+            const local = worldToPieceLocal(world, piece)
+            setDragging({ kind: 'line', pieceId, start: local, current: local })
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
+        }
+        setToastMessage(
+          'warn:In ein Schnittteil klicken oder genau ein Teil in der Liste wählen – Linien-Werkzeug bleibt aktiv.',
+        )
         return
       }
       if (!layoutOnly && tool === 'notch' && selectedPieceIds.length === 1) {
@@ -4264,30 +4349,6 @@ export function WorkspaceCanvas() {
       } as React.CSSProperties}
     >
       <div className="workspace-version">Aktuell V. 0.0.5</div>
-      <div
-        className="undo-redo-bar"
-        onPointerDown={(e) => e.stopPropagation()}
-        onPointerUp={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        onWheel={(e) => e.stopPropagation()}
-      >
-        <button
-          className="undo-redo-btn"
-          disabled={!canUndo}
-          title="Rückgängig (Ctrl+Z)"
-          onClick={() => undoAction()}
-        >
-          ↩
-        </button>
-        <button
-          className="undo-redo-btn"
-          disabled={!canRedo}
-          title="Wiederherstellen (Ctrl+Shift+Z)"
-          onClick={() => redoAction()}
-        >
-          ↪
-        </button>
-      </div>
       <CanvasToolbar />
       {notchEditTarget &&
         tool === 'select' &&
@@ -5026,6 +5087,45 @@ export function WorkspaceCanvas() {
                   </g>
                 )
               })()
+            )}
+          {showContourChangePreview &&
+            (contourHistoryPreviewPathsDeduped.length > 0 || contourDragGhostPath) && (
+              <g className="contour-change-preview" pointerEvents="none" aria-hidden>
+                {contourHistoryPreviewPathsDeduped.map((row) => {
+                  const z = 1 / Math.max(view.zoom, 1e-6)
+                  return (
+                    <g key={row.key} transform={row.transform}>
+                      <path
+                        d={row.d}
+                        fill="none"
+                        stroke={row.stroke}
+                        strokeWidth={T.piece.strokeWidthChangePreview * z}
+                        opacity={row.opacity}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </g>
+                  )
+                })}
+                {contourDragGhostPath && (() => {
+                  const z = 1 / Math.max(view.zoom, 1e-6)
+                  return (
+                    <g transform={contourDragGhostPath.transform}>
+                      <path
+                        d={contourDragGhostPath.d}
+                        fill="none"
+                        stroke={T.piece.strokeChangePreview}
+                        strokeWidth={T.piece.strokeWidthChangePreview * z}
+                        opacity={0.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </g>
+                  )
+                })()}
+              </g>
             )}
           {pieces.map((piece) => {
             return (

@@ -1,5 +1,6 @@
 import React from 'react'
-import { useStore } from '../store/useStore'
+import { useStore as useZustandStore } from 'zustand'
+import { useStore, undoAction, redoAction } from '../store/useStore'
 
 const iconProps = {
   className: 'canvas-tool-icon',
@@ -14,7 +15,21 @@ const iconProps = {
   'aria-hidden': true as const,
 }
 
+const undoRedoIconProps = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 24 24',
+  fill: 'none' as const,
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true as const,
+}
+
 export const CanvasToolbar: React.FC = () => {
+  const canUndo = useZustandStore(useStore.temporal, (s) => s.pastStates.length > 0)
+  const canRedo = useZustandStore(useStore.temporal, (s) => s.futureStates.length > 0)
   const tool = useStore((s) => s.tool)
   const setTool = useStore((s) => s.setTool)
   const contourEditEnabled = useStore((s) => s.contourEditEnabled)
@@ -97,6 +112,33 @@ export const CanvasToolbar: React.FC = () => {
       onClick={stopPropagation}
       onWheel={stopPropagation}
     >
+      <div className="canvas-toolbar-undo" role="group" aria-label="Rückgängig und Wiederherstellen">
+        <button
+          type="button"
+          className="canvas-undo-redo-btn"
+          disabled={!canUndo}
+          title="Rückgängig (Ctrl+Z)"
+          onClick={() => undoAction()}
+        >
+          <svg {...undoRedoIconProps}>
+            <path d="M3 7v6h6" />
+            <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className="canvas-undo-redo-btn"
+          disabled={!canRedo}
+          title="Wiederherstellen (Ctrl+Shift+Z)"
+          onClick={() => redoAction()}
+        >
+          <svg {...undoRedoIconProps}>
+            <path d="M21 7v6h-6" />
+            <path d="M3 17a9 9 0 019-9 9 9 0 016 2.3L21 13" />
+          </svg>
+        </button>
+      </div>
+      <div className="canvas-toolbar-undo-separator" aria-hidden />
       <button
         type="button"
         className={`canvas-tool-btn${isActive('select') ? ' active' : ''}`}
