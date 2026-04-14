@@ -241,7 +241,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Datei',
     name: 'ASTM-DXF exportieren',
     description:
-      'ASTM-DXF: mm wie AAMA, Block+Insert für Kontur/Naht; Kerben zusätzlich LINE auf Layer 5+7 in ENTITIES. Kein Fadenlauf.',
+      'ASTM-DXF: mm wie AAMA, Block+Insert; Kerben LINE Layer 5+7 im gleichen Block wie die Kontur. Kein Fadenlauf.',
     access: 'Menü Datei → Exportieren → ASTM-DXF (Gerber)',
     shortcut: undefined,
   },

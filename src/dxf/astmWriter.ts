@@ -4,9 +4,8 @@ import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   EOL, fmt,
-  applyTransform,
   curveToPolylinePoints, workspaceExtents,
-  closeContour, dist,
+  closeContour,
   projectPointOntoClosedPolylineWithSegment,
   dxfPolyline, dxfCircle, dxfLine, dxfText,
   sanitizeBlockName, makeExportFilename, downloadBlob,
@@ -16,12 +15,11 @@ import {
 /**
  * ASTM-DXF für Gerber AccuMark: DXF R12 (AC1009).
  *
- * - **Einheiten:** Millimeter (`$INSUNITS` = 4), Koordinaten wie im Modell × `dxfExportScale`
- *   (gleiche Logik wie AAMA – vermeidet Zoll/mm-Verwirrung beim Import).
- * - **BLOCK + INSERT:** Kontur, Naht, Bohrung, intern, Text pro Teil (AccuMark erwartet das oft so).
- * - **Kerben:** zusätzliche LINE auf Layer 5 und 7 in **ENTITIES** im **Weltkoordinatensystem**
- *   (Transformation eingerechnet), damit sie nicht „versteckt“ im Block liegen.
- * - Naht: gleiche Stützpunktanzahl wie Schnittkontur (Resampling).
+ * - **Einheiten:** Millimeter (`$INSUNITS` = 4), `dxfExportScale` × Modell-mm (wie AAMA).
+ * - **BLOCK + INSERT:** gesamte Geometrie inkl. Kerben im **gleichen** Block in **lokalen**
+ *   Koordinaten — identisch zur Darstellung in TrimTex, keine getrennte Welt-/Entity-Ebene.
+ * - **Kerben:** LINE auf Layer 5 und 7 (Duplikat), Endpunkt auf Kontur-Polylinie, Normale aus Kante.
+ * - **Naht:** wie AAMA aus `curveToPolylinePoints` (kein künstliches Resampling).
  *
  * Fadenlauf wird nicht exportiert.
  */
@@ -37,7 +35,6 @@ const ASTM_LAYER = {
 const GERBER_NOTCH_PRIMARY = '5'
 const GERBER_NOTCH_DUP = '7'
 
-/** Gerber: kurze Kerbe ~0,1–0,4 inch ≈ 2,54–10,16 mm (Modell). */
 const NOTCH_DEPTH_MIN_MM = 2.54
 const NOTCH_DEPTH_MAX_MM = 10.16
 
@@ -50,55 +47,9 @@ function toAscii(s: string): string {
   return s.replace(/[^\x20-\x7E]/g, '_')
 }
 
-/** Modell-mm → Datei-Koordinaten (Welt): `applyTransform` × fileScale. */
-function localMmToWorldFile(p: Pt, transform: PatternPiece['transform'], fileScale: number): Pt {
-  const w = applyTransform(p.x, p.y, transform)
-  return { x: w.x * fileScale, y: w.y * fileScale }
-}
-
 function notchDepthFileMmClamped(depthMm: number, fileScale: number): number {
   const d = Math.min(NOTCH_DEPTH_MAX_MM, Math.max(NOTCH_DEPTH_MIN_MM, depthMm))
   return d * fileScale
-}
-
-function perimeterClosed(ptsClosed: Pt[]): number {
-  let len = 0
-  for (let i = 0; i < ptsClosed.length - 1; i++) {
-    len += dist(ptsClosed[i], ptsClosed[i + 1])
-  }
-  return len
-}
-
-function pointAtArcLengthOnClosedPolyline(ptsClosed: Pt[], s: number): Pt {
-  const total = perimeterClosed(ptsClosed)
-  if (total < 1e-12) return { ...ptsClosed[0] }
-  let t = s % total
-  if (t < 0) t += total
-  let acc = 0
-  for (let i = 0; i < ptsClosed.length - 1; i++) {
-    const a = ptsClosed[i]
-    const b = ptsClosed[i + 1]
-    const segLen = dist(a, b)
-    if (acc + segLen >= t - 1e-9) {
-      const u = segLen < 1e-12 ? 0 : (t - acc) / segLen
-      return { x: a.x + u * (b.x - a.x), y: a.y + u * (b.y - a.y) }
-    }
-    acc += segLen
-  }
-  return { ...ptsClosed[0] }
-}
-
-function resampleClosedPolylineUniform(ptsOpen: Pt[], n: number): Pt[] {
-  if (n < 2 || ptsOpen.length < 2) return [...ptsOpen]
-  const closed = closeContour([...ptsOpen])
-  const total = perimeterClosed(closed)
-  if (total < 1e-12) return [...ptsOpen]
-  const out: Pt[] = []
-  for (let i = 0; i < n; i++) {
-    const s = (i / n) * total
-    out.push(pointAtArcLengthOnClosedPolyline(closed, s))
-  }
-  return out
 }
 
 function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]): number {
@@ -127,24 +78,25 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
   return dot1 >= dot2 ? (Math.atan2(ny1, nx1) * 180) / Math.PI : (Math.atan2(ny2, nx2) * 180) / Math.PI
 }
 
-function emitGerberNotchLinesWorld(
+/** Kerben im Block: lokale Dateikoordinaten (wie Kontur). */
+function emitGerberNotchLinesLocal(
   notch: Notch,
   piece: PatternPiece,
   fileScale: number,
-  boundaryRingFile: Pt[],
-  polygonOpenFile: Pt[],
+  boundaryRingLocal: Pt[],
+  polygonOpenLocal: Pt[],
 ): string {
-  if (boundaryRingFile.length < 2 || polygonOpenFile.length < 3) return ''
+  if (boundaryRingLocal.length < 2 || polygonOpenLocal.length < 3) return ''
 
   const { position } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
-  const anchorFile = localMmToWorldFile(position, piece.transform, fileScale)
+  const anchorLocal = { x: position.x * fileScale, y: position.y * fileScale }
   const { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
-    boundaryRingFile,
-    anchorFile,
+    boundaryRingLocal,
+    anchorLocal,
   )
-  const a = boundaryRingFile[segIndex]
-  const b = boundaryRingFile[segIndex + 1]
-  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenFile)
+  const a = boundaryRingLocal[segIndex]
+  const b = boundaryRingLocal[segIndex + 1]
+  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenLocal)
   const rad = (angleDeg * Math.PI) / 180
   const depthF = notchDepthFileMmClamped(notch.depth, fileScale)
   const x1 = snapped.x
@@ -156,14 +108,16 @@ function emitGerberNotchLinesWorld(
     + dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
 }
 
-/**
- * Block-Inhalt: lokale mm × fileScale — ohne Kerben (die folgen in ENTITIES).
- */
-function buildBlockContentNoNotches(piece: PatternPiece, fileScale: number): string {
+function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const out: string[] = []
 
   const cutPts = curveToPolylinePoints(piece.cutLine)
   const scaledCutPts = cutPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
+  const boundaryRing =
+    scaledCutPts.length >= 2 ? closeContour([...scaledCutPts]) : []
+  const polygonOpen =
+    scaledCutPts.length >= 3 ? scaledCutPts.map((p) => ({ ...p })) : []
+
   out.push(dxfPolyline(ASTM_LAYER.BOUNDARY, scaledCutPts, true))
 
   const seamCurves =
@@ -174,10 +128,12 @@ function buildBlockContentNoNotches(piece: PatternPiece, fileScale: number): str
         : []
   if (seamCurves.length > 0) {
     const seamPts = curveToPolylinePoints(seamCurves)
-    const n = Math.max(2, cutPts.length)
-    const seamResampled = resampleClosedPolylineUniform(seamPts, n)
-    const scaledSeamPts = seamResampled.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
+    const scaledSeamPts = seamPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
     out.push(dxfPolyline(ASTM_LAYER.SEW, scaledSeamPts, true))
+  }
+
+  for (const notch of piece.notches) {
+    out.push(emitGerberNotchLinesLocal(notch, piece, fileScale, boundaryRing, polygonOpen))
   }
 
   for (const drill of piece.drills) {
@@ -202,21 +158,6 @@ function buildBlockContentNoNotches(piece: PatternPiece, fileScale: number): str
   }
 
   return out.join('')
-}
-
-/**
- * Kerben für ein Teil: Welt-Dateikoordinaten (nach INSERT-Logik), für ENTITIES nach den Blöcken.
- */
-function notchEntitiesWorld(piece: PatternPiece, fileScale: number): string {
-  const cutPts = curveToPolylinePoints(piece.cutLine)
-  const cutFile = cutPts.map((p) => localMmToWorldFile(p, piece.transform, fileScale))
-  const boundaryRing = cutFile.length >= 2 ? closeContour([...cutFile]) : []
-  const polygonOpen = cutFile.length >= 3 ? cutFile.map((p) => ({ ...p })) : []
-  let s = ''
-  for (const notch of piece.notches) {
-    s += emitGerberNotchLinesWorld(notch, piece, fileScale, boundaryRing, polygonOpen)
-  }
-  return s
 }
 
 /**
@@ -247,7 +188,7 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
     out.push('0' + EOL + 'BLOCK' + EOL + '8' + EOL + '0' + EOL + '2' + EOL + toAscii(bName) + EOL
       + '70' + EOL + '0' + EOL + '10' + EOL + '0' + EOL + '20' + EOL + '0' + EOL)
 
-    out.push(buildBlockContentNoNotches(piece, s))
+    out.push(buildBlockContent(piece, s))
 
     out.push('0' + EOL + 'ENDBLK' + EOL)
   }
@@ -264,10 +205,6 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
       + '41' + EOL + (t.mirrored ? '-1' : '1') + EOL
       + '42' + EOL + '1' + EOL
       + '50' + EOL + fmt(t.rotation) + EOL)
-  }
-
-  for (const piece of workspace.pieces) {
-    out.push(notchEntitiesWorld(piece, s))
   }
 
   out.push('0' + EOL + 'ENDSEC' + EOL + '0' + EOL + 'EOF' + EOL)

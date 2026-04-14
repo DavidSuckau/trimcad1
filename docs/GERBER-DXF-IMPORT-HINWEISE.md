@@ -1,6 +1,6 @@
 # Gerber AccuMark: DXF-Import – Naht und Notches sichtbar machen
 
-Der **ASTM-DXF-Export** aus TrimTex verwendet **Millimeter** (`$INSUNITS` = 4), dieselbe Skalierung wie **AAMA** (`dxfExportScale` × Modell-mm). **Kontur, Naht, Bohrung** liegen in **BLOCKs** mit **INSERT** (AccuMark-kompatibel). **Kerben** kommen zusätzlich als **LINE** auf **Layer 5 und 7** in **ENTITIES** im **Weltkoordinatensystem** (damit sie nicht nur im Block stehen). Die Nahtlinie (Layer 14) hat die **gleiche Stützpunktanzahl** wie die Schnittkontur. Der **Fadenlauf** wird nicht exportiert.
+Der **ASTM-DXF-Export** aus TrimTex verwendet **Millimeter** (`$INSUNITS` = 4), dieselbe Skalierung wie **AAMA** (`dxfExportScale` × Modell-mm). **Kontur, Naht, Kerben, Bohrung** liegen gemeinsam im **BLOCK** in **lokalen Koordinaten**; pro Teil ein **INSERT** — alles transformiert sich wie ein Teil in TrimTex. Kerben sind **LINE** auf **Layer 5 und 7** (Duplikat). Der **Fadenlauf** wird nicht exportiert.
 
 Wenn nach dem ASTM-DXF-Import in Gerber AccuMark **die Nahtlinie und/oder Notches nicht angezeigt werden**, bitte Folgendes prüfen:
 
