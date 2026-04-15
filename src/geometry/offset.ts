@@ -117,6 +117,23 @@ function simplifyClosedPolygon(pts: Point[], tolerance: number): Point[] {
   return result.length >= 3 ? result : pts
 }
 
+/** Kurven zu geschlossener Polylinie (z. B. Clipper-Boolean). */
+export function tessellateCurvesToPoints(curves: Curve[], bezierSamples: number = BEZIER_SAMPLES): Point[] {
+  return curvesToPoints(curves, bezierSamples)
+}
+
+/** Geschlossene Punktliste → `Curve[]` inkl. schließendem Segment; optional Douglas-Peucker. */
+export function closedPointsToLineCurves(pts: Point[], simplifyToleranceMm: number = 0.15): Curve[] {
+  if (pts.length < 3) return []
+  let ring = [...pts]
+  if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
+  if (simplifyToleranceMm > 0) ring = simplifyClosedPolygon(ring, simplifyToleranceMm)
+  if (ring.length < 3) return []
+  const segs = pointsToLineCurves(ring)
+  segs.push({ type: 'line', start: ring[ring.length - 1], end: ring[0] })
+  return segs
+}
+
 export type ClipperOffsetClosedResult = {
   lineCurves: Curve[]
   /** Anzahl geschlossener Pfade in der Clipper-Lösung (>1 oft bei Selbstüberschneidung / Kollaps). */

@@ -45,6 +45,7 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '..
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
 import { masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
+import { crossZ } from '../geometry/pieceSymmetry'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
@@ -1365,6 +1366,9 @@ export function WorkspaceCanvas() {
     setEdgeSeamPickingActive,
     horizontalLevelPickingActive,
     setHorizontalLevelPickingActive,
+    pieceSymmetryState,
+    setPieceSymmetryState,
+    applyPieceSymmetry,
     alignPieceEdgeHorizontal,
     nahtzuordnungMode,
     setNahtzuordnungMode,
@@ -1463,6 +1467,8 @@ export function WorkspaceCanvas() {
     clientX: number
     clientY: number
   } | null>(null)
+  /** Weltpunkt für Vorschau Linie 2. Spiegelpunkt (Symmetrie-Modus). */
+  const [symmetryHoverWorld, setSymmetryHoverWorld] = useState<Point | null>(null)
   const [grainContextMenu, setGrainContextMenu] = useState<{
     pieceId: string
     clientX: number
@@ -1751,9 +1757,18 @@ export function WorkspaceCanvas() {
   }, [horizontalLevelPickingActive])
 
   useEffect(() => {
+    if (pieceSymmetryState && (selectedPieceIds.length !== 1 || selectedPieceIds[0] !== pieceSymmetryState.pieceId)) {
+      setPieceSymmetryState(null)
+      setSymmetryHoverWorld(null)
+    }
+  }, [pieceSymmetryState, selectedPieceIds, setPieceSymmetryState])
+
+  useEffect(() => {
     if (!contourEditEnabled) {
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
+      setPieceSymmetryState(null)
+      setSymmetryHoverWorld(null)
       setNahtzuordnungMode('idle')
       setPendingNahtzuordnungFirst(null)
       setRulerMode(false)
@@ -1769,6 +1784,7 @@ export function WorkspaceCanvas() {
     cancelDigitize,
     setPendingNahtzugabeClick,
     setEdgeSeamPickingActive,
+    setPieceSymmetryState,
     setNahtzuordnungMode,
     setPendingNahtzuordnungFirst,
     setRulerMode,
@@ -1816,6 +1832,10 @@ export function WorkspaceCanvas() {
           setHoveredHorizontalLevelEdge(null)
           setHorizontalLevelPickingActive(false)
         }
+        if (pieceSymmetryState) {
+          setPieceSymmetryState(null)
+          setSymmetryHoverWorld(null)
+        }
         return
       }
       e.preventDefault()
@@ -1832,6 +1852,46 @@ export function WorkspaceCanvas() {
         return
       }
       const layoutOnly = !contourEditEnabled
+      const sym = pieceSymmetryState
+      if (sym && contourEditEnabled && selectedPieceIds.length === 1 && selectedPieceIds[0] === sym.pieceId) {
+        const piece = pieces.find((x) => x.id === sym.pieceId)
+        if (!piece) {
+          setPieceSymmetryState(null)
+          setSymmetryHoverWorld(null)
+          return
+        }
+        const local = worldToPieceLocal(world, piece)
+        if (sym.phase === 'axisA') {
+          setPieceSymmetryState({ pieceId: sym.pieceId, phase: 'axisB', axisA: { ...local } })
+          return
+        }
+        if (sym.phase === 'axisB') {
+          if (sym.axisA && Math.hypot(local.x - sym.axisA.x, local.y - sym.axisA.y) < 0.5) {
+            setToastMessage('warn:Zweiter Punkt zu nah am ersten.')
+            return
+          }
+          setPieceSymmetryState({
+            pieceId: sym.pieceId,
+            phase: 'pickSide',
+            axisA: sym.axisA,
+            axisB: { ...local },
+          })
+          setSymmetryHoverWorld(null)
+          return
+        }
+        if (sym.phase === 'pickSide' && sym.axisA && sym.axisB) {
+          const c = crossZ(sym.axisA, sym.axisB, local)
+          if (Math.abs(c) < 1e-4) {
+            setToastMessage('warn:Bitte links oder rechts der Spiegelachse klicken.')
+            return
+          }
+          const keepSide = c >= 0 ? 'left' : 'right'
+          applyPieceSymmetry(sym.pieceId, sym.axisA, sym.axisB, keepSide)
+          setPieceSymmetryState(null)
+          setSymmetryHoverWorld(null)
+          return
+        }
+      }
       if (horizontalLevelPickingActive) {
         if (selectedPieceIds.length === 1 && hoveredHorizontalLevelEdge?.pieceId === selectedPieceIds[0]) {
           const ok = alignPieceEdgeHorizontal(selectedPieceIds[0], hoveredHorizontalLevelEdge.edgeIndex)
@@ -2664,6 +2724,10 @@ export function WorkspaceCanvas() {
       hoveredHorizontalLevelEdge,
       alignPieceEdgeHorizontal,
       setHorizontalLevelPickingActive,
+      pieceSymmetryState,
+      setPieceSymmetryState,
+      applyPieceSymmetry,
+      setSymmetryHoverWorld,
     ]
   )
 
@@ -2673,6 +2737,13 @@ export function WorkspaceCanvas() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      const worldSym = toWorld(e.clientX, e.clientY)
+      if (pieceSymmetryState?.phase === 'axisB' && pieceSymmetryState.axisA) {
+        setSymmetryHoverWorld(worldSym)
+      } else {
+        setSymmetryHoverWorld(null)
+      }
+
       if (dragging?.kind === 'workspaceNote') {
         const world = toWorld(e.clientX, e.clientY)
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -3460,6 +3531,8 @@ export function WorkspaceCanvas() {
       updateWorkspaceNote,
       horizontalLevelPickingActive,
       selectedPieceIds,
+      pieceSymmetryState,
+      setSymmetryHoverWorld,
     ]
   )
 
@@ -3665,13 +3738,19 @@ export function WorkspaceCanvas() {
         setWorkspaceImageQuickMenu(null)
         return
       }
-      if (!inInput && e.key === 'Escape' && (edgeSeamPickingActive || edgeAllowancePopover || horizontalLevelPickingActive)) {
+      if (
+        !inInput &&
+        e.key === 'Escape' &&
+        (edgeSeamPickingActive || edgeAllowancePopover || horizontalLevelPickingActive || pieceSymmetryState)
+      ) {
         e.preventDefault()
         setEdgeAllowancePopover(null)
         setHoveredEdgePicking(null)
         setEdgeSeamPickingActive(false)
         setHoveredHorizontalLevelEdge(null)
         setHorizontalLevelPickingActive(false)
+        setPieceSymmetryState(null)
+        setSymmetryHoverWorld(null)
         return
       }
       if (!inInput && e.key === 'Escape' && tool === 'profil') {
@@ -5967,6 +6046,56 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
+          {pieceSymmetryState && selectedPieceIds[0] === pieceSymmetryState.pieceId && (() => {
+            const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
+            if (!piece || !pieceSymmetryState.axisA) return null
+            const wa = pieceLocalToWorld(pieceSymmetryState.axisA, piece)
+            const EXT = 80000
+            if (pieceSymmetryState.phase === 'pickSide' && pieceSymmetryState.axisB) {
+              const a = pieceSymmetryState.axisA
+              const b = pieceSymmetryState.axisB
+              const dx = b.x - a.x
+              const dy = b.y - a.y
+              const d = Math.hypot(dx, dy) || 1
+              const ux = (dx / d) * EXT
+              const uy = (dy / d) * EXT
+              const w1 = pieceLocalToWorld({ x: a.x - ux, y: a.y - uy }, piece)
+              const w2 = pieceLocalToWorld({ x: b.x + ux, y: b.y + uy }, piece)
+              return (
+                <line
+                  key="piece-symmetry-axis"
+                  x1={w1.x}
+                  y1={w1.y}
+                  x2={w2.x}
+                  y2={w2.y}
+                  stroke="#0d9488"
+                  strokeWidth={2.8}
+                  strokeDasharray="7 5"
+                  pointerEvents="none"
+                  opacity={0.95}
+                />
+              )
+            }
+            if (pieceSymmetryState.phase === 'axisB' && symmetryHoverWorld) {
+              return (
+                <g key="piece-symmetry-preview">
+                  <line
+                    x1={wa.x}
+                    y1={wa.y}
+                    x2={symmetryHoverWorld.x}
+                    y2={symmetryHoverWorld.y}
+                    stroke="#0d9488"
+                    strokeWidth={2.8}
+                    strokeDasharray="7 5"
+                    pointerEvents="none"
+                    opacity={0.9}
+                  />
+                  <circle cx={wa.x} cy={wa.y} r={4} fill="#0d9488" pointerEvents="none" />
+                </g>
+              )
+            }
+            return null
+          })()}
           {horizontalLevelPickingActive && hoveredHorizontalLevelEdge && (() => {
             const piece = pieces.find((p) => p.id === hoveredHorizontalLevelEdge.pieceId)
             if (!piece) return null
@@ -6634,6 +6763,54 @@ export function WorkspaceCanvas() {
             onClick={() => {
               setHorizontalLevelPickingActive(false)
               setHoveredHorizontalLevelEdge(null)
+            }}
+            style={{
+              background: 'rgba(255,255,255,0.25)',
+              border: 'none',
+              color: '#fff',
+              padding: '2px 10px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >
+            Abbrechen
+          </button>
+        </div>
+      )}
+      {pieceSymmetryState && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 48,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#115e59',
+            color: '#fff',
+            padding: '6px 18px',
+            borderRadius: 6,
+            fontSize: 13,
+            fontFamily: 'sans-serif',
+            zIndex: 3000,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            maxWidth: 'min(96vw, 520px)',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span>
+            {pieceSymmetryState.phase === 'axisA' && 'Ersten Punkt der Spiegelachse klicken (Teilkoordinaten).'}
+            {pieceSymmetryState.phase === 'axisB' && 'Zweiten Punkt klicken — die Linie durch beide Punkte ist die Spiegelachse.'}
+            {pieceSymmetryState.phase === 'pickSide' &&
+              'Jetzt die Seite anklicken, die als Vorlage behalten werden soll (die andere Hälfte wird gespiegelt).'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setPieceSymmetryState(null)
+              setSymmetryHoverWorld(null)
             }}
             style={{
               background: 'rgba(255,255,255,0.25)',

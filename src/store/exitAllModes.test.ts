@@ -10,6 +10,7 @@ describe('exitAllModes', () => {
       piecePropertiesDialogPieceId: 'p2',
       edgeSeamPickingActive: true,
       horizontalLevelPickingActive: true,
+      pieceSymmetryState: { pieceId: 'p1', phase: 'axisA' },
       profileDialogAssignmentId: 'prof-1',
       rulerMode: true,
       rulerLine: { start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
@@ -70,6 +71,7 @@ describe('exitAllModes', () => {
     expect(s.pendingNahtzugabeClick).toBe(false)
     expect(s.edgeSeamPickingActive).toBe(false)
     expect(s.horizontalLevelPickingActive).toBe(false)
+    expect(s.pieceSymmetryState).toBeNull()
     expect(s.rulerMode).toBe(false)
     expect(s.rulerLine).toBeNull()
     expect(s.toastMessage).toBeNull()

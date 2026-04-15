@@ -72,6 +72,27 @@ import { generateConfiguratorPartGeometry } from '../configurators/generators'
 import { getDefaultConfiguratorParts } from '../configurators/registry'
 import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../workspace/workspaceMarqueeSelection'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
+import {
+  buildSymmetricContour,
+  mirrorPointAcrossLine,
+  mirrorCurveAcrossLine,
+  pointInKeepHalfPlane,
+  curveReferencePoint,
+  mirrorAngleDegrees,
+  type PieceSymmetryKeepSide,
+} from '../geometry/pieceSymmetry'
+
+/** UI: Spiegelachse für Teil-Symmetrie (Teilkoordinaten). */
+export type PieceSymmetryPhase = 'axisA' | 'axisB' | 'pickSide'
+
+export type PieceSymmetryUiState =
+  | {
+      pieceId: string
+      phase: PieceSymmetryPhase
+      axisA?: Point
+      axisB?: Point
+    }
+  | null
 
 /**
  * Wählt automatisch den richtigen Offset-Pfad: uniformer Clipper oder variabler per-Edge Offset.
@@ -346,6 +367,8 @@ type Store = {
   edgeSeamPickingActive: boolean
   /** Gerade Master-Kante wählen → Teil drehen, bis die Kante waagerecht ist. */
   horizontalLevelPickingActive: boolean
+  /** Zwei Punkte Spiegelachse, dann Seitenwahl für symmetrische Kontur. */
+  pieceSymmetryState: PieceSymmetryUiState
   /** Nahtzuordnung: 'first' = erste Naht anklicken, 'second' = zweite Naht (anderes Teil) anklicken */
   nahtzuordnungMode: 'idle' | 'first' | 'second'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
@@ -413,6 +436,7 @@ type Store = {
   setPiecePropertiesDialogPieceId: (v: string | null) => void
   setEdgeSeamPickingActive: (v: boolean) => void
   setHorizontalLevelPickingActive: (v: boolean) => void
+  setPieceSymmetryState: (v: PieceSymmetryUiState) => void
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
@@ -504,6 +528,8 @@ type Store = {
   /** Eckpunkt weich (blau) / fest (rot); gleiche Index-Basis wie updateVertex/removeVertex. */
   setVertexSoft: (pieceId: string, vertexIndex: number, soft: boolean) => void
   flipPieceAlongGrain: (pieceId: string) => void
+  /** Behält eine Halbebene, spiegelt sie auf die andere Seite (Master-Kontur wie bei Spiegeln entlang Fadenlauf). */
+  applyPieceSymmetry: (pieceId: string, axisA: Point, axisB: Point, keepSide: PieceSymmetryKeepSide) => void
   /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
   rotatePiece90: (pieceId: string) => void
   /** Rotation eines Teils setzen (Grad), Pivot bleibt fest. Für freie Drehung. */
@@ -726,6 +752,7 @@ export const useStore = create<Store>()(
   piecePropertiesDialogPieceId: null,
   edgeSeamPickingActive: false,
   horizontalLevelPickingActive: false,
+  pieceSymmetryState: null,
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   profileDialogAssignmentId: null,
@@ -1058,6 +1085,7 @@ export const useStore = create<Store>()(
   setPiecePropertiesDialogPieceId: (v) => set({ piecePropertiesDialogPieceId: v }),
   setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
   setHorizontalLevelPickingActive: (v) => set({ horizontalLevelPickingActive: v }),
+  setPieceSymmetryState: (v) => set({ pieceSymmetryState: v }),
   setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
@@ -2439,6 +2467,90 @@ export const useStore = create<Store>()(
       }
     }),
 
+  applyPieceSymmetry: (pieceId, axisA, axisB, keepSide) =>
+    set((s) => {
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      if (!piece) return { toastMessage: 'warn:Teil nicht gefunden.' }
+      const masterCurves =
+        useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+      if (masterCurves.length < 3) return { toastMessage: 'warn:Kontur zu kurz für Symmetrie.' }
+      const sym = buildSymmetricContour(masterCurves, axisA, axisB, keepSide)
+      if (!sym.ok) {
+        return { toastMessage: `warn:${sym.message}` }
+      }
+      let cutLine: Curve[]
+      let seamLine: Curve[]
+      if (useSeamLineForVertexEditing(piece) && piece.seamAllowanceMm != null) {
+        seamLine = sym.curves
+        const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)
+        if (!derived.ok) {
+          return {
+            toastMessage: `warn:${derived.message ?? 'Schnittkontur konnte nicht abgeleitet werden.'}`,
+          }
+        }
+        cutLine = derived.cutLine
+      } else {
+        cutLine = sym.curves
+        seamLine =
+          piece.seamAllowanceMm != null && cutLine.length >= 3
+            ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
+            : []
+      }
+
+      const mirroredNotches = piece.notches.map((n) => ({
+        ...n,
+        position: mirrorPointAcrossLine(n.position, axisA, axisB),
+        angle: mirrorAngleDegrees(n.angle, axisA, axisB),
+        sNormalized: undefined as number | undefined,
+        arcLengthMm: undefined as number | undefined,
+      }))
+      const notches = mirroredNotches
+        .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
+        .filter((n): n is Notch => n != null)
+
+      const drills = piece.drills.map((d) => ({
+        ...d,
+        center: mirrorPointAcrossLine(d.center, axisA, axisB),
+      }))
+
+      const internalLines: Curve[] = []
+      for (const c of piece.internalLines) {
+        const ref = curveReferencePoint(c)
+        if (pointInKeepHalfPlane(ref, axisA, axisB, keepSide)) {
+          internalLines.push(c)
+          internalLines.push(mirrorCurveAcrossLine(c, axisA, axisB))
+        }
+      }
+
+      const grainLine = piece.grainLine
+        ? {
+            start: mirrorPointAcrossLine(piece.grainLine.start, axisA, axisB),
+            end: mirrorPointAcrossLine(piece.grainLine.end, axisA, axisB),
+          }
+        : null
+
+      return {
+        workspace: {
+          ...s.workspace,
+          pieces: s.workspace.pieces.map((p) =>
+            p.id === pieceId
+              ? applySharpCornerPromotion({
+                  ...p,
+                  cutLine,
+                  seamLine,
+                  notches,
+                  drills,
+                  internalLines,
+                  grainLine,
+                })
+              : p
+          ),
+        },
+        pieceSymmetryState: null,
+        toastMessage: 'success:Teil symmetrisch gemacht.',
+      }
+    }),
+
   setPieceRotation: (pieceId, rotationDeg) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
@@ -2604,6 +2716,7 @@ export const useStore = create<Store>()(
       piecePropertiesDialogPieceId: null,
       edgeSeamPickingActive: false,
       horizontalLevelPickingActive: false,
+      pieceSymmetryState: null,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       profileDialogAssignmentId: null,
@@ -2770,6 +2883,7 @@ export const useStore = create<Store>()(
       piecePropertiesDialogPieceId: null,
       edgeSeamPickingActive: false,
       horizontalLevelPickingActive: false,
+      pieceSymmetryState: null,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       rulerMode: false,

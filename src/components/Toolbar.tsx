@@ -103,6 +103,9 @@ export function Toolbar() {
     batchDeleteMarqueeCompletePieces,
     setEdgeSeamPickingActive,
     setHorizontalLevelPickingActive,
+    contourEditEnabled,
+    pieceSymmetryState,
+    setPieceSymmetryState,
   } = useStore()
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
@@ -711,6 +714,34 @@ export function Toolbar() {
                   onClick={() => handleBearbeiten('massstab')}
                 >
                   Maßstab <span className="menubar-shortcut">M</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className={`menubar-dropdown-btn${pieceSymmetryState ? ' active' : ''}`}
+                  disabled={selectedPieceIds.length !== 1}
+                  onClick={() => {
+                    if (selectedPieceIds.length !== 1) return
+                    if (!contourEditEnabled) {
+                      setToastMessage('warn:Layout-Modus: Unten „Kontur bearbeiten“ einschalten.')
+                      closeMenu()
+                      return
+                    }
+                    if (pieceSymmetryState) {
+                      setPieceSymmetryState(null)
+                    } else {
+                      setTool('select')
+                      setRulerMode(false)
+                      setPendingNahtzugabeClick(false)
+                      setEdgeSeamPickingActive(false)
+                      setHorizontalLevelPickingActive(false)
+                      setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'axisA' })
+                    }
+                    closeMenu()
+                  }}
+                >
+                  Teil-Symmetrie (Spiegelachse)
                 </button>
               </li>
               <li className="menubar-separator" />

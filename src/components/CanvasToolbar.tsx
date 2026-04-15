@@ -42,6 +42,8 @@ export const CanvasToolbar: React.FC = () => {
   const setEdgeSeamPickingActive = useStore((s) => s.setEdgeSeamPickingActive)
   const horizontalLevelPickingActive = useStore((s) => s.horizontalLevelPickingActive)
   const setHorizontalLevelPickingActive = useStore((s) => s.setHorizontalLevelPickingActive)
+  const pieceSymmetryState = useStore((s) => s.pieceSymmetryState)
+  const setPieceSymmetryState = useStore((s) => s.setPieceSymmetryState)
   const selectedPieceIds = useStore((s) => s.selectedPieceIds)
 
   const layoutOnly = !contourEditEnabled
@@ -60,6 +62,7 @@ export const CanvasToolbar: React.FC = () => {
     } else {
       setEdgeSeamPickingActive(false)
       setHorizontalLevelPickingActive(false)
+      setPieceSymmetryState(null)
       setPendingNahtzugabeClick(true)
     }
   }
@@ -72,6 +75,7 @@ export const CanvasToolbar: React.FC = () => {
     } else {
       setPendingNahtzugabeClick(false)
       setHorizontalLevelPickingActive(false)
+      setPieceSymmetryState(null)
       setEdgeSeamPickingActive(true)
     }
   }
@@ -80,8 +84,12 @@ export const CanvasToolbar: React.FC = () => {
     if (!guardContourEdit()) return
     const next = !rulerMode
     setRulerMode(next)
-    if (next) setHorizontalLevelPickingActive(false)
+    if (next) {
+      setHorizontalLevelPickingActive(false)
+      setPieceSymmetryState(null)
+    }
   }
+
 
   const handleHorizontalLevel = () => {
     if (selectedPieceIds.length !== 1) return
@@ -92,7 +100,23 @@ export const CanvasToolbar: React.FC = () => {
       setRulerMode(false)
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
+      setPieceSymmetryState(null)
       setHorizontalLevelPickingActive(true)
+    }
+  }
+
+  const handlePieceSymmetry = () => {
+    if (selectedPieceIds.length !== 1) return
+    if (!guardContourEdit()) return
+    if (pieceSymmetryState) {
+      setPieceSymmetryState(null)
+    } else {
+      setTool('select')
+      setRulerMode(false)
+      setPendingNahtzugabeClick(false)
+      setEdgeSeamPickingActive(false)
+      setHorizontalLevelPickingActive(false)
+      setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'axisA' })
     }
   }
 
@@ -101,7 +125,8 @@ export const CanvasToolbar: React.FC = () => {
     !rulerMode &&
     !pendingNahtzugabeClick &&
     !edgeSeamPickingActive &&
-    !horizontalLevelPickingActive
+    !horizontalLevelPickingActive &&
+    !pieceSymmetryState
   const dim = layoutOnly ? ' canvas-tool-btn--layout-only' : ''
 
   return (
@@ -149,6 +174,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -166,6 +192,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -187,6 +214,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -205,6 +233,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -224,6 +253,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -273,6 +303,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -291,6 +322,7 @@ export const CanvasToolbar: React.FC = () => {
           setPendingNahtzugabeClick(false)
           setEdgeSeamPickingActive(false)
           setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
         }}
       >
         <svg {...iconProps}>
@@ -325,6 +357,18 @@ export const CanvasToolbar: React.FC = () => {
           <circle cx="10" cy="10.5" r="2.2" fill="currentColor" stroke="none" opacity={0.35} />
           <circle cx="10" cy="10.5" r="1.1" fill="currentColor" stroke="none" />
           <path d="M3.5 5h13" opacity={0.55} />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`canvas-tool-btn${pieceSymmetryState ? ' active' : ''}`}
+        title="Symmetrie: Spiegelachse legen, eine Seite als Vorlage"
+        disabled={selectedPieceIds.length !== 1}
+        onClick={handlePieceSymmetry}
+      >
+        <svg {...iconProps}>
+          <path d="M10 3.5v13" strokeDasharray="2 2" opacity={0.45} />
+          <path d="M4 7l6 3-6 3V7zm12 0l-6 3 6 3V7z" />
         </svg>
       </button>
     </div>
