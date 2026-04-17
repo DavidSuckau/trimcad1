@@ -991,7 +991,6 @@ const PieceGroup = memo(function PieceGroup({
         const isHovered = hoveredNotchId === n.id
         const stroke = isHovered ? T.notch.strokeHover : NOTCH_STROKE
         const strokeW = isHovered ? 0.7 : 0.4
-        const circleR = isHovered ? 1 : 0.8
         return (
           <g key={n.id} pointerEvents="none">
             {cutFillD ? <path d={cutFillD} fill={T.notch.fill} stroke="none" /> : null}
@@ -1002,14 +1001,6 @@ const PieceGroup = memo(function PieceGroup({
               strokeWidth={cutIsLine ? Math.max(strokeW, 0.55) : strokeW}
               strokeLinejoin="round"
               strokeLinecap={cutIsLine ? 'round' : 'butt'}
-            />
-            <circle
-              cx={cutPos.position.x}
-              cy={cutPos.position.y}
-              r={circleR}
-              fill="none"
-              stroke={stroke}
-              strokeWidth={isHovered ? 0.5 : 0.3}
             />
             {seamFillD ? <path d={seamFillD} fill={T.notch.fill} stroke="none" /> : null}
             {seamEdgesD ? (
