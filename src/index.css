@@ -1061,8 +1061,9 @@ body {
 }
 
 .settings-modal.stueckliste-modal {
-  width: min(960px, 95vw);
-  max-width: 95vw;
+  width: calc(100vw - 32px);
+  max-width: calc(100vw - 32px);
+  max-height: 92vh;
 }
 
 .stueckliste-summary {
@@ -1314,7 +1315,9 @@ body {
 
 .stueckliste-material-input {
   min-width: 7rem;
-  max-width: 12rem;
+  max-width: min(28rem, 100%);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .settings-header {
