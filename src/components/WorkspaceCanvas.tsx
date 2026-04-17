@@ -2857,6 +2857,11 @@ export function WorkspaceCanvas() {
         )
         return
       }
+      if (!layoutOnly && tool === 'notch' && notchEdgeMidMode && selectedPieceIds.length !== 1) {
+        setToastMessage('warn: Kerben Kantenmitte: bitte genau ein Schnittteil in der Liste auswaehlen.')
+        setNotchEdgeMidMode(false)
+        return
+      }
       if (!layoutOnly && tool === 'notch' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
@@ -7271,7 +7276,7 @@ export function WorkspaceCanvas() {
             textAlign: 'right',
           }}
         >
-          Leertaste: Menü — gerade Kante anklicken — Escape: abbrechen
+          Gerade Kante anklicken (Mitte) — max. 20 mm zur Kante — Escape: abbrechen
         </div>
       )}
       {notchEdgeSpaceMenu && tool === 'notch' && !dragging && (
@@ -7298,6 +7303,7 @@ export function WorkspaceCanvas() {
             fontFamily: 'sans-serif',
           }}
           onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
         >
           <div style={{ padding: '6px 12px', color: '#666', fontSize: 11, borderBottom: '1px solid #eee' }}>
             Kerbe auf gerader Kante
@@ -7305,10 +7311,15 @@ export function WorkspaceCanvas() {
           <button
             type="button"
             role="menuitem"
-            onClick={() => {
+            onPointerDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
               setNotchEdgeLineCount(1)
               setNotchEdgeMidMode(true)
-              setNotchEdgeSpaceMenu(null)
+              setToastMessage(
+                'success: Kantenmitte — jetzt eine gerade Kante treffen (bis ca. 20 mm Abstand).'
+              )
+              window.setTimeout(() => setNotchEdgeSpaceMenu(null), 0)
             }}
             style={{
               display: 'block',
@@ -7326,9 +7337,13 @@ export function WorkspaceCanvas() {
           <button
             type="button"
             role="menuitem"
-            onClick={() => {
-              setNotchEdgeSpaceMenu(null)
-              setNotchEdgeLineCountEditor({ countStr: String(notchEdgeLineCount) })
+            onPointerDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              window.setTimeout(() => {
+                setNotchEdgeSpaceMenu(null)
+                setNotchEdgeLineCountEditor({ countStr: String(notchEdgeLineCount) })
+              }, 0)
             }}
             style={{
               display: 'block',
@@ -7345,7 +7360,11 @@ export function WorkspaceCanvas() {
           </button>
           <button
             type="button"
-            onClick={() => setNotchEdgeSpaceMenu(null)}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              window.setTimeout(() => setNotchEdgeSpaceMenu(null), 0)
+            }}
             style={{
               display: 'block',
               width: '100%',
