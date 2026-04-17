@@ -1676,6 +1676,8 @@ export function WorkspaceCanvas() {
   const [notchEdgeLineCount, setNotchEdgeLineCount] = useState(1)
   const [notchEdgeLineCountEditor, setNotchEdgeLineCountEditor] = useState<{ countStr: string } | null>(null)
   const notchEdgeLineCountInputRef = useRef<HTMLInputElement | null>(null)
+  /** Kerben: Leertaste → kleines Menü (Mitte vs. Anzahl). */
+  const [notchEdgeSpaceMenu, setNotchEdgeSpaceMenu] = useState<{ clientX: number; clientY: number } | null>(null)
   const [notchPreview, setNotchPreview] = useState<{
     pieceId: string
     position: Point
@@ -4162,12 +4164,14 @@ export function WorkspaceCanvas() {
     setNotchEditTarget(null)
     setNotchEdgeMidMode(false)
     setNotchEdgeLineCountEditor(null)
+    setNotchEdgeSpaceMenu(null)
   }, [closeSegmentMenu])
 
   useEffect(() => {
     if (tool !== 'notch') {
       setNotchEdgeMidMode(false)
       setNotchEdgeLineCountEditor(null)
+      setNotchEdgeSpaceMenu(null)
     }
   }, [tool])
 
@@ -4366,11 +4370,14 @@ export function WorkspaceCanvas() {
       }
       if (contourEditEnabled && !inInput && !dragging && tool === 'notch' && e.key === ' ') {
         e.preventDefault()
-        if (!notchEdgeMidMode) {
-          setNotchEdgeMidMode(true)
+        if (notchEdgeSpaceMenu) {
+          setNotchEdgeSpaceMenu(null)
           return
         }
-        setNotchEdgeLineCountEditor({ countStr: String(notchEdgeLineCount) })
+        setNotchEdgeSpaceMenu({
+          clientX: lastPointerClientRef.current.x,
+          clientY: lastPointerClientRef.current.y,
+        })
         return
       }
       if (contourEditEnabled && !inInput && !dragging && hoveredInternalLine && !hoveredSeamAssignmentId && e.key === ' ') {
@@ -4439,6 +4446,10 @@ export function WorkspaceCanvas() {
           e.preventDefault()
           if (notchEdgeLineCountEditor) {
             setNotchEdgeLineCountEditor(null)
+            return
+          }
+          if (notchEdgeSpaceMenu) {
+            setNotchEdgeSpaceMenu(null)
             return
           }
           if (dragging?.kind === 'notch') {
@@ -7260,7 +7271,96 @@ export function WorkspaceCanvas() {
             textAlign: 'right',
           }}
         >
-          Kantenmitte: Leertaste erneut = Anzahl — dann gerade Kante klicken — Escape: abbrechen
+          Leertaste: Menü — gerade Kante anklicken — Escape: abbrechen
+        </div>
+      )}
+      {notchEdgeSpaceMenu && tool === 'notch' && !dragging && (
+        <div
+          role="menu"
+          style={{
+            position: 'fixed',
+            left: Math.min(
+              notchEdgeSpaceMenu.clientX + 6,
+              (typeof window !== 'undefined' ? window.innerWidth : 800) - 260
+            ),
+            top: Math.min(
+              notchEdgeSpaceMenu.clientY + 6,
+              (typeof window !== 'undefined' ? window.innerHeight : 600) - 140
+            ),
+            zIndex: 10001,
+            background: '#fff',
+            border: '1px solid #ccc',
+            borderRadius: 8,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+            padding: '6px 0',
+            minWidth: 220,
+            fontSize: 13,
+            fontFamily: 'sans-serif',
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div style={{ padding: '6px 12px', color: '#666', fontSize: 11, borderBottom: '1px solid #eee' }}>
+            Kerbe auf gerader Kante
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setNotchEdgeLineCount(1)
+              setNotchEdgeMidMode(true)
+              setNotchEdgeSpaceMenu(null)
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 14px',
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            Eine Kerbe: Kantenmitte
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setNotchEdgeSpaceMenu(null)
+              setNotchEdgeLineCountEditor({ countStr: String(notchEdgeLineCount) })
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 14px',
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            Mehrere Kerben: gleichmäßig (Anzahl)…
+          </button>
+          <button
+            type="button"
+            onClick={() => setNotchEdgeSpaceMenu(null)}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '6px 14px',
+              border: 'none',
+              borderTop: '1px solid #eee',
+              background: '#fafafa',
+              cursor: 'pointer',
+              fontSize: 12,
+              color: '#666',
+            }}
+          >
+            Schließen
+          </button>
         </div>
       )}
       {notchEdgeLineCountEditor && tool === 'notch' && (
@@ -7277,6 +7377,7 @@ export function WorkspaceCanvas() {
             }
             setNotchEdgeLineCount(raw)
             setNotchEdgeLineCountEditor(null)
+            setNotchEdgeMidMode(true)
           }}
           style={{
             position: 'absolute',
