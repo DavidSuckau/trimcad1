@@ -29,7 +29,13 @@ import {
   notchCutoutPoints,
   type NotchCutoutGeom,
 } from '../geometry/notchOnCurve'
-import { isNotchSpacingValid } from '../geometry/notchMinSpacing'
+import { isNotchSpacingValid, NOTCH_MIN_SPACING_MM } from '../geometry/notchMinSpacing'
+import {
+  evenlySpacedTsOnLineSegment,
+  lineSegmentLengthMm,
+  midpointOnLineSegment,
+  pointAtLineSegmentT,
+} from '../geometry/notchEdgeMidpoint'
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   getCornerRange,
@@ -66,6 +72,8 @@ import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContour
 let T: CanvasTheme = canvasTheme
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
 const GRID_SIZE = 10
+/** Kerben Kantenmitte: max. gleichzeitig verteilte Kerben pro Kante. */
+const NOTCH_EDGE_LINE_MAX = 30
 
 /**
  * Kontur-/Bearbeitungspunkte: Größe in „Bildschirm-SVG-Einheiten“ (nach view.zoom im Parent).
@@ -1662,6 +1670,12 @@ export function WorkspaceCanvas() {
   const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
   /** Kerbe bearbeiten (Typ/Breite/Tiefe); unabhängig vom Hover, damit das Panel bedienbar bleibt. */
   const [notchEditTarget, setNotchEditTarget] = useState<{ pieceId: string; notchId: string } | null>(null)
+  /** Kerben: Leertaste → nächster Klick setzt Kerbe in der Mitte einer geraden Kante. */
+  const [notchEdgeMidMode, setNotchEdgeMidMode] = useState(false)
+  /** Anzahl Kerben gleichmäßig auf der nächsten angeklickten geraden Kante (≥1). */
+  const [notchEdgeLineCount, setNotchEdgeLineCount] = useState(1)
+  const [notchEdgeLineCountEditor, setNotchEdgeLineCountEditor] = useState<{ countStr: string } | null>(null)
+  const notchEdgeLineCountInputRef = useRef<HTMLInputElement | null>(null)
   const [notchPreview, setNotchPreview] = useState<{
     pieceId: string
     position: Point
@@ -2862,8 +2876,141 @@ export function WorkspaceCanvas() {
         }
         const nearest = nearestCurveIndexAndPoint(local, curves)
         if (!nearest || nearest.distance > maxSnapDistance) {
+          if (notchEdgeMidMode) {
+            setToastMessage('warn: Nahe einer Kante klicken (Kantenmitte-Modus, 20 mm).')
+            return
+          }
           selectPiece(null)
           setTool('select')
+          return
+        }
+        const seg = curves[nearest.curveIndex]
+        if (notchEdgeMidMode) {
+          if (!seg || seg.type !== 'line') {
+            setToastMessage('warn: Kantenmitte-Modus: nur gerade Kanten (Liniensegmente).')
+            return
+          }
+          const lineSeg = seg
+          const n = Math.min(NOTCH_EDGE_LINE_MAX, Math.max(1, notchEdgeLineCount))
+          const Lmm = lineSegmentLengthMm(lineSeg)
+          if (n > 1 && Lmm + 1e-6 < NOTCH_MIN_SPACING_MM * (n + 1)) {
+            setToastMessage(
+              `error: Kante zu kurz für ${n} Kerben (je Teilung mind. ${NOTCH_MIN_SPACING_MM} mm; Kante ca. ${Lmm.toFixed(1)} mm).`
+            )
+            return
+          }
+          if (n === 1) {
+            const { point, t } = midpointOnLineSegment(lineSeg)
+            setNotchPreview(null)
+            setNotchEdgeMidMode(false)
+            setDragging({
+              kind: 'notch',
+              pieceId,
+              position: point,
+              current: point,
+              curveIndex: nearest.curveIndex,
+              t,
+              useSeamLine: useSeam,
+            })
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
+          const presetIdx = Math.max(0, Math.min(notchSettings.length - 1, activeNotchPresetIndex))
+          const notchPreset = notchSettings[presetIdx] ?? { type: 'strich' as const, widthMm: 2.5, depthMm: 2 }
+          const modelFields = modelNotchFieldsFromPreset(notchPreset)
+          if (!modelFields) {
+            setToastMessage('error: Kerben-Preset ungueltig.')
+            return
+          }
+          const { type: notchModelType, depth: defaultDepth, width: defaultWidth } = modelFields
+          const curvesForAngle = useSeam && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+          const ts = evenlySpacedTsOnLineSegment(n)
+          type EdgeNotchCand = {
+            cutCi: number
+            cutT: number
+            notchPos: Point
+            notchAngle: number
+            seamAdd: boolean
+          }
+          const cands: EdgeNotchCand[] = []
+          for (const tMaster of ts) {
+            const posMaster = pointAtLineSegmentT(lineSeg, tMaster)
+            if (useSeam && piece.seamLine.length >= 3) {
+              const cutNearest = nearestCurveIndexAndPoint(posMaster, piece.cutLine)
+              if (!cutNearest) {
+                setToastMessage('error: Kerbe auf Schnittkontur nicht abbildbar.')
+                return
+              }
+              const cutCi = cutNearest.curveIndex
+              const cutT = cutNearest.t ?? 0
+              let notchAngle: number
+              if (notchModelType === 'single') {
+                const ct = cutNearest.t ?? 0
+                notchAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, ct) + 180
+              } else {
+                notchAngle = outwardNormalAngleAt(curvesForAngle, nearest.curveIndex, tMaster) + 180
+              }
+              cands.push({
+                cutCi,
+                cutT,
+                notchPos: cutNearest.point,
+                notchAngle,
+                seamAdd: true,
+              })
+            } else {
+              let notchAngle: number
+              if (notchModelType === 'single') {
+                notchAngle = outwardNormalAngleAt(piece.cutLine, nearest.curveIndex, tMaster) + 180
+              } else {
+                notchAngle = outwardNormalAngleAt(curvesForAngle, nearest.curveIndex, tMaster) + 180
+              }
+              const notchPos =
+                nearestCurveIndexAndPoint(posMaster, piece.cutLine)?.point ?? posMaster
+              cands.push({
+                cutCi: nearest.curveIndex,
+                cutT: tMaster,
+                notchPos,
+                notchAngle,
+                seamAdd: false,
+              })
+            }
+          }
+          for (const c of cands) {
+            if (!isNotchSpacingValid(piece, c.cutCi, c.cutT)) {
+              setToastMessage(
+                'error: Abstand zu vorhandener Kerbe zu gering (mind. 4 mm). Weniger Kerben wählen oder andere Kante.'
+              )
+              return
+            }
+          }
+          for (const c of cands) {
+            const id = 'n' + Math.random().toString(36).slice(2, 9)
+            if (c.seamAdd) {
+              addNotch(pieceId, {
+                id,
+                position: c.notchPos,
+                angle: c.notchAngle,
+                type: notchModelType,
+                depth: defaultDepth,
+                width: defaultWidth,
+              })
+            } else {
+              const pathL = pathLengthAt(piece.cutLine, c.cutCi, c.cutT)
+              const total = totalPathLength(piece.cutLine)
+              addNotch(pieceId, {
+                id,
+                position: c.notchPos,
+                angle: c.notchAngle,
+                type: notchModelType,
+                depth: defaultDepth,
+                width: defaultWidth,
+                sNormalized: total > 0 ? pathL / total : undefined,
+                arcLengthMm: total > 0 ? pathL : undefined,
+              })
+            }
+          }
+          setNotchPreview(null)
+          setNotchEdgeMidMode(false)
           return
         }
         const position = nearest.point
@@ -3014,6 +3161,11 @@ export function WorkspaceCanvas() {
       hoveredSymmetryInternalIdx,
       setHoveredSymmetryEdge,
       setHoveredSymmetryInternalIdx,
+      notchEdgeMidMode,
+      setNotchEdgeMidMode,
+      notchEdgeLineCount,
+      notchSettings,
+      activeNotchPresetIndex,
     ]
   )
 
@@ -4008,7 +4160,29 @@ export function WorkspaceCanvas() {
     closeSegmentMenu()
     setWorkspaceNoteEditor(null)
     setNotchEditTarget(null)
+    setNotchEdgeMidMode(false)
+    setNotchEdgeLineCountEditor(null)
   }, [closeSegmentMenu])
+
+  useEffect(() => {
+    if (tool !== 'notch') {
+      setNotchEdgeMidMode(false)
+      setNotchEdgeLineCountEditor(null)
+    }
+  }, [tool])
+
+  const notchEdgeLineCountEditorActiveRef = useRef(false)
+  useEffect(() => {
+    if (notchEdgeLineCountEditor) {
+      if (!notchEdgeLineCountEditorActiveRef.current) {
+        notchEdgeLineCountEditorActiveRef.current = true
+        notchEdgeLineCountInputRef.current?.focus()
+        notchEdgeLineCountInputRef.current?.select()
+      }
+    } else {
+      notchEdgeLineCountEditorActiveRef.current = false
+    }
+  }, [notchEdgeLineCountEditor])
 
   useEffect(() => {
     const skipMiddle = (el: HTMLElement | null) => {
@@ -4094,7 +4268,12 @@ export function WorkspaceCanvas() {
         setTool('select')
         return
       }
-      if (!inInput && (rectangleSizeEditor || internalCircleRadiusEditor) && e.key === ' ') {
+      if (!inInput && notchEdgeLineCountEditor && e.key === 'Escape') {
+        e.preventDefault()
+        setNotchEdgeLineCountEditor(null)
+        return
+      }
+      if (!inInput && (rectangleSizeEditor || internalCircleRadiusEditor || notchEdgeLineCountEditor) && e.key === ' ') {
         e.preventDefault()
         return
       }
@@ -4185,6 +4364,15 @@ export function WorkspaceCanvas() {
           return
         }
       }
+      if (contourEditEnabled && !inInput && !dragging && tool === 'notch' && e.key === ' ') {
+        e.preventDefault()
+        if (!notchEdgeMidMode) {
+          setNotchEdgeMidMode(true)
+          return
+        }
+        setNotchEdgeLineCountEditor({ countStr: String(notchEdgeLineCount) })
+        return
+      }
       if (contourEditEnabled && !inInput && !dragging && hoveredInternalLine && !hoveredSeamAssignmentId && e.key === ' ') {
         const piece = pieces.find((p) => p.id === hoveredInternalLine.pieceId)
         const curve = piece?.internalLines[hoveredInternalLine.curveIndex]
@@ -4249,8 +4437,16 @@ export function WorkspaceCanvas() {
         }
         if (tool === 'notch') {
           e.preventDefault()
+          if (notchEdgeLineCountEditor) {
+            setNotchEdgeLineCountEditor(null)
+            return
+          }
           if (dragging?.kind === 'notch') {
             setDragging(null)
+            return
+          }
+          if (notchEdgeMidMode) {
+            setNotchEdgeMidMode(false)
             return
           }
           setTool('select')
@@ -7045,6 +7241,90 @@ export function WorkspaceCanvas() {
         >
           Leertaste: Breite und Hoehe eingeben
         </div>
+      )}
+      {contourEditEnabled && !dragging && tool === 'notch' && notchEdgeMidMode && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            background: 'rgba(21,101,192,0.92)',
+            color: '#fff',
+            padding: '6px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 9998,
+            pointerEvents: 'none',
+            maxWidth: 320,
+            textAlign: 'right',
+          }}
+        >
+          Kantenmitte: Leertaste erneut = Anzahl — dann gerade Kante klicken — Escape: abbrechen
+        </div>
+      )}
+      {notchEdgeLineCountEditor && tool === 'notch' && (
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            const raw = Number.parseInt(
+              notchEdgeLineCountEditor.countStr.replace(/,/g, '.').trim(),
+              10
+            )
+            if (!Number.isFinite(raw) || raw < 1 || raw > NOTCH_EDGE_LINE_MAX) {
+              setToastMessage(`error: Anzahl gueltig 1 bis ${NOTCH_EDGE_LINE_MAX}.`)
+              return
+            }
+            setNotchEdgeLineCount(raw)
+            setNotchEdgeLineCountEditor(null)
+          }}
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '10px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            zIndex: 10000,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>
+            Kerben auf Kante (1–{NOTCH_EDGE_LINE_MAX})
+          </span>
+          <input
+            ref={notchEdgeLineCountInputRef}
+            type="text"
+            inputMode="numeric"
+            value={notchEdgeLineCountEditor.countStr}
+            onChange={(ev) =>
+              setNotchEdgeLineCountEditor((s) => (s ? { ...s, countStr: ev.target.value } : s))
+            }
+            style={{
+              width: 56,
+              padding: '4px 6px',
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+          />
+          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+            OK
+          </button>
+          <button
+            type="button"
+            onClick={() => setNotchEdgeLineCountEditor(null)}
+            style={{ padding: '5px 9px', fontSize: 12 }}
+          >
+            Abbrechen
+          </button>
+        </form>
       )}
       {!dragging && hoveredInternalCircle && !internalCircleRadiusEditor && (
         <div
