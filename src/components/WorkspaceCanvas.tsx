@@ -66,6 +66,7 @@ import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFi
 import { findMatchingNotchPresetIndex, modelNotchFieldsFromPreset } from '../notch/notchPresetMapping'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
+import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
 
@@ -877,9 +878,15 @@ const PieceGroup = memo(function PieceGroup({
     !!cutSeamSwapped,
     notchIdBeingDragged ?? undefined,
   )
-  const interiorFill = piece.fillInterior != null && piece.fillInterior !== false
-    ? (typeof piece.fillInterior === 'string' ? piece.fillInterior : T.piece.fillSelected)
-    : isSelected ? T.piece.fillSelected : T.piece.fill
+  const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
+  const interiorFill =
+    piece.fillInterior != null && piece.fillInterior !== false
+      ? typeof piece.fillInterior === 'string'
+        ? piece.fillInterior
+        : materialFill ?? T.piece.fillSelected
+      : isSelected
+        ? T.piece.fillSelected
+        : T.piece.fill
   const interiorFillOpacity = interiorFill === 'none' ? undefined : (isSelected && T.piece.fill === 'none' ? 1 : 0.82)
 
   const solidStroke = isHovered ? T.piece.strokeHover

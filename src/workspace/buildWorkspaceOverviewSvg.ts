@@ -14,6 +14,7 @@ import {
   type OverviewImageSession,
 } from './workspaceOverviewBounds'
 import { canvasTheme as T } from '../theme/canvasTheme'
+import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 
 function pieceGroupTransform(p: PatternPiece): string {
@@ -53,8 +54,11 @@ export function buildWorkspaceOverviewSvgDocument(
   for (const p of pieces) {
     const tx = pieceGroupTransform(p)
     const useFill = p.fillInterior != null && p.fillInterior !== false
+    const materialFill = pieceInteriorFillFromMaterial(p.material, false)
     const fill = useFill
-      ? (typeof p.fillInterior === 'string' ? p.fillInterior : T.piece.fillSelected)
+      ? typeof p.fillInterior === 'string'
+        ? p.fillInterior
+        : materialFill ?? T.piece.fillSelected
       : T.piece.fill
     const fillOp = useFill ? '0.82' : '0'
 

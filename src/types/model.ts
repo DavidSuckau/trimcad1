@@ -114,8 +114,10 @@ export type PatternPiece = {
    * Fehlt bei alten Daten → wie true behandeln.
    */
   fillInterior?: boolean
-  /** Freitext für Stückliste / Verbrauch (z. B. Stoffart). */
+  /** Freitext für Stückliste / Verbrauch (z. B. Stoffart); gesetzt → Pastellfüllfarbe auf der Arbeitsfläche pro Bezeichnung. */
   material?: string
+  /** Freitext-Beschreibung für Stückliste (z. B. Position, Variante). */
+  description?: string
   /** Stückzahl für BOM; ganzzahlig ≥ 1. */
   bomQuantity?: number
 }

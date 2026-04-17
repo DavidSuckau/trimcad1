@@ -254,9 +254,11 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
     const areaMm2 = getCutLineAreaMm2(p)
     const perMm = getCutLinePerimeterMm(p)
     const q = p.bomQuantity ?? 1
+    const desc = (p.description ?? '').trim()
     return [
       i + 1,
       p.name,
+      desc || '—',
       q,
       fmtAreaM2(areaMm2),
       fmtLenM(perMm),
@@ -267,8 +269,8 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
 
   autoTable(doc, {
     startY: y,
-    head: [['Nr.', 'Name', 'Stückzahl', 'Fläche (m²)', 'Umfang (m)', 'Kerben', 'Material']],
-    body: bodyRows.length ? bodyRows : [['—', 'Keine Teile', '—', '—', '—', '—', '—']],
+    head: [['Nr.', 'Name', 'Beschreibung', 'Stückzahl', 'Fläche (m²)', 'Umfang (m)', 'Kerben', 'Material']],
+    body: bodyRows.length ? bodyRows : [['—', 'Keine Teile', '—', '—', '—', '—', '—', '—']],
     showHead: 'everyPage',
     styles: { fontSize: 8, cellPadding: 1.2, overflow: 'linebreak' },
     headStyles: { fillColor: [230, 230, 233], textColor: 20, fontStyle: 'bold', fontSize: 8 },
@@ -277,13 +279,14 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
     tableWidth: contentW,
     theme: 'grid',
     columnStyles: {
-      0: { cellWidth: 12 },
-      1: { cellWidth: 42 },
-      2: { cellWidth: 18 },
-      3: { cellWidth: 26 },
-      4: { cellWidth: 24 },
-      5: { cellWidth: 16 },
-      6: { cellWidth: 'auto' },
+      0: { cellWidth: 10 },
+      1: { cellWidth: 32 },
+      2: { cellWidth: 38 },
+      3: { cellWidth: 16 },
+      4: { cellWidth: 22 },
+      5: { cellWidth: 20 },
+      6: { cellWidth: 14 },
+      7: { cellWidth: 'auto' },
     },
   })
 

@@ -240,6 +240,7 @@ function createDefaultPiece(id: string, number: string): PatternPiece {
     softVerticesMaster: [],
     fillInterior: true,
     material: '',
+    description: '',
     bomQuantity: 1,
   }
 }
@@ -685,13 +686,13 @@ export const useStore = create<Store>()(
   workspace: {
     id: 'ws1',
     name: 'Arbeitsfläche 1',
-    pieces: [createDefaultPiece('p1', '001')],
+    pieces: [],
     view: defaultView,
     seamAssignments: [],
     notes: [],
     profileAssignments: [],
   },
-  selectedPieceIds: ['p1'],
+  selectedPieceIds: [],
   selectedPoint: null,
   tool: 'select',
   canvasThemeMode: 'light' as const,

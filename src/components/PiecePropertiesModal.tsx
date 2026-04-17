@@ -77,6 +77,19 @@ export function PiecePropertiesModal() {
         </label>
 
         <label className="nahtzugabe-dialog-label">
+          <span>Teilbeschreibung (Stückliste)</span>
+          <textarea
+            className="nahtzugabe-dialog-input"
+            style={{ width: '100%', boxSizing: 'border-box', minHeight: 72, resize: 'vertical' }}
+            value={piece.description ?? ''}
+            onChange={(e) => updatePiece(piece.id, { description: e.target.value })}
+            placeholder="z. B. Vorderteil, Variante A"
+            rows={3}
+            autoComplete="off"
+          />
+        </label>
+
+        <label className="nahtzugabe-dialog-label">
           <span>Material (Stückliste)</span>
           <input
             type="text"
@@ -129,7 +142,8 @@ export function PiecePropertiesModal() {
                 onChange={() => updatePiece(piece.id, { fillInterior: true })}
               />
               <span>
-                <strong>Mit Füllung</strong> (hellgelb, wie bisher)
+                <strong>Mit Füllung</strong> – ohne Material wie bisher; mit eingetragenem Material jeweils eine Pastellfarbe
+                pro Materialbezeichnung auf der Arbeitsfläche
               </span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>

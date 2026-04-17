@@ -157,6 +157,7 @@ export function StuecklisteModal() {
                 <tr>
                   <th className="notch-nr">Nr.</th>
                   <th>Name</th>
+                  <th>Beschreibung</th>
                   <th>Stückzahl</th>
                   <th>Fläche (m²)</th>
                   <th>Umfang (m)</th>
@@ -173,6 +174,17 @@ export function StuecklisteModal() {
                     <tr key={p.id}>
                       <td className="notch-nr">{i + 1}</td>
                       <td>{p.name}</td>
+                      <td>
+                        <textarea
+                          className="notch-input stueckliste-material-input"
+                          rows={2}
+                          value={p.description ?? ''}
+                          onChange={(e) => updatePiece(p.id, { description: e.target.value })}
+                          placeholder="—"
+                          autoComplete="off"
+                          aria-label={`Beschreibung ${p.name}`}
+                        />
+                      </td>
                       <td>
                         <input
                           type="number"

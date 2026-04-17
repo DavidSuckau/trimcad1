@@ -203,6 +203,10 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       : [],
     fillInterior: raw.fillInterior === undefined ? true : Boolean(raw.fillInterior),
     material: typeof raw.material === 'string' ? raw.material : '',
+    description: (() => {
+      const d = (raw as { description?: unknown }).description
+      return typeof d === 'string' ? d : ''
+    })(),
     bomQuantity: (() => {
       const q = Number(raw.bomQuantity)
       if (!Number.isFinite(q)) return 1
