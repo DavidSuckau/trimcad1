@@ -79,6 +79,57 @@ SEQEND
 `
 }
 
+/** Geschlossenes Rechteck (ox,oy)–(ox+10,oy+10), gleiche Struktur wie `closedRectPolyline`. */
+function closedRectPolylineOffset(layer: string, ox: number, oy: number): string {
+  const x0 = ox
+  const y0 = oy
+  const x1 = ox + 10
+  const y1 = oy + 10
+  return `0
+POLYLINE
+8
+${layer}
+66
+1
+70
+1
+0
+VERTEX
+8
+${layer}
+10
+${x0}
+20
+${y0}
+0
+VERTEX
+8
+${layer}
+10
+${x1}
+20
+${y0}
+0
+VERTEX
+8
+${layer}
+10
+${x1}
+20
+${y1}
+0
+VERTEX
+8
+${layer}
+10
+${x0}
+20
+${y1}
+0
+SEQEND
+`
+}
+
 /** Rechteck 0..10 mm mit V-Kerbe an der unteren Kante (kurze Segmente, Spitze bei (5,2)). */
 function closedRectWithVNotchPolyline(layer: string): string {
   return `0
@@ -398,5 +449,323 @@ EOF
     expect(r.pieces[0].seamAllowanceMm).toBe(2)
     expect(r.pieces[0].seamLine.length).toBeGreaterThanOrEqual(3)
     expect(r.pieces[0].cutLine.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('dedupliziert identische Schnittkonturen im Modellraum', () => {
+    const dxf = DXF_HEADER + closedRectPolyline('CUT') + closedRectPolyline('CUT') + DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.warnings?.some((w) => /doppelte Schnittkontur/i.test(w))).toBe(true)
+  })
+
+  it('dedupliziert nahezu identische Modellraum-Konturen (leichte Verschiebung)', () => {
+    const dxf =
+      DXF_HEADER + closedRectPolyline('CUT') + closedRectPolylineOffset('CUT', 0.25, 0.25) + DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.warnings?.some((w) => /nahezu identische Schnittkontur/i.test(w))).toBe(true)
+  })
+
+  it('dedupliziert nicht zwei getrennte gleich große Teile mit großem Abstand', () => {
+    const dxf =
+      DXF_HEADER + closedRectPolyline('CUT') + closedRectPolylineOffset('CUT', 80, 0) + DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(2)
+    expect((r.warnings ?? []).some((w) => /nahezu identische Schnittkontur/i.test(w))).toBe(false)
+  })
+
+  it('dedupliziert Block- und Modellraum-Kontur bei gleicher Geometrie', () => {
+    const dxf = `0
+SECTION
+2
+HEADER
+9
+$INSUNITS
+70
+5
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+INSERT
+8
+0
+2
+P1
+10
+0
+20
+0
+41
+1
+42
+1
+0
+POLYLINE
+8
+CUT
+66
+1
+70
+1
+0
+VERTEX
+8
+CUT
+10
+0
+20
+0
+0
+VERTEX
+8
+CUT
+10
+10
+20
+0
+0
+VERTEX
+8
+CUT
+10
+10
+20
+10
+0
+VERTEX
+8
+CUT
+10
+0
+20
+10
+0
+SEQEND
+0
+ENDSEC
+0
+SECTION
+2
+BLOCKS
+0
+BLOCK
+8
+0
+2
+P1
+70
+0
+10
+0
+20
+0
+0
+POLYLINE
+8
+CUT
+66
+1
+70
+1
+0
+VERTEX
+8
+CUT
+10
+0
+20
+0
+0
+VERTEX
+8
+CUT
+10
+10
+20
+0
+0
+VERTEX
+8
+CUT
+10
+10
+20
+10
+0
+VERTEX
+8
+CUT
+10
+0
+20
+10
+0
+SEQEND
+0
+ENDBLK
+0
+ENDSEC
+0
+EOF
+`
+    const r = importDxfFromString(dxf)
+    expect(r.error).toBeUndefined()
+    expect(r.pieces.length).toBe(1)
+    expect(r.warnings?.some((w) => /doppelte Schnittkontur/i.test(w))).toBe(true)
+  })
+
+  it('dedupliziert Block und minimal verschobenen Modellraum (Near-Match)', () => {
+    const dxf = `0
+SECTION
+2
+HEADER
+9
+$INSUNITS
+70
+5
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+INSERT
+8
+0
+2
+P1
+10
+0
+20
+0
+41
+1
+42
+1
+0
+POLYLINE
+8
+CUT
+66
+1
+70
+1
+0
+VERTEX
+8
+CUT
+10
+0.2
+20
+0.2
+0
+VERTEX
+8
+CUT
+10
+10.2
+20
+0.2
+0
+VERTEX
+8
+CUT
+10
+10.2
+20
+10.2
+0
+VERTEX
+8
+CUT
+10
+0.2
+20
+10.2
+0
+SEQEND
+0
+ENDSEC
+0
+SECTION
+2
+BLOCKS
+0
+BLOCK
+8
+0
+2
+P1
+70
+0
+10
+0
+20
+0
+0
+POLYLINE
+8
+CUT
+66
+1
+70
+1
+0
+VERTEX
+8
+CUT
+10
+0
+20
+0
+0
+VERTEX
+8
+CUT
+10
+10
+20
+0
+0
+VERTEX
+8
+CUT
+10
+10
+20
+10
+0
+VERTEX
+8
+CUT
+10
+0
+20
+10
+0
+SEQEND
+0
+ENDBLK
+0
+ENDSEC
+0
+EOF
+`
+    const r = importDxfFromString(dxf)
+    expect(r.error).toBeUndefined()
+    expect(r.pieces.length).toBe(1)
+    expect(r.warnings?.some((w) => /nahezu identische Schnittkontur/i.test(w))).toBe(true)
+  })
+
+  it('erkennt Schnitt auf Layer 0 nur mit extraCutLayers', () => {
+    const dxf = DXF_HEADER + closedRectPolyline('0') + DXF_FOOTER
+    expect(importDxfFromString(dxf).pieces.length).toBe(0)
+    const with0 = importDxfFromString(dxf, { extraCutLayers: parseExtraCutLayers('0') })
+    expect(with0.pieces.length).toBe(1)
   })
 })

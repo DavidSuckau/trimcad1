@@ -1,9 +1,10 @@
 import { useRef, useCallback, useState, useEffect, useMemo, memo } from 'react'
+import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore as useZustandStore } from 'zustand'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore, undoAction, redoAction } from '../store/useStore'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
-import type { NotchSetting } from '../store/useStore'
 import { CanvasToolbar } from './CanvasToolbar'
 import {
   curveToPathD,
@@ -45,14 +46,21 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '..
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
 import { masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
-import { crossZ } from '../geometry/pieceSymmetry'
+import {
+  crossZ,
+  symmetryAxisEndpointsFromInternalCurve,
+  symmetryAxisEndpointsFromStraightMasterEdge,
+  SYMMETRY_INTERNAL_HOVER_MM,
+} from '../symmetry'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType } from '../types/model'
+import { findMatchingNotchPresetIndex, modelNotchFieldsFromPreset } from '../notch/notchPresetMapping'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
+import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
 
 let T: CanvasTheme = canvasTheme
@@ -102,16 +110,6 @@ function cloneVertexDragNotches(notches: PatternPiece['notches']): PatternPiece[
   return notches.map((n) => ({ ...n, position: { ...n.position } }))
 }
 
-/** Einstellungs-Preset → Modell-Notch; bei „keine“ wird nichts gesetzt. */
-function modelNotchFieldsFromPreset(p: NotchSetting): { type: ModelNotchType; depth: number; width: number } | null {
-  if (p.type === 'keine') return null
-  return {
-    type: p.type === 'kerbe' ? 'v' : 'single',
-    depth: Math.max(0.5, p.depthMm || 4),
-    width: Math.max(0.5, p.widthMm || 6),
-  }
-}
-
 /** SVG-Pfade für Kerben-Darstellung (V oder Strich = eine Linie). */
 function notchCutoutSvgPaths(geom: NotchCutoutGeom): { fillD: string; edgesD: string } {
   if (geom.kind === 'line') {
@@ -159,22 +157,6 @@ function distanceToNotchCutoutGeom(
     Math.hypot(local.x - cutPosCenter.x, local.y - cutPosCenter.y),
     ...tri.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y))
   )
-}
-
-function findMatchingNotchPresetIndex(notch: { type: ModelNotchType; depth: number; width?: number }, settings: NotchSetting[]): number | null {
-  const w = notch.width ?? 6
-  for (let i = 0; i < settings.length; i++) {
-    const f = modelNotchFieldsFromPreset(settings[i])
-    if (!f) continue
-    if (
-      f.type === notch.type &&
-      Math.abs(f.depth - notch.depth) < 0.02 &&
-      Math.abs(f.width - w) < 0.02
-    ) {
-      return i
-    }
-  }
-  return null
 }
 
 function workspaceImageLayout(session: {
@@ -292,7 +274,7 @@ function worldToPieceLocal(
   const cos = Math.cos(rad)
   const sin = Math.sin(rad)
   let lx = dx * cos - dy * sin
-  let ly = dx * sin + dy * cos
+  const ly = dx * sin + dy * cos
   if (mirrored) lx = -lx
   return { x: lx, y: ly }
 }
@@ -300,7 +282,7 @@ function worldToPieceLocal(
 function pieceLocalToWorld(local: Point, piece: PatternPiece): Point {
   const { x: tx, y: ty, rotation, mirrored } = piece.transform
   let lx = local.x
-  let ly = local.y
+  const ly = local.y
   if (mirrored) lx = -lx
   const rad = (rotation * Math.PI) / 180
   const cos = Math.cos(rad)
@@ -845,6 +827,7 @@ const PieceGroup = memo(function PieceGroup({
   showPieceNames,
   showContourMeasurements,
   hoveredInternalLineCurveIndex,
+  hoveredInternalCircleId,
   onContextMenu,
   viewZoom,
   themeMode: _themeMode,
@@ -870,6 +853,7 @@ const PieceGroup = memo(function PieceGroup({
   showPieceNames?: boolean
   showContourMeasurements?: boolean
   hoveredInternalLineCurveIndex?: number | null
+  hoveredInternalCircleId?: string | null
   onContextMenu?: (e: React.MouseEvent) => void
   viewZoom: number
   /** Theme-Modus: nur für memo-Invalidierung, T wird modulweit gesetzt. */
@@ -877,7 +861,7 @@ const PieceGroup = memo(function PieceGroup({
 }) {
   void _themeMode
   const { NOTCH_STROKE } = getVertexColors()
-  const { cutLine, seamLine, notches, drills, internalLines } = piece
+  const { cutLine, seamLine, notches, drills, internalLines, internalCircles } = piece
   const ptPs = 1 / Math.max(viewZoom, 1e-6)
   const tx = pieceGroupTransformAttr(piece)
   const { solidPath, dashedPath, hasSeam } = getPieceContourDisplayPaths(
@@ -949,6 +933,24 @@ const PieceGroup = memo(function PieceGroup({
           pointerEvents="none"
         />
       )}
+      {showInternalLines !== false && internalCircles.map((ic) => {
+        const isHovered = hoveredInternalCircleId === ic.id
+        const w = (isHovered ? T.internalLine.strokeWidthHover : T.internalLine.strokeWidth) * ptPs
+        return (
+          <circle
+            key={`internal-circle-${ic.id}`}
+            cx={ic.center.x}
+            cy={ic.center.y}
+            r={ic.radius}
+            fill="none"
+            stroke={isHovered ? T.internalLine.strokeHover : T.internalLine.stroke}
+            strokeWidth={w}
+            strokeDasharray={scaleSvgDashArray(T.internalLine.dash, ptPs)}
+            opacity={isHovered ? 1 : T.internalLine.opacity}
+            pointerEvents="none"
+          />
+        )
+      })}
       {showInternalLines !== false && internalLines.map((curve, i) => {
         const isHovered = hoveredInternalLineCurveIndex === i
         const w = (isHovered ? T.internalLine.strokeWidthHover : T.internalLine.strokeWidth) * ptPs
@@ -1380,9 +1382,12 @@ export function WorkspaceCanvas() {
     movePiece,
     addCurveToCutLine,
     addInternalLine,
+    addInternalCircle,
+    updateInternalCircle,
     addInternalLines,
     updatePiece,
     removeInternalLine,
+    removeInternalCircle,
     offsetSegment,
     addNotch,
     removeNotch,
@@ -1450,7 +1455,124 @@ export function WorkspaceCanvas() {
     addProfileAssignment,
     setProfileDialogAssignmentId,
     canvasThemeMode,
-  } = useStore()
+  } = useStore(
+    useShallow((s) => ({
+      workspace: s.workspace,
+      selectedPieceIds: s.selectedPieceIds,
+      tool: s.tool,
+      showGrid: s.showGrid,
+      showPoints: s.showPoints,
+      showGrain: s.showGrain,
+      showNotches: s.showNotches,
+      showDrills: s.showDrills,
+      showInternalLines: s.showInternalLines,
+      showPieceNames: s.showPieceNames,
+      showProfiles: s.showProfiles,
+      showContourMeasurements: s.showContourMeasurements,
+      showWorkspaceNotes: s.showWorkspaceNotes,
+      showContourChangePreview: s.showContourChangePreview,
+      contourEditEnabled: s.contourEditEnabled,
+      rulerMode: s.rulerMode,
+      setRulerMode: s.setRulerMode,
+      rulerLine: s.rulerLine,
+      setView: s.setView,
+      setRulerLine: s.setRulerLine,
+      pendingNahtzugabeClick: s.pendingNahtzugabeClick,
+      setPendingNahtzugabeClick: s.setPendingNahtzugabeClick,
+      setNahtzugabeDialogPieceId: s.setNahtzugabeDialogPieceId,
+      edgeSeamPickingActive: s.edgeSeamPickingActive,
+      setEdgeSeamPickingActive: s.setEdgeSeamPickingActive,
+      horizontalLevelPickingActive: s.horizontalLevelPickingActive,
+      setHorizontalLevelPickingActive: s.setHorizontalLevelPickingActive,
+      pieceSymmetryState: s.pieceSymmetryState,
+      setPieceSymmetryState: s.setPieceSymmetryState,
+      applyPieceSymmetry: s.applyPieceSymmetry,
+      alignPieceEdgeHorizontal: s.alignPieceEdgeHorizontal,
+      nahtzuordnungMode: s.nahtzuordnungMode,
+      setNahtzuordnungMode: s.setNahtzuordnungMode,
+      pendingNahtzuordnungFirst: s.pendingNahtzuordnungFirst,
+      setPendingNahtzuordnungFirst: s.setPendingNahtzuordnungFirst,
+      addSeamAssignment: s.addSeamAssignment,
+      removeSeamAssignment: s.removeSeamAssignment,
+      selectPiece: s.selectPiece,
+      movePiece: s.movePiece,
+      addCurveToCutLine: s.addCurveToCutLine,
+      addInternalLine: s.addInternalLine,
+      addInternalCircle: s.addInternalCircle,
+      updateInternalCircle: s.updateInternalCircle,
+      addInternalLines: s.addInternalLines,
+      updatePiece: s.updatePiece,
+      removeInternalLine: s.removeInternalLine,
+      removeInternalCircle: s.removeInternalCircle,
+      offsetSegment: s.offsetSegment,
+      addNotch: s.addNotch,
+      removeNotch: s.removeNotch,
+      removeNotchAnchor: s.removeNotchAnchor,
+      toggleNotchAnchor: s.toggleNotchAnchor,
+      updateNotch: s.updateNotch,
+      addDrill: s.addDrill,
+      addPiece: s.addPiece,
+      setTool: s.setTool,
+      insertPointOnCutLine: s.insertPointOnCutLine,
+      updateVertex: s.updateVertex,
+      replaceSegmentWithBezier: s.replaceSegmentWithBezier,
+      movePointOnCurve: s.movePointOnCurve,
+      removeVertex: s.removeVertex,
+      convertBezierSegmentToLine: s.convertBezierSegmentToLine,
+      setVertexSoft: s.setVertexSoft,
+      flipPieceAlongGrain: s.flipPieceAlongGrain,
+      rotatePiece90: s.rotatePiece90,
+      setPieceRotation: s.setPieceRotation,
+      setPiecePivot: s.setPiecePivot,
+      setGrainLine: s.setGrainLine,
+      alignPieceToGrain: s.alignPieceToGrain,
+      toastMessage: s.toastMessage,
+      setToastMessage: s.setToastMessage,
+      checkSeamAdjustment: s.checkSeamAdjustment,
+      snapSeamEdgeToMatch: s.snapSeamEdgeToMatch,
+      recomputeSeamLine: s.recomputeSeamLine,
+      digitizeState: s.digitizeState,
+      addDigitizeNode: s.addDigitizeNode,
+      updateDigitizeDrag: s.updateDigitizeDrag,
+      finishDigitizeDrag: s.finishDigitizeDrag,
+      cancelDigitize: s.cancelDigitize,
+      finishDigitize: s.finishDigitize,
+      startDigitize: s.startDigitize,
+      imageDigitizeSession: s.imageDigitizeSession,
+      workspaceImageSelected: s.workspaceImageSelected,
+      setWorkspaceImageSelected: s.setWorkspaceImageSelected,
+      setImageRenderMmPerPixel: s.setImageRenderMmPerPixel,
+      cancelImageSession: s.cancelImageSession,
+      setImagePosition: s.setImagePosition,
+      setShowHelpModal: s.setShowHelpModal,
+      deletePiece: s.deletePiece,
+      setPiecePropertiesDialogPieceId: s.setPiecePropertiesDialogPieceId,
+      setEdgeSeamAllowance: s.setEdgeSeamAllowance,
+      setWorkspaceImageLocked: s.setWorkspaceImageLocked,
+      exitAllModes: s.exitAllModes,
+      notchSettings: s.notchSettings,
+      activeNotchPresetIndex: s.activeNotchPresetIndex,
+      setMassstabDialog: s.setMassstabDialog,
+      setSeamAssignmentMetaDialogId: s.setSeamAssignmentMetaDialogId,
+      seamAssignmentMetaDialogId: s.seamAssignmentMetaDialogId,
+      batchSelectionFilter: s.batchSelectionFilter,
+      batchSelectionTargets: s.batchSelectionTargets,
+      batchUiHighlightByTargetId: s.batchUiHighlightByTargetId,
+      setBatchSelectionFilter: s.setBatchSelectionFilter,
+      setBatchSelectionTargets: s.setBatchSelectionTargets,
+      clearBatchSelection: s.clearBatchSelection,
+      setBatchUiHighlightForFiltered: s.setBatchUiHighlightForFiltered,
+      clearBatchUiHighlight: s.clearBatchUiHighlight,
+      batchSetVerticesSoft: s.batchSetVerticesSoft,
+      batchDeleteFiltered: s.batchDeleteFiltered,
+      addWorkspaceNote: s.addWorkspaceNote,
+      updateWorkspaceNote: s.updateWorkspaceNote,
+      removeWorkspaceNote: s.removeWorkspaceNote,
+      addProfileAssignment: s.addProfileAssignment,
+      setProfileDialogAssignmentId: s.setProfileDialogAssignmentId,
+      canvasThemeMode: s.canvasThemeMode,
+    })),
+  )
   T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
   const { COLOR_ECKPUNKT, COLOR_SOFT_PUNKT, COLOR_PUNKT_AUF_KURVE, NOTCH_STROKE } = getVertexColors()
   const { pieces, view, notes: workspaceNotesList } = workspace
@@ -1469,6 +1591,15 @@ export function WorkspaceCanvas() {
   } | null>(null)
   /** Weltpunkt für Vorschau Linie 2. Spiegelpunkt (Symmetrie-Modus). */
   const [symmetryHoverWorld, setSymmetryHoverWorld] = useState<Point | null>(null)
+  /** Symmetrie: gerade Master-Kante als Achse (wie Wasserwaage). */
+  const [hoveredSymmetryEdge, setHoveredSymmetryEdge] = useState<{
+    pieceId: string
+    edgeIndex: number
+    curveIndices: number[]
+    distance: number
+  } | null>(null)
+  /** Symmetrie: Index in `piece.internalLines` des Teils unter dem Mauszeiger. */
+  const [hoveredSymmetryInternalIdx, setHoveredSymmetryInternalIdx] = useState<number | null>(null)
   const [grainContextMenu, setGrainContextMenu] = useState<{
     pieceId: string
     clientX: number
@@ -1592,6 +1723,7 @@ export function WorkspaceCanvas() {
   } | null>(null)
   const [hoveredCurvepointSegment, setHoveredCurvepointSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [hoveredInternalLine, setHoveredInternalLine] = useState<{ pieceId: string; curveIndex: number } | null>(null)
+  const [hoveredInternalCircle, setHoveredInternalCircle] = useState<{ pieceId: string; circleId: string } | null>(null)
   const [digitizeMouseWorld, setDigitizeMouseWorld] = useState<Point | null>(null)
   const [digitizeNearFirst, setDigitizeNearFirst] = useState(false)
   const [lineLengthEditor, setLineLengthEditor] = useState<{
@@ -1601,8 +1733,30 @@ export function WorkspaceCanvas() {
     start: Point
     current: Point
     value: string
+    /** Nur `mode === 'draw'`: Kontur vs. interne Linie. */
+    drawTarget?: 'internal' | 'contour'
+  } | null>(null)
+  /** Interner Kreis ziehen: Leertaste → Radius in mm (Richtung der Vorschau wie beim Zug). */
+  const [internalCircleRadiusEditor, setInternalCircleRadiusEditor] = useState<{
+    pieceId: string
+    center: Point
+    /** Normiert, vom Mittelpunkt zum aktuellen Zug-Ende (fuer Vorschau). */
+    dir: Point
+    radiusStr: string
+    /** Gesetzt bei Bearbeitung per Leertaste auf existierenden Kreis. */
+    circleId?: string
+  } | null>(null)
+  /** Rechteck ziehen: Leertaste → Breite/Höhe per Tastatur (Ecke = erster Klick, Richtung aus Zug). */
+  const [rectangleSizeEditor, setRectangleSizeEditor] = useState<{
+    anchor: Point
+    signX: 1 | -1
+    signY: 1 | -1
+    widthStr: string
+    heightStr: string
   } | null>(null)
   const lineLengthInputRef = useRef<HTMLInputElement | null>(null)
+  const internalCircleRadiusInputRef = useRef<HTMLInputElement | null>(null)
+  const rectangleWidthInputRef = useRef<HTMLInputElement | null>(null)
   const lastPointerClientRef = useRef({ x: 0, y: 0 })
   const [hoveredWorkspaceImage, setHoveredWorkspaceImage] = useState(false)
   const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
@@ -1616,6 +1770,80 @@ export function WorkspaceCanvas() {
     lineLengthInputRef.current?.focus()
     lineLengthInputRef.current?.select()
   }, [lineLengthEditor?.mode, lineLengthEditor?.pieceId, lineLengthEditor?.curveIndex])
+
+  const rectangleSizeEditorActiveRef = useRef(false)
+  useEffect(() => {
+    if (rectangleSizeEditor) {
+      if (!rectangleSizeEditorActiveRef.current) {
+        rectangleSizeEditorActiveRef.current = true
+        rectangleWidthInputRef.current?.focus()
+        rectangleWidthInputRef.current?.select()
+      }
+    } else {
+      rectangleSizeEditorActiveRef.current = false
+    }
+  }, [rectangleSizeEditor])
+
+  useEffect(() => {
+    if (!rectangleSizeEditor) return
+    const w = Number.parseFloat(rectangleSizeEditor.widthStr)
+    const h = Number.parseFloat(rectangleSizeEditor.heightStr)
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return
+    const { anchor, signX, signY } = rectangleSizeEditor
+    const nextCurrent = { x: anchor.x + signX * w, y: anchor.y + signY * h }
+    setDragging((d) => {
+      if (!d || d.kind !== 'rectangle') return d
+      if (
+        d.start.x === anchor.x &&
+        d.start.y === anchor.y &&
+        d.current.x === nextCurrent.x &&
+        d.current.y === nextCurrent.y
+      ) {
+        return d
+      }
+      return { ...d, start: anchor, current: nextCurrent }
+    })
+  }, [rectangleSizeEditor])
+
+  useEffect(() => {
+    if (!lineLengthEditor || lineLengthEditor.mode !== 'draw') return
+    const mm = Number.parseFloat(lineLengthEditor.value.replace(',', '.'))
+    if (!Number.isFinite(mm) || mm <= 0) return
+    const end = pointAtDistanceOnRay(lineLengthEditor.start, lineLengthEditor.current, mm)
+    const pid = lineLengthEditor.pieceId
+    setDragging((d) => {
+      if (!d || d.kind !== 'line' || d.pieceId !== pid) return d
+      if (d.current.x === end.x && d.current.y === end.y) return d
+      return { ...d, current: end }
+    })
+  }, [lineLengthEditor])
+
+  const internalCircleRadiusEditorActiveRef = useRef(false)
+  useEffect(() => {
+    if (internalCircleRadiusEditor) {
+      if (!internalCircleRadiusEditorActiveRef.current) {
+        internalCircleRadiusEditorActiveRef.current = true
+        internalCircleRadiusInputRef.current?.focus()
+        internalCircleRadiusInputRef.current?.select()
+      }
+    } else {
+      internalCircleRadiusEditorActiveRef.current = false
+    }
+  }, [internalCircleRadiusEditor])
+
+  useEffect(() => {
+    if (!internalCircleRadiusEditor) return
+    const r = Number.parseFloat(internalCircleRadiusEditor.radiusStr.replace(',', '.'))
+    if (!Number.isFinite(r) || r < 0.5) return
+    const rClamped = Math.min(10000, r)
+    const { center, dir, pieceId } = internalCircleRadiusEditor
+    const nextCurrent = { x: center.x + dir.x * rClamped, y: center.y + dir.y * rClamped }
+    setDragging((d) => {
+      if (!d || d.kind !== 'internalCircle' || d.pieceId !== pieceId) return d
+      if (d.current.x === nextCurrent.x && d.current.y === nextCurrent.y) return d
+      return { ...d, center, current: nextCurrent }
+    })
+  }, [internalCircleRadiusEditor])
 
   const STORE_MODIFYING_DRAGS = useMemo(() => new Set([
     'vertex', 'piece', 'rotate', 'pointOnCurve', 'notchMove',
@@ -1764,6 +1992,14 @@ export function WorkspaceCanvas() {
   }, [pieceSymmetryState, selectedPieceIds, setPieceSymmetryState])
 
   useEffect(() => {
+    if (!pieceSymmetryState) {
+      setSymmetryHoverWorld(null)
+      setHoveredSymmetryEdge(null)
+      setHoveredSymmetryInternalIdx(null)
+    }
+  }, [pieceSymmetryState])
+
+  useEffect(() => {
     if (!contourEditEnabled) {
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
@@ -1835,6 +2071,8 @@ export function WorkspaceCanvas() {
         if (pieceSymmetryState) {
           setPieceSymmetryState(null)
           setSymmetryHoverWorld(null)
+          setHoveredSymmetryEdge(null)
+          setHoveredSymmetryInternalIdx(null)
         }
         return
       }
@@ -1858,14 +2096,53 @@ export function WorkspaceCanvas() {
         if (!piece) {
           setPieceSymmetryState(null)
           setSymmetryHoverWorld(null)
+          setHoveredSymmetryEdge(null)
+          setHoveredSymmetryInternalIdx(null)
           return
         }
         const local = worldToPieceLocal(world, piece)
-        if (sym.phase === 'axisA') {
+        if (sym.phase === 'pickEdge') {
+          if (
+            hoveredSymmetryEdge?.pieceId === sym.pieceId &&
+            hoveredSymmetryEdge.edgeIndex >= 0
+          ) {
+            const axis = symmetryAxisEndpointsFromStraightMasterEdge(piece, hoveredSymmetryEdge.edgeIndex)
+            if (!axis) {
+              setToastMessage('warn:Nur gerade Kanten (Linien) eignen sich als Spiegelachse.')
+              return
+            }
+            setPieceSymmetryState({
+              pieceId: sym.pieceId,
+              phase: 'pickSide',
+              axisA: axis.axisA,
+              axisB: axis.axisB,
+            })
+            setHoveredSymmetryEdge(null)
+            return
+          }
+        } else if (sym.phase === 'pickInternalLine') {
+          if (hoveredSymmetryInternalIdx != null) {
+            const c = piece.internalLines[hoveredSymmetryInternalIdx]
+            if (!c) return
+            const axis = symmetryAxisEndpointsFromInternalCurve(c)
+            const alen = Math.hypot(axis.axisB.x - axis.axisA.x, axis.axisB.y - axis.axisA.y)
+            if (alen < 0.5) {
+              setToastMessage('warn:Diese interne Linie ist zu kurz für eine Spiegelachse.')
+              return
+            }
+            setPieceSymmetryState({
+              pieceId: sym.pieceId,
+              phase: 'pickSide',
+              axisA: axis.axisA,
+              axisB: axis.axisB,
+            })
+            setHoveredSymmetryInternalIdx(null)
+            return
+          }
+        } else if (sym.phase === 'axisA') {
           setPieceSymmetryState({ pieceId: sym.pieceId, phase: 'axisB', axisA: { ...local } })
           return
-        }
-        if (sym.phase === 'axisB') {
+        } else if (sym.phase === 'axisB') {
           if (sym.axisA && Math.hypot(local.x - sym.axisA.x, local.y - sym.axisA.y) < 0.5) {
             setToastMessage('warn:Zweiter Punkt zu nah am ersten.')
             return
@@ -1878,8 +2155,7 @@ export function WorkspaceCanvas() {
           })
           setSymmetryHoverWorld(null)
           return
-        }
-        if (sym.phase === 'pickSide' && sym.axisA && sym.axisB) {
+        } else if (sym.phase === 'pickSide' && sym.axisA && sym.axisB) {
           const c = crossZ(sym.axisA, sym.axisB, local)
           if (Math.abs(c) < 1e-4) {
             setToastMessage('warn:Bitte links oder rechts der Spiegelachse klicken.')
@@ -1889,6 +2165,21 @@ export function WorkspaceCanvas() {
           applyPieceSymmetry(sym.pieceId, sym.axisA, sym.axisB, keepSide)
           setPieceSymmetryState(null)
           setSymmetryHoverWorld(null)
+          setHoveredSymmetryEdge(null)
+          setHoveredSymmetryInternalIdx(null)
+          return
+        }
+        // chooseMethod / fehlgeschlagene Kante oder interne Linie: nicht in normale Bearbeitung fallen
+        // (sonst Auswahl/Marquee → Symmetrie bricht still per useEffect ab).
+        if (sym.phase === 'chooseMethod') {
+          return
+        }
+        if (sym.phase === 'pickEdge') {
+          setToastMessage('warn:Bitte eine gerade Kante treffen (grün hervorgehoben) oder Abbrechen.')
+          return
+        }
+        if (sym.phase === 'pickInternalLine') {
+          setToastMessage('warn:Bitte eine interne Linie treffen (grün hervorgehoben) oder Abbrechen.')
           return
         }
       }
@@ -2728,6 +3019,10 @@ export function WorkspaceCanvas() {
       setPieceSymmetryState,
       applyPieceSymmetry,
       setSymmetryHoverWorld,
+      hoveredSymmetryEdge,
+      hoveredSymmetryInternalIdx,
+      setHoveredSymmetryEdge,
+      setHoveredSymmetryInternalIdx,
     ]
   )
 
@@ -2937,6 +3232,52 @@ export function WorkspaceCanvas() {
         } else {
           setHoveredHorizontalLevelEdge(null)
         }
+        if (pieceSymmetryState?.phase === 'pickEdge' && selectedPieceIds.length === 1) {
+          const world = toWorld(e.clientX, e.clientY)
+          const selId = selectedPieceIds[0]
+          const p = pieces.find((x) => x.id === selId)
+          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+          if (p && pieceSymmetryState.pieceId === p.id) {
+            const masterK = getCurvesForSeamEdge(p)
+            if (masterK.length >= 3) {
+              const local = worldToPieceLocal(world, p)
+              const nearest = nearestCurveIndexAndPoint(local, masterK)
+              if (nearest && nearest.distance < SEAM_HIT_MM) {
+                const edges = enumerateEdges(p)
+                for (const edge of edges) {
+                  if (edge.curveIndices.includes(nearest.curveIndex)) {
+                    if (masterEdgeIsStraightLine(masterK, edge)) {
+                      bestEdge = {
+                        pieceId: p.id,
+                        edgeIndex: edge.edgeIndex,
+                        curveIndices: edge.curveIndices,
+                        distance: nearest.distance,
+                      }
+                    }
+                    break
+                  }
+                }
+              }
+            }
+          }
+          setHoveredSymmetryEdge(bestEdge)
+        } else {
+          setHoveredSymmetryEdge(null)
+        }
+        if (pieceSymmetryState?.phase === 'pickInternalLine' && selectedPieceIds.length === 1) {
+          const p = pieces.find((x) => x.id === selectedPieceIds[0])
+          if (p && pieceSymmetryState.pieceId === p.id && p.internalLines.length > 0) {
+            const world = toWorld(e.clientX, e.clientY)
+            const local = worldToPieceLocal(world, p)
+            const r = nearestCurveIndexAndPoint(local, p.internalLines)
+            if (r && r.distance < SYMMETRY_INTERNAL_HOVER_MM) setHoveredSymmetryInternalIdx(r.curveIndex)
+            else setHoveredSymmetryInternalIdx(null)
+          } else {
+            setHoveredSymmetryInternalIdx(null)
+          }
+        } else {
+          setHoveredSymmetryInternalIdx(null)
+        }
         if (
           contourEditEnabled &&
           showPoints &&
@@ -3028,6 +3369,7 @@ export function WorkspaceCanvas() {
             setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
             setHoveredDeletablePoint(bestVertex.value)
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
             setNotchPreview(null)
             setHoveredPieceId(null)
             return
@@ -3035,6 +3377,7 @@ export function WorkspaceCanvas() {
             setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
             setHoveredDeletablePoint(null)
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
             setNotchPreview(null)
             setHoveredPieceId(null)
             return
@@ -3043,23 +3386,43 @@ export function WorkspaceCanvas() {
             setHoveredDeletablePoint(bestVertex.value)
             setHoveredDeletableNotch(null)
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
             setHoveredPieceId(null)
             return
           }
           const INTERNAL_LINE_HOVER_HIT = 10
           let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
+          let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
           for (const p of piecesForHover) {
-            if (p.internalLines.length === 0) continue
             const local = worldToPieceLocal(world, p)
+            for (const ic of p.internalCircles) {
+              const ringD = Math.abs(Math.hypot(local.x - ic.center.x, local.y - ic.center.y) - ic.radius)
+              if (ringD < INTERNAL_LINE_HOVER_HIT && (!bestInternalCircle || ringD < bestInternalCircle.dist)) {
+                bestInternalCircle = { dist: ringD, pieceId: p.id, circleId: ic.id }
+              }
+            }
+            if (p.internalLines.length === 0) continue
             const r = nearestCurveIndexAndPoint(local, p.internalLines)
             if (r && r.distance < INTERNAL_LINE_HOVER_HIT && (!bestInternalLine || r.distance < bestInternalLine.dist)) {
               bestInternalLine = { dist: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
             }
           }
-          if (bestInternalLine) {
+          const circlePick =
+            bestInternalCircle && (!bestInternalLine || bestInternalCircle.dist < bestInternalLine.dist)
+              ? bestInternalCircle
+              : null
+          if (circlePick) {
+            setHoveredInternalCircle({
+              pieceId: circlePick.pieceId,
+              circleId: circlePick.circleId,
+            })
+            setHoveredInternalLine(null)
+          } else if (bestInternalLine) {
             setHoveredInternalLine({ pieceId: bestInternalLine.pieceId, curveIndex: bestInternalLine.curveIndex })
+            setHoveredInternalCircle(null)
           } else {
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
           }
           setHoveredDeletablePoint(null)
           setHoveredDeletableNotch(null)
@@ -3111,6 +3474,7 @@ export function WorkspaceCanvas() {
             setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
             setHoveredDeletablePoint(null)
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
             setNotchPreview(null)
             setHoveredPieceId(null)
           } else {
@@ -3118,21 +3482,41 @@ export function WorkspaceCanvas() {
             if (tool === 'select' || tool === 'point' || tool === 'curvepoint') {
               const INTERNAL_LINE_HOVER_HIT_ELSE = 10
               let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
+              let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
               for (const p of piecesForNotchHover) {
-                if (p.internalLines.length === 0) continue
                 const local = worldToPieceLocal(worldForNotch, p)
+                for (const ic of p.internalCircles) {
+                  const ringD = Math.abs(Math.hypot(local.x - ic.center.x, local.y - ic.center.y) - ic.radius)
+                  if (ringD < INTERNAL_LINE_HOVER_HIT_ELSE && (!bestInternalCircle || ringD < bestInternalCircle.dist)) {
+                    bestInternalCircle = { dist: ringD, pieceId: p.id, circleId: ic.id }
+                  }
+                }
+                if (p.internalLines.length === 0) continue
                 const r = nearestCurveIndexAndPoint(local, p.internalLines)
                 if (r && r.distance < INTERNAL_LINE_HOVER_HIT_ELSE && (!bestInternalLine || r.distance < bestInternalLine.dist)) {
                   bestInternalLine = { dist: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
                 }
               }
-              if (bestInternalLine) {
+              const circlePickElse =
+                bestInternalCircle && (!bestInternalLine || bestInternalCircle.dist < bestInternalLine.dist)
+                  ? bestInternalCircle
+                  : null
+              if (circlePickElse) {
+                setHoveredInternalCircle({
+                  pieceId: circlePickElse.pieceId,
+                  circleId: circlePickElse.circleId,
+                })
+                setHoveredInternalLine(null)
+              } else if (bestInternalLine) {
                 setHoveredInternalLine({ pieceId: bestInternalLine.pieceId, curveIndex: bestInternalLine.curveIndex })
+                setHoveredInternalCircle(null)
               } else {
                 setHoveredInternalLine(null)
+                setHoveredInternalCircle(null)
               }
             } else {
               setHoveredInternalLine(null)
+              setHoveredInternalCircle(null)
             }
           }
         }
@@ -3161,6 +3545,7 @@ export function WorkspaceCanvas() {
           }
           if (best) {
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
             const { piece, r, curves } = best
             const outwardAngle = outwardNormalAngleAt(curves, r.curveIndex, r.t)
             const angle = outwardAngle + 180
@@ -3192,6 +3577,7 @@ export function WorkspaceCanvas() {
           } else {
             setNotchPreview(null)
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
           }
           setHoveredPieceId(null)
           return
@@ -3226,12 +3612,14 @@ export function WorkspaceCanvas() {
             setHoveredSegment(seg)
             setHoveredSegmentPos(pos)
             setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
             setHoveredPieceId(null)
             return
           }
           setHoveredSegment(null)
           setHoveredSegmentPos(null)
           setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
         }
         if (tool === 'point' && selectedPieceIds.length === 1) {
           const world = toWorld(e.clientX, e.clientY)
@@ -3359,6 +3747,7 @@ export function WorkspaceCanvas() {
         const newLine = clampGrainLineParallelTranslation(dragging.lineAtPointerDown, dx, dy, bounds)
         setGrainLine(dragging.pieceId, newLine)
       } else if (dragging.kind === 'rectangle') {
+        if (rectangleSizeEditor) return
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'rectangle' ? { ...d, current } : d))
       } else if (dragging.kind === 'selectionMarquee') {
@@ -3410,6 +3799,7 @@ export function WorkspaceCanvas() {
         }
         movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target, false, dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined)
       } else if (dragging.kind === 'line') {
+        if (lineLengthEditor?.mode === 'draw' && lineLengthEditor.pieceId === dragging.pieceId) return
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
@@ -3488,6 +3878,7 @@ export function WorkspaceCanvas() {
         const current = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'drill' ? { ...d, current } : d))
       } else if (dragging.kind === 'internalCircle') {
+        if (internalCircleRadiusEditor) return
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
@@ -3533,6 +3924,11 @@ export function WorkspaceCanvas() {
       selectedPieceIds,
       pieceSymmetryState,
       setSymmetryHoverWorld,
+      setHoveredSymmetryEdge,
+      setHoveredSymmetryInternalIdx,
+      rectangleSizeEditor,
+      lineLengthEditor,
+      internalCircleRadiusEditor,
     ]
   )
 
@@ -3599,6 +3995,8 @@ export function WorkspaceCanvas() {
   const resetCanvasTransientState = useCallback(() => {
     setDragging(null)
     setLineLengthEditor(null)
+    setInternalCircleRadiusEditor(null)
+    setRectangleSizeEditor(null)
     setWorkspaceImageQuickMenu(null)
     setGrainContextMenu(null)
     setPieceContextMenu(null)
@@ -3612,6 +4010,7 @@ export function WorkspaceCanvas() {
     setHoveredDeletablePoint(null)
     setHoveredDeletableNotch(null)
     setHoveredInternalLine(null)
+    setHoveredInternalCircle(null)
     setHoveredSeamAssignmentId(null)
     setHoveredCurvepointSegment(null)
     setHoveredHorizontalLevelEdge(null)
@@ -3690,7 +4089,31 @@ export function WorkspaceCanvas() {
         setLineLengthEditor(null)
         return
       }
-      if (contourEditEnabled && !inInput && dragging?.kind === 'line' && tool === 'internalLine' && e.key === ' ') {
+      if (!inInput && internalCircleRadiusEditor && e.key === 'Escape') {
+        e.preventDefault()
+        setInternalCircleRadiusEditor(null)
+        setDragging(null)
+        setTool('select')
+        return
+      }
+      if (!inInput && rectangleSizeEditor && e.key === 'Escape') {
+        e.preventDefault()
+        setRectangleSizeEditor(null)
+        setDragging(null)
+        setTool('select')
+        return
+      }
+      if (!inInput && (rectangleSizeEditor || internalCircleRadiusEditor) && e.key === ' ') {
+        e.preventDefault()
+        return
+      }
+      if (
+        contourEditEnabled &&
+        !inInput &&
+        dragging?.kind === 'line' &&
+        (tool === 'internalLine' || tool === 'line') &&
+        e.key === ' '
+      ) {
         e.preventDefault()
         const len = Math.hypot(
           dragging.current.x - dragging.start.x,
@@ -3702,6 +4125,42 @@ export function WorkspaceCanvas() {
           start: dragging.start,
           current: dragging.current,
           value: len > 0 ? len.toFixed(1) : '100',
+          drawTarget: tool === 'line' ? 'contour' : 'internal',
+        })
+        return
+      }
+      if (contourEditEnabled && !inInput && dragging?.kind === 'internalCircle' && tool === 'internalCircle' && e.key === ' ') {
+        e.preventDefault()
+        const { center, current, pieceId } = dragging
+        const dx = current.x - center.x
+        const dy = current.y - center.y
+        const len = Math.hypot(dx, dy)
+        const dir =
+          len >= 0.01
+            ? { x: dx / len, y: dy / len }
+            : { x: 1, y: 0 }
+        setInternalCircleRadiusEditor({
+          pieceId,
+          center: { ...center },
+          dir,
+          radiusStr: len >= 0.5 ? len.toFixed(1) : '10',
+        })
+        return
+      }
+      if (contourEditEnabled && !inInput && dragging?.kind === 'rectangle' && tool === 'rectangle' && e.key === ' ') {
+        e.preventDefault()
+        const dx = dragging.current.x - dragging.start.x
+        const dy = dragging.current.y - dragging.start.y
+        const signX = dx >= 0 ? 1 : -1
+        const signY = dy >= 0 ? 1 : -1
+        const aw = Math.abs(dx)
+        const ah = Math.abs(dy)
+        setRectangleSizeEditor({
+          anchor: { ...dragging.start },
+          signX,
+          signY,
+          widthStr: aw >= 1 ? aw.toFixed(1) : '100',
+          heightStr: ah >= 1 ? ah.toFixed(1) : '100',
         })
         return
       }
@@ -3709,6 +4168,31 @@ export function WorkspaceCanvas() {
         e.preventDefault()
         setSeamAssignmentMetaDialogId(hoveredSeamAssignmentId)
         return
+      }
+      if (
+        contourEditEnabled &&
+        !inInput &&
+        !dragging &&
+        hoveredInternalCircle &&
+        !hoveredSeamAssignmentId &&
+        e.key === ' '
+      ) {
+        const piece = pieces.find((p) => p.id === hoveredInternalCircle.pieceId)
+        const ic = piece?.internalCircles.find((c) => c.id === hoveredInternalCircle.circleId)
+        if (piece && ic) {
+          e.preventDefault()
+          const dir = { x: 1, y: 0 }
+          const current = { x: ic.center.x + dir.x * ic.radius, y: ic.center.y + dir.y * ic.radius }
+          setDragging({ kind: 'internalCircle', pieceId: piece.id, center: { ...ic.center }, current })
+          setInternalCircleRadiusEditor({
+            pieceId: piece.id,
+            center: { ...ic.center },
+            dir,
+            radiusStr: ic.radius >= 0.5 ? ic.radius.toFixed(1) : '10',
+            circleId: ic.id,
+          })
+          return
+        }
       }
       if (contourEditEnabled && !inInput && !dragging && hoveredInternalLine && !hoveredSeamAssignmentId && e.key === ' ') {
         const piece = pieces.find((p) => p.id === hoveredInternalLine.pieceId)
@@ -3751,6 +4235,8 @@ export function WorkspaceCanvas() {
         setHorizontalLevelPickingActive(false)
         setPieceSymmetryState(null)
         setSymmetryHoverWorld(null)
+        setHoveredSymmetryEdge(null)
+        setHoveredSymmetryInternalIdx(null)
         return
       }
       if (!inInput && e.key === 'Escape' && tool === 'profil') {
@@ -4061,6 +4547,12 @@ export function WorkspaceCanvas() {
         setHoveredDeletableNotch(null)
         return
       }
+      if (contourEditEnabled && hoveredInternalCircle) {
+        e.preventDefault()
+        removeInternalCircle(hoveredInternalCircle.pieceId, hoveredInternalCircle.circleId)
+        setHoveredInternalCircle(null)
+        return
+      }
       if (contourEditEnabled && hoveredInternalLine) {
         e.preventDefault()
         removeInternalLine(hoveredInternalLine.pieceId, hoveredInternalLine.curveIndex)
@@ -4130,6 +4622,7 @@ export function WorkspaceCanvas() {
       return
     }
     if (dragging?.kind === 'rectangle') {
+      if (rectangleSizeEditor) return
       const { start, current } = dragging
       const minX = Math.min(start.x, current.x)
       const minY = Math.min(start.y, current.y)
@@ -4281,23 +4774,13 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'internalCircle') {
+      if (internalCircleRadiusEditor) return
       const { pieceId, center, current } = dragging
       const piece = pieces.find((p) => p.id === pieceId)
       if (piece) {
         const r = Math.hypot(current.x - center.x, current.y - center.y)
         if (r >= 0.5) {
-          const n = 24
-          const curves: Curve[] = []
-          for (let i = 0; i < n; i++) {
-            const a0 = (i * 2 * Math.PI) / n
-            const a1 = ((i + 1) * 2 * Math.PI) / n
-            curves.push({
-              type: 'line',
-              start: { x: center.x + r * Math.cos(a0), y: center.y + r * Math.sin(a0) },
-              end: { x: center.x + r * Math.cos(a1), y: center.y + r * Math.sin(a1) },
-            })
-          }
-          addInternalLines(pieceId, curves)
+          addInternalCircle(pieceId, { center: { ...center }, radius: r })
         }
         setTool('select')
       }
@@ -4345,6 +4828,7 @@ export function WorkspaceCanvas() {
     addPiece,
     addCurveToCutLine,
     addInternalLine,
+    addInternalCircle,
     addInternalLines,
     insertPointOnCutLine,
     addNotch,
@@ -4357,6 +4841,8 @@ export function WorkspaceCanvas() {
     recomputeSeamLine,
     snapSeamEdgeToMatch,
     lineLengthEditor,
+    rectangleSizeEditor,
+    internalCircleRadiusEditor,
     toWorld,
     setGrainLine,
     selectPiece,
@@ -4404,6 +4890,8 @@ export function WorkspaceCanvas() {
         setPointPreview(null)
         setHoveredSeamForNahtzuordnung(null)
         setHoveredSeamAssignmentId(null)
+        setHoveredInternalLine(null)
+        setHoveredInternalCircle(null)
       }}
       onWheel={handleWheel}
       style={{
@@ -5226,6 +5714,9 @@ export function WorkspaceCanvas() {
                     hoveredCurvepointSegment.curveIndex === effectiveSegmentForHighlight.curveIndex))
               }
               hoveredInternalLineCurveIndex={hoveredInternalLine?.pieceId === piece.id ? hoveredInternalLine.curveIndex : null}
+              hoveredInternalCircleId={
+                hoveredInternalCircle?.pieceId === piece.id ? hoveredInternalCircle.circleId : null
+              }
               onPointerDown={handlePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
               showGrain={showGrain}
@@ -6046,6 +6537,80 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
+          {pieceSymmetryState?.phase === 'pickEdge' &&
+            hoveredSymmetryEdge &&
+            selectedPieceIds[0] === pieceSymmetryState.pieceId &&
+            (() => {
+              const piece = pieces.find((p) => p.id === hoveredSymmetryEdge.pieceId)
+              if (!piece) return null
+              const masterK = getCurvesForSeamEdge(piece)
+              const curves = hoveredSymmetryEdge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+              let d = ''
+              for (const seg of curves) {
+                if (!seg) continue
+                const ws = pieceLocalToWorld(seg.start, piece)
+                const we = pieceLocalToWorld(seg.end, piece)
+                if (seg.type === 'line') {
+                  d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+                } else {
+                  const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                  const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                  d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+                }
+              }
+              if (!d) return null
+              return (
+                <g key="piece-symmetry-edge-hover">
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={T.seamAssignment.edgePickHalo}
+                    strokeWidth={T.seamAssignment.edgePickHaloWidth}
+                    strokeOpacity={T.seamAssignment.edgePickHaloOpacity}
+                    pointerEvents="none"
+                  />
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="#0d9488"
+                    strokeWidth={3.5}
+                    strokeOpacity={0.95}
+                    pointerEvents="none"
+                  />
+                </g>
+              )
+            })()}
+          {pieceSymmetryState?.phase === 'pickInternalLine' &&
+            hoveredSymmetryInternalIdx != null &&
+            selectedPieceIds[0] === pieceSymmetryState.pieceId &&
+            (() => {
+              const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
+              if (!piece) return null
+              const seg = piece.internalLines[hoveredSymmetryInternalIdx]
+              if (!seg) return null
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              let d = ''
+              if (seg.type === 'line') {
+                d = `M ${ws.x} ${ws.y} L ${we.x} ${we.y}`
+              } else {
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                d = `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y}`
+              }
+              return (
+                <path
+                  key="piece-symmetry-internal-hover"
+                  d={d}
+                  fill="none"
+                  stroke="#0d9488"
+                  strokeWidth={3.2}
+                  strokeDasharray="6 4"
+                  pointerEvents="none"
+                  opacity={0.95}
+                />
+              )
+            })()}
           {pieceSymmetryState && selectedPieceIds[0] === pieceSymmetryState.pieceId && (() => {
             const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
             if (!piece || !pieceSymmetryState.axisA) return null
@@ -6211,13 +6776,14 @@ export function WorkspaceCanvas() {
             if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)
             labelParts.push(`${lengthMm.toFixed(1)} mm`)
             const detailText = labelParts.join(' · ')
+            const profileStroke = strokeColorForProfileKey(pa.profileKey, canvasThemeMode === 'dark')
 
             return (
               <g key={`profile-${pa.id}`} pointerEvents="none">
                 <path
                   d={d}
                   fill="none"
-                  stroke={T.accent.profile}
+                  stroke={profileStroke}
                   strokeWidth={2}
                   strokeOpacity={0.7}
                   strokeDasharray="6 3"
@@ -6227,7 +6793,7 @@ export function WorkspaceCanvas() {
                   y={keyW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fill={T.accent.profile}
+                  fill={profileStroke}
                   fontSize={5}
                   fontFamily="sans-serif"
                   fontWeight={700}
@@ -6240,7 +6806,7 @@ export function WorkspaceCanvas() {
                   y={detailW.y}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fill={T.accent.profile}
+                  fill={profileStroke}
                   fontSize={3.2}
                   fontFamily="sans-serif"
                   fontWeight={400}
@@ -6434,7 +7000,7 @@ export function WorkspaceCanvas() {
           <path d="M 10 22 C 30 20 40 22 40 22" />
         </svg>
       </div>
-      {(dragging?.kind === 'line' && tool === 'internalLine' && !lineLengthEditor) && (
+      {(dragging?.kind === 'line' && (tool === 'internalLine' || tool === 'line') && !lineLengthEditor) && (
         <div style={{
           position: 'absolute',
           top: 16,
@@ -6449,6 +7015,63 @@ export function WorkspaceCanvas() {
           pointerEvents: 'none',
         }}>
           Leertaste: feste Laenge setzen
+        </div>
+      )}
+      {(dragging?.kind === 'internalCircle' && tool === 'internalCircle' && !internalCircleRadiusEditor) && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            background: 'rgba(21,101,192,0.92)',
+            color: '#fff',
+            padding: '6px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 9998,
+            pointerEvents: 'none',
+          }}
+        >
+          Leertaste: Radius eingeben
+        </div>
+      )}
+      {(dragging?.kind === 'rectangle' && tool === 'rectangle' && !rectangleSizeEditor) && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            background: 'rgba(21,101,192,0.92)',
+            color: '#fff',
+            padding: '6px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 9998,
+            pointerEvents: 'none',
+          }}
+        >
+          Leertaste: Breite und Hoehe eingeben
+        </div>
+      )}
+      {!dragging && hoveredInternalCircle && !internalCircleRadiusEditor && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            background: 'rgba(21,101,192,0.92)',
+            color: '#fff',
+            padding: '6px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 9998,
+            pointerEvents: 'none',
+          }}
+        >
+          Kreis hovern + Leertaste: Radius aendern — Entf: Kreis loeschen
         </div>
       )}
       {!dragging && hoveredInternalLine && !lineLengthEditor && (
@@ -6591,11 +7214,192 @@ export function WorkspaceCanvas() {
           </button>
         </div>
       )}
+      {rectangleSizeEditor && dragging?.kind === 'rectangle' && (
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            const w = Number.parseFloat(rectangleSizeEditor.widthStr.replace(',', '.'))
+            const h = Number.parseFloat(rectangleSizeEditor.heightStr.replace(',', '.'))
+            if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) {
+              setToastMessage('error: Bitte gueltige Breite und Hoehe in mm eingeben (min. 1).')
+              return
+            }
+            const wClamped = Math.min(10000, w)
+            const hClamped = Math.min(10000, h)
+            const { anchor, signX, signY } = rectangleSizeEditor
+            const corner2 = { x: anchor.x + signX * wClamped, y: anchor.y + signY * hClamped }
+            const minX = Math.min(anchor.x, corner2.x)
+            const minY = Math.min(anchor.y, corner2.y)
+            const rw = Math.abs(corner2.x - anchor.x)
+            const rh = Math.abs(corner2.y - anchor.y)
+            const cutLine: import('../types/model').Curve[] = [
+              { type: 'line', start: { x: 0, y: 0 }, end: { x: rw, y: 0 } },
+              { type: 'line', start: { x: rw, y: 0 }, end: { x: rw, y: rh } },
+              { type: 'line', start: { x: rw, y: rh }, end: { x: 0, y: rh } },
+              { type: 'line', start: { x: 0, y: rh }, end: { x: 0, y: 0 } },
+            ]
+            addPiece({
+              transform: { x: minX, y: minY, rotation: 0, mirrored: false },
+              cutLine,
+            })
+            setRectangleSizeEditor(null)
+            setDragging(null)
+            setTool('select')
+          }}
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '10px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            zIndex: 10000,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+            maxWidth: 'min(96vw, 420px)',
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Rechteck (mm)</span>
+          <label style={{ fontSize: 12, color: '#455a64', display: 'flex', alignItems: 'center', gap: 4 }}>
+            Breite
+            <input
+              ref={rectangleWidthInputRef}
+              type="text"
+              inputMode="decimal"
+              value={rectangleSizeEditor.widthStr}
+              onChange={(ev) =>
+                setRectangleSizeEditor((s) => (s ? { ...s, widthStr: ev.target.value } : s))
+              }
+              style={{
+                width: 72,
+                padding: '4px 6px',
+                border: '1px solid #90a4ae',
+                borderRadius: 4,
+                fontSize: 13,
+              }}
+            />
+          </label>
+          <span style={{ fontSize: 14, color: '#78909c' }}>×</span>
+          <label style={{ fontSize: 12, color: '#455a64', display: 'flex', alignItems: 'center', gap: 4 }}>
+            Hoehe
+            <input
+              type="text"
+              inputMode="decimal"
+              value={rectangleSizeEditor.heightStr}
+              onChange={(ev) =>
+                setRectangleSizeEditor((s) => (s ? { ...s, heightStr: ev.target.value } : s))
+              }
+              style={{
+                width: 72,
+                padding: '4px 6px',
+                border: '1px solid #90a4ae',
+                borderRadius: 4,
+                fontSize: 13,
+              }}
+            />
+          </label>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+            OK
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRectangleSizeEditor(null)
+              setDragging(null)
+              setTool('select')
+            }}
+            style={{ padding: '5px 9px', fontSize: 12 }}
+          >
+            Abbrechen
+          </button>
+        </form>
+      )}
+      {internalCircleRadiusEditor && dragging?.kind === 'internalCircle' && (
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            const r = Number.parseFloat(internalCircleRadiusEditor.radiusStr.replace(',', '.'))
+            if (!Number.isFinite(r) || r < 0.5) {
+              setToastMessage('error: Bitte einen gueltigen Radius in mm eingeben (min. 0,5).')
+              return
+            }
+            const rClamped = Math.min(10000, r)
+            const { pieceId, center, circleId } = internalCircleRadiusEditor
+            const piece = pieces.find((p) => p.id === pieceId)
+            if (!piece) {
+              setToastMessage('error: Teil nicht gefunden.')
+              return
+            }
+            if (circleId) {
+              updateInternalCircle(pieceId, circleId, { center: { ...center }, radius: rClamped })
+            } else {
+              addInternalCircle(pieceId, { center: { ...center }, radius: rClamped })
+            }
+            setInternalCircleRadiusEditor(null)
+            setDragging(null)
+            setTool('select')
+          }}
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '10px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            zIndex: 10000,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Radius (mm)</span>
+          <input
+            ref={internalCircleRadiusInputRef}
+            type="text"
+            inputMode="decimal"
+            value={internalCircleRadiusEditor.radiusStr}
+            onChange={(ev) =>
+              setInternalCircleRadiusEditor((s) => (s ? { ...s, radiusStr: ev.target.value } : s))
+            }
+            style={{
+              width: 90,
+              padding: '4px 6px',
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+          />
+          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+            OK
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setInternalCircleRadiusEditor(null)
+              setDragging(null)
+              setTool('select')
+            }}
+            style={{ padding: '5px 9px', fontSize: 12 }}
+          >
+            Abbrechen
+          </button>
+        </form>
+      )}
       {lineLengthEditor && (
         <form
           onSubmit={(ev) => {
             ev.preventDefault()
-            const mm = Number.parseFloat(lineLengthEditor.value)
+            const mm = Number.parseFloat(lineLengthEditor.value.replace(',', '.'))
             if (!Number.isFinite(mm) || mm <= 0) {
               setToastMessage('error: Bitte eine gueltige Laenge in mm eingeben.')
               return
@@ -6613,8 +7417,12 @@ export function WorkspaceCanvas() {
                 idx === lineLengthEditor.curveIndex ? nextCurve : curve
               )
               updatePiece(piece.id, { internalLines })
-            } else {
-              addInternalLine(lineLengthEditor.pieceId, { type: 'line', start: lineLengthEditor.start, end })
+            } else if (lineLengthEditor.mode === 'draw') {
+              if (lineLengthEditor.drawTarget === 'contour') {
+                addCurveToCutLine(lineLengthEditor.pieceId, { type: 'line', start: lineLengthEditor.start, end })
+              } else {
+                addInternalLine(lineLengthEditor.pieceId, { type: 'line', start: lineLengthEditor.start, end })
+              }
               setDragging(null)
               setTool('select')
             }
@@ -6778,7 +7586,18 @@ export function WorkspaceCanvas() {
           </button>
         </div>
       )}
-      {pieceSymmetryState && (
+      {pieceSymmetryState && (() => {
+        const symPiece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
+        const symBtn: CSSProperties = {
+          background: 'rgba(255,255,255,0.2)',
+          border: '1px solid rgba(255,255,255,0.35)',
+          color: '#fff',
+          padding: '4px 10px',
+          borderRadius: 4,
+          cursor: 'pointer',
+          fontSize: 12,
+        }
+        return (
         <div
           style={{
             position: 'fixed',
@@ -6796,21 +7615,74 @@ export function WorkspaceCanvas() {
             display: 'flex',
             alignItems: 'center',
             gap: 12,
-            maxWidth: 'min(96vw, 520px)',
+            maxWidth: 'min(96vw, 720px)',
             flexWrap: 'wrap',
           }}
         >
-          <span>
-            {pieceSymmetryState.phase === 'axisA' && 'Ersten Punkt der Spiegelachse klicken (Teilkoordinaten).'}
-            {pieceSymmetryState.phase === 'axisB' && 'Zweiten Punkt klicken — die Linie durch beide Punkte ist die Spiegelachse.'}
-            {pieceSymmetryState.phase === 'pickSide' &&
-              'Jetzt die Seite anklicken, die als Vorlage behalten werden soll (die andere Hälfte wird gespiegelt).'}
-          </span>
+          {pieceSymmetryState.phase === 'chooseMethod' && (
+            <>
+              <span>Spiegelachse:</span>
+              <button
+                type="button"
+                style={symBtn}
+                onClick={() =>
+                  setPieceSymmetryState({ pieceId: pieceSymmetryState.pieceId, phase: 'axisA' })
+                }
+              >
+                Linie einzeichnen
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...symBtn,
+                  opacity: symPiece && symPiece.internalLines.length > 0 ? 1 : 0.45,
+                  cursor: symPiece && symPiece.internalLines.length > 0 ? 'pointer' : 'not-allowed',
+                }}
+                disabled={!symPiece || symPiece.internalLines.length === 0}
+                onClick={() => {
+                  if (!symPiece || symPiece.internalLines.length === 0) return
+                  setHoveredSymmetryInternalIdx(null)
+                  setPieceSymmetryState({ pieceId: pieceSymmetryState.pieceId, phase: 'pickInternalLine' })
+                }}
+              >
+                Interne Linie
+              </button>
+              <button
+                type="button"
+                style={symBtn}
+                onClick={() => {
+                  setHoveredSymmetryEdge(null)
+                  setPieceSymmetryState({ pieceId: pieceSymmetryState.pieceId, phase: 'pickEdge' })
+                }}
+              >
+                Gerade Kante
+              </button>
+            </>
+          )}
+          {pieceSymmetryState.phase === 'axisA' && (
+            <span>Ersten Punkt der Spiegelachse klicken (Teilkoordinaten).</span>
+          )}
+          {pieceSymmetryState.phase === 'axisB' && (
+            <span>Zweiten Punkt klicken — die Linie durch beide Punkte ist die Spiegelachse.</span>
+          )}
+          {pieceSymmetryState.phase === 'pickInternalLine' && (
+            <span>Interne Linie anklicken (Achse = Strecke Start–Ende; bei Kurve: Sehne).</span>
+          )}
+          {pieceSymmetryState.phase === 'pickEdge' && (
+            <span>Gerade Kante am Teil anklicken (wie Wasserwaage).</span>
+          )}
+          {pieceSymmetryState.phase === 'pickSide' && (
+            <span>
+              Seite anklicken, die als Vorlage behalten werden soll (die andere Hälfte wird gespiegelt).
+            </span>
+          )}
           <button
             type="button"
             onClick={() => {
               setPieceSymmetryState(null)
               setSymmetryHoverWorld(null)
+              setHoveredSymmetryEdge(null)
+              setHoveredSymmetryInternalIdx(null)
             }}
             style={{
               background: 'rgba(255,255,255,0.25)',
@@ -6825,7 +7697,8 @@ export function WorkspaceCanvas() {
             Abbrechen
           </button>
         </div>
-      )}
+        )
+      })()}
       {edgeAllowancePopover && <EdgeAllowancePopover
         key={`${edgeAllowancePopover.pieceId}-${edgeAllowancePopover.edgeIndex}`}
         popover={edgeAllowancePopover}

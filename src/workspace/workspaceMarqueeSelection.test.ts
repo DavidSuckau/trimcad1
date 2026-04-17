@@ -16,6 +16,7 @@ function minimalPiece(overrides: Partial<PatternPiece>): PatternPiece {
     drills: [],
     grainLine: null,
     internalLines: [],
+    internalCircles: [],
     layer: 'CUT',
     transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     fillInterior: true,

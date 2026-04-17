@@ -12,7 +12,7 @@ Die Importlogik nutzt feste Layer-Sets (siehe `src/dxf/dxfImportLayers.ts`) und 
 
 | Rolle | Typische Namen / Nummern |
 |-------|---------------------------|
-| Schnittkontur (Außenlinie) | `CUT`, `1`, `BOUNDARY`, `NATLINE`, `OUTLINE`, `CONTOUR`, `PIECE`, `PATTERN`, … |
+| Schnittkontur (Außenlinie) | `CUT`, `1`, `BOUNDARY`, `NATLINE`, `OUTLINE`, `CONTOUR`, `PIECE`, `PATTERN`, … (Standard **ohne** AutoCAD-Layer `0` — bei Bedarf unter „Zusätzliche DXF-Schnitt-Layer“ eintragen) |
 | Nahtlinie | `SEAM`, `14`, `SEW`, `NAHT` |
 | Kerben (LINE) | `4`, `80`–`83`, `NOTCH` |
 | Bohrungen | `DRILL`, `13`, `HOLE` |
@@ -25,6 +25,13 @@ Hersteller verwenden abweichende Namen: dann **Einstellungen → Zusätzliche DX
 1. **Geometrisch** in der Schnitt-Polylinie (kurze V-Einbuchtung), siehe `docs/DXF-MASTER-SPEZIFIKATION.txt`.
 2. **Als LINE** auf den Kerben-Layern (u. a. ASTM).
 3. **LWPOLYLINE mit Bulge** (Bögen zwischen Stützpunkten) wird in eine feinere Polylinie aufgelöst.
+
+## Deduplizierung
+
+1. **Exakt (Hash):** Geschlossene Schnittkonturen mit gleichem kanonischem Hash (Rundung, Startpunkt/Umlauf egal) werden zu einem Entwurf zusammengeführt; es bleibt der **zuerst** in der Pipeline stehende Entwurf (üblicherweise **Block/INSERT** vor Modellraum).
+2. **Nahezu gleich (Near-Match):** Zusätzlich werden Paare erkannt, bei denen Breite/Höhe der Bounding-Box, Polygonfläche und Schwerpunkt **eng** beieinander liegen (je ±2 %) und die Bounding-Boxes **stark überlappen** — typisch für minimal verschobene oder gerundete Kopien. Auch hier gewinnt der früher in der Liste stehende Entwurf.
+
+In beiden Fällen erscheinen Hinweise in `result.warnings`. Der Fallback-Import (wenn kein bekannter Schnitt-Layer) berücksichtigt Layer `0` ebenfalls nicht.
 
 ## Bekannte Grenzen
 

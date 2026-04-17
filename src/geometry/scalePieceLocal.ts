@@ -11,6 +11,18 @@ export function scalePointAbout(p: Point, pivot: Point, s: number): Point {
   }
 }
 
+function scaleInternalCirclesLocal(
+  circles: PatternPiece['internalCircles'],
+  pivot: Point,
+  s: number
+): PatternPiece['internalCircles'] {
+  return circles.map((ic) => ({
+    ...ic,
+    center: scalePointAbout(ic.center, pivot, s),
+    radius: ic.radius * s,
+  }))
+}
+
 function scaleCurve(c: Curve, pivot: Point, s: number): Curve {
   const sp = (pt: Point) => scalePointAbout(pt, pivot, s)
   if (c.type === 'line') {
@@ -83,6 +95,7 @@ export function applyUniformScaleToPiece(
       notches,
       grainLine: scaleGrainLine(piece.grainLine, pivot, s),
       internalLines: scaleCurvesLocal(piece.internalLines, pivot, s),
+      internalCircles: scaleInternalCirclesLocal(piece.internalCircles, pivot, s),
       drills: scaleDrillsLocal(piece.drills, pivot, s),
     }
     return { ok: true, piece: applySharpCornerPromotion(next) }
@@ -108,6 +121,7 @@ export function applyUniformScaleToPiece(
     notches,
     grainLine: scaleGrainLine(piece.grainLine, pivot, s),
     internalLines: scaleCurvesLocal(piece.internalLines, pivot, s),
+    internalCircles: scaleInternalCirclesLocal(piece.internalCircles, pivot, s),
     drills: scaleDrillsLocal(piece.drills, pivot, s),
   }
   return { ok: true, piece: applySharpCornerPromotion(next) }

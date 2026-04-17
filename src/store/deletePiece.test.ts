@@ -20,6 +20,7 @@ const makePiece = (id: string, number: string) => ({
   drills: [],
   grainLine: null,
   internalLines: [],
+  internalCircles: [],
   layer: 'CUT' as const,
   transform: { x: 0, y: 0, rotation: 0, mirrored: false },
   softVertices: [],

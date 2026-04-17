@@ -37,6 +37,7 @@ describe('Notch-Preset & Geometrie-Update', () => {
           drills: [],
           grainLine: null,
           internalLines: [],
+          internalCircles: [],
           layer: 'CUT',
           transform: { x: 0, y: 0, rotation: 0, mirrored: false },
           softVertices: [],

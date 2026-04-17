@@ -26,6 +26,7 @@ describe('batchDeleteFiltered', () => {
           drills: [],
           grainLine: null,
           internalLines: [],
+          internalCircles: [],
           layer: 'CUT',
           transform: { x: 0, y: 0, rotation: 0, mirrored: false },
           softVertices: [1, 2],

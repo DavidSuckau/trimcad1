@@ -10,7 +10,7 @@ describe('exitAllModes', () => {
       piecePropertiesDialogPieceId: 'p2',
       edgeSeamPickingActive: true,
       horizontalLevelPickingActive: true,
-      pieceSymmetryState: { pieceId: 'p1', phase: 'axisA' },
+      pieceSymmetryState: { pieceId: 'p1', phase: 'chooseMethod' },
       profileDialogAssignmentId: 'prof-1',
       rulerMode: true,
       rulerLine: { start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },

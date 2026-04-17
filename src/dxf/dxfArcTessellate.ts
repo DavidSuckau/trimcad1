@@ -10,8 +10,8 @@ export function tessellateArcEntity(
   maxSegments = 32
 ): DxfPoint[] {
   if (radius <= 0) return []
-  let s0 = (startAngleDeg * Math.PI) / 180
-  let s1 = (endAngleDeg * Math.PI) / 180
+  const s0 = (startAngleDeg * Math.PI) / 180
+  const s1 = (endAngleDeg * Math.PI) / 180
   let sweep = s1 - s0
   if (sweep <= 0) sweep += 2 * Math.PI
   if (sweep > 2 * Math.PI - 1e-9) sweep = 2 * Math.PI

@@ -14,6 +14,7 @@ import {
   type OverviewImageSession,
 } from './workspaceOverviewBounds'
 import { canvasTheme as T } from '../theme/canvasTheme'
+import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 
 function pieceGroupTransform(p: PatternPiece): string {
   const { x, y, rotation, mirrored } = p.transform
@@ -139,8 +140,9 @@ export function buildWorkspaceOverviewSvgDocument(
         }
       }
       if (pathD) {
+        const profStroke = strokeColorForProfileKey(pa.profileKey, false)
         parts.push(
-          `<path d="${escapeXmlAttr(pathD)}" fill="none" stroke="${T.accent.profile}" stroke-width="1.5" stroke-opacity="0.7" stroke-dasharray="6 3"/>`,
+          `<path d="${escapeXmlAttr(pathD)}" fill="none" stroke="${escapeXmlAttr(profStroke)}" stroke-width="1.5" stroke-opacity="0.7" stroke-dasharray="6 3"/>`,
         )
         const firstSeg = curves[0]
         const lastSeg = curves[curves.length - 1]
@@ -155,7 +157,7 @@ export function buildWorkspaceOverviewSvgDocument(
         const ly = midY + ny
         const ang = (Math.atan2(edgeDy, edgeDx) * 180) / Math.PI
         parts.push(
-          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="${T.accent.profile}" font-size="9" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
+          `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="${escapeXmlAttr(profStroke)}" font-size="9" font-family="sans-serif" font-weight="700" transform="rotate(${ang},${lx},${ly})">${escapeXmlAttr(pa.profileKey)}</text>`,
         )
       }
     }

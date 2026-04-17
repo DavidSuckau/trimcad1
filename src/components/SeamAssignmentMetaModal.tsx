@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
   SEAM_ASSIGNMENT_KIND_IDS,
   SEAM_ASSIGNMENT_KIND_LABELS,
@@ -7,15 +9,23 @@ import {
 } from '../types/model'
 
 export function SeamAssignmentMetaModal() {
-  const seamAssignmentMetaDialogId = useStore((s) => s.seamAssignmentMetaDialogId)
-  const setSeamAssignmentMetaDialogId = useStore((s) => s.setSeamAssignmentMetaDialogId)
-  const updateSeamAssignmentMeta = useStore((s) => s.updateSeamAssignmentMeta)
-  const setToastMessage = useStore((s) => s.setToastMessage)
-  const workspace = useStore((s) => s.workspace)
-
+  const { seamAssignmentMetaDialogId, setSeamAssignmentMetaDialogId, updateSeamAssignmentMeta, setToastMessage, workspace } =
+    useStore(
+      useShallow((s) => ({
+        seamAssignmentMetaDialogId: s.seamAssignmentMetaDialogId,
+        setSeamAssignmentMetaDialogId: s.setSeamAssignmentMetaDialogId,
+        updateSeamAssignmentMeta: s.updateSeamAssignmentMeta,
+        setToastMessage: s.setToastMessage,
+        workspace: s.workspace,
+      })),
+    )
   const assignment = workspace.seamAssignments.find((a) => a.id === seamAssignmentMetaDialogId)
   const pieceA = assignment ? workspace.pieces.find((p) => p.id === assignment.pieceIdA) : null
   const pieceB = assignment ? workspace.pieces.find((p) => p.id === assignment.pieceIdB) : null
+
+  const trapRef = useFocusTrap<HTMLDivElement>(
+    !!(seamAssignmentMetaDialogId && assignment && pieceA && pieceB),
+  )
 
   const [orderStr, setOrderStr] = useState('')
   const [kind, setKind] = useState<SeamAssignmentKindId | ''>('')
@@ -56,7 +66,7 @@ export function SeamAssignmentMetaModal() {
 
   return (
     <div className="nahtzugabe-dialog-overlay" onClick={() => setSeamAssignmentMetaDialogId(null)} role="dialog" aria-modal="true" aria-label="Nahtzuordnung">
-      <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 340 }}>
+      <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 340 }} ref={trapRef}>
         <h3 className="nahtzugabe-dialog-title">Nahtzuordnung</h3>
         <p className="nahtzugabe-dialog-hint" style={{ marginBottom: '0.75rem' }}>
           {nameA} ↔ {nameB}

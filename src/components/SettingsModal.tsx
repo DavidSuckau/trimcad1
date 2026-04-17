@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import type { NotchType } from '../store/useStore'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -30,9 +31,28 @@ export function SettingsModal() {
     setDxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm,
     setDxfImportSeamAllowanceMm,
-  } = useStore()
+  } = useStore(
+    useShallow((s) => ({
+      showSettingsModal: s.showSettingsModal,
+      setShowSettingsModal: s.setShowSettingsModal,
+      notchSettings: s.notchSettings,
+      updateNotchSetting: s.updateNotchSetting,
+      dxfExportScale: s.dxfExportScale,
+      setDxfExportScale: s.setDxfExportScale,
+      dxfImportExtraCutLayers: s.dxfImportExtraCutLayers,
+      setDxfImportExtraCutLayers: s.setDxfImportExtraCutLayers,
+      dxfImportScale: s.dxfImportScale,
+      setDxfImportScale: s.setDxfImportScale,
+      dxfImportDetectVNotches: s.dxfImportDetectVNotches,
+      setDxfImportDetectVNotches: s.setDxfImportDetectVNotches,
+      dxfImportCreateSeamLine: s.dxfImportCreateSeamLine,
+      setDxfImportCreateSeamLine: s.setDxfImportCreateSeamLine,
+      dxfImportSeamAllowanceMm: s.dxfImportSeamAllowanceMm,
+      setDxfImportSeamAllowanceMm: s.setDxfImportSeamAllowanceMm,
+    })),
+  )
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
-  const trapRef = useFocusTrap<HTMLDivElement>()
+  const trapRef = useFocusTrap<HTMLDivElement>(showSettingsModal)
 
   if (!showSettingsModal) return null
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
 import { edgeTotalLength } from '../geometry/seamUtils'
@@ -12,7 +13,16 @@ export function PiecePropertiesModal() {
     updatePiece,
     removeSeamAllowance,
     setEdgeSeamAllowance,
-  } = useStore()
+  } = useStore(
+    useShallow((s) => ({
+      workspace: s.workspace,
+      piecePropertiesDialogPieceId: s.piecePropertiesDialogPieceId,
+      setPiecePropertiesDialogPieceId: s.setPiecePropertiesDialogPieceId,
+      updatePiece: s.updatePiece,
+      removeSeamAllowance: s.removeSeamAllowance,
+      setEdgeSeamAllowance: s.setEdgeSeamAllowance,
+    })),
+  )
 
   const piece =
     piecePropertiesDialogPieceId != null
@@ -25,7 +35,7 @@ export function PiecePropertiesModal() {
     }
   }, [piecePropertiesDialogPieceId, piece, setPiecePropertiesDialogPieceId])
 
-  const trapRef = useFocusTrap<HTMLDivElement>()
+  const trapRef = useFocusTrap<HTMLDivElement>(!!piecePropertiesDialogPieceId && !!piece)
 
   if (!piecePropertiesDialogPieceId || !piece) return null
 

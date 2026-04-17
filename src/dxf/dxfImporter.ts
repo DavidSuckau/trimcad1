@@ -186,6 +186,212 @@ type PieceDraft = {
   notchesFromLayers: Notch[]
   drillsFromLayers: Drill[]
   grainLine: Line | null
+  /** INSERT/Block vs. Modellraum vs. Fallback — steuert implizit Priorität (Liste: zuerst Block). */
+  importSource: 'block' | 'modelspace' | 'fallback'
+}
+
+const CONTOUR_HASH_DECIMALS = 2
+
+/** Rel. Toleranz für Near-Duplikate (Größe/Fläche); bewusst konservativ. */
+const NEAR_DUPE_REL_TOL = 0.02
+const NEAR_DUPE_MIN_AREA_MM2 = 2
+/** Mindestens so viel Überlappung der achsparallelen Bounding-Boxes (Anteil der kleineren Box-Fläche). */
+const NEAR_DUPE_BBOX_OVERLAP_MIN = 0.72
+
+function roundContourCoord(v: number): number {
+  const f = 10 ** CONTOUR_HASH_DECIMALS
+  return Math.round(v * f) / f
+}
+
+/** Geschlossene Punktfolge ohne abschließenden Doppelpunkt (falls vorhanden). */
+function ringPointsForHash(vertices: DxfPoint[], closed: boolean): DxfPoint[] | null {
+  if (vertices.length < 3) return null
+  const pts: DxfPoint[] = []
+  for (const p of vertices) {
+    const q = { x: roundContourCoord(p.x), y: roundContourCoord(p.y) }
+    if (pts.length > 0 && dist(pts[pts.length - 1], q) < 1e-9) continue
+    pts.push(q)
+  }
+  const geometricallyClosed =
+    closed || (pts.length >= 2 && dist(pts[0], pts[pts.length - 1]) < DUPLICATE_THRESHOLD)
+  if (!geometricallyClosed) return null
+  while (pts.length > 2 && dist(pts[0], pts[pts.length - 1]) < DUPLICATE_THRESHOLD) {
+    pts.pop()
+  }
+  return pts.length >= 3 ? pts : null
+}
+
+function signedAreaRing(pts: DxfPoint[]): number {
+  let a = 0
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length
+    a += pts[i].x * pts[j].y - pts[j].x * pts[i].y
+  }
+  return a / 2
+}
+
+function encodeRing(pts: DxfPoint[]): string {
+  return pts.map((p) => `${p.x},${p.y}`).join('|')
+}
+
+/** Stabiler Schlüssel für geschlossene Konturen (Startpunkt- und Umlaufs-unabhängig). */
+function canonicalCutContourKey(vertices: DxfPoint[], closed: boolean): string | null {
+  const ring = ringPointsForHash(vertices, closed)
+  if (!ring) return null
+  let oriented = [...ring]
+  if (signedAreaRing(oriented) < 0) oriented.reverse()
+  const n = oriented.length
+  let best = encodeRing(oriented)
+  for (let i = 1; i < n; i++) {
+    const rot = [...oriented.slice(i), ...oriented.slice(0, i)]
+    const s = encodeRing(rot)
+    if (s < best) best = s
+  }
+  const rev = [...oriented].reverse()
+  for (let i = 0; i < n; i++) {
+    const rot = [...rev.slice(i), ...rev.slice(0, i)]
+    const s = encodeRing(rot)
+    if (s < best) best = s
+  }
+  return best
+}
+
+/** Entfernt identische Schnittkonturen (Block-Entwürfe stehen in der Liste vor Modellraum → Block gewinnt). */
+function dedupePieceDraftsByCutContour(drafts: PieceDraft[]): { drafts: PieceDraft[]; removed: number } {
+  const seen = new Set<string>()
+  const out: PieceDraft[] = []
+  let removed = 0
+  for (const d of drafts) {
+    const key = canonicalCutContourKey(d.cutVertices, d.closed)
+    if (key == null) {
+      out.push(d)
+      continue
+    }
+    if (seen.has(key)) {
+      removed++
+      continue
+    }
+    seen.add(key)
+    out.push(d)
+  }
+  return { drafts: out, removed }
+}
+
+/** Geschlossene Stützpunktliste ohne Rundung (für Fläche/Schwerpunkt/Near-Match). */
+function closedRingPointsRaw(vertices: DxfPoint[], closed: boolean): DxfPoint[] | null {
+  if (vertices.length < 3) return null
+  const pts: DxfPoint[] = []
+  for (const p of vertices) {
+    const q = { x: p.x, y: p.y }
+    if (pts.length > 0 && dist(pts[pts.length - 1], q) < DUPLICATE_THRESHOLD) continue
+    pts.push(q)
+  }
+  const geometricallyClosed =
+    closed || (pts.length >= 2 && dist(pts[0], pts[pts.length - 1]) < DUPLICATE_THRESHOLD)
+  if (!geometricallyClosed) return null
+  while (pts.length > 2 && dist(pts[0], pts[pts.length - 1]) < DUPLICATE_THRESHOLD) {
+    pts.pop()
+  }
+  return pts.length >= 3 ? pts : null
+}
+
+function relCloseMm(a: number, b: number, relTol: number): boolean {
+  const m = Math.max(Math.abs(a), Math.abs(b), 1e-6)
+  return Math.abs(a - b) / m <= relTol
+}
+
+function bboxAreaMm2(b: BBox): number {
+  return Math.max(0, b.maxX - b.minX) * Math.max(0, b.maxY - b.minY)
+}
+
+function bboxIntersectionAreaMm2(a: BBox, b: BBox): number {
+  const ix0 = Math.max(a.minX, b.minX)
+  const iy0 = Math.max(a.minY, b.minY)
+  const ix1 = Math.min(a.maxX, b.maxX)
+  const iy1 = Math.min(a.maxY, b.maxY)
+  return Math.max(0, ix1 - ix0) * Math.max(0, iy1 - iy0)
+}
+
+/** Schwerpunkt eines geschlossenen Polygons (ohne Selbstüberschneidungs-Sonderfälle). */
+function polygonCentroidClosed(pts: DxfPoint[]): DxfPoint | null {
+  const n = pts.length
+  if (n < 3) return null
+  let cx = 0
+  let cy = 0
+  let aTwice = 0
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    const cross = pts[i].x * pts[j].y - pts[j].x * pts[i].y
+    aTwice += cross
+    cx += (pts[i].x + pts[j].x) * cross
+    cy += (pts[i].y + pts[j].y) * cross
+  }
+  if (Math.abs(aTwice) < 1e-9) {
+    let sx = 0
+    let sy = 0
+    for (const p of pts) {
+      sx += p.x
+      sy += p.y
+    }
+    return { x: sx / n, y: sy / n }
+  }
+  const a = aTwice / 2
+  return { x: cx / (6 * a), y: cy / (6 * a) }
+}
+
+function areNearDuplicateCuts(a: PieceDraft, b: PieceDraft): boolean {
+  const ringA = closedRingPointsRaw(a.cutVertices, a.closed)
+  const ringB = closedRingPointsRaw(b.cutVertices, b.closed)
+  if (!ringA || !ringB) return false
+
+  const areaA = polygonArea(ringA)
+  const areaB = polygonArea(ringB)
+  if (areaA < NEAR_DUPE_MIN_AREA_MM2 || areaB < NEAR_DUPE_MIN_AREA_MM2) return false
+
+  const bA = boundsOf(ringA)
+  const bB = boundsOf(ringB)
+  const wA = bA.maxX - bA.minX
+  const hA = bA.maxY - bA.minY
+  const wB = bB.maxX - bB.minX
+  const hB = bB.maxY - bB.minY
+
+  if (!relCloseMm(wA, wB, NEAR_DUPE_REL_TOL)) return false
+  if (!relCloseMm(hA, hB, NEAR_DUPE_REL_TOL)) return false
+  if (!relCloseMm(areaA, areaB, NEAR_DUPE_REL_TOL)) return false
+
+  const cA = polygonCentroidClosed(ringA)
+  const cB = polygonCentroidClosed(ringB)
+  if (!cA || !cB) return false
+  const diag = Math.max(Math.hypot(wA, hA), Math.hypot(wB, hB))
+  const centroidTolMm = Math.max(0.5, NEAR_DUPE_REL_TOL * diag)
+  if (dist(cA, cB) > centroidTolMm) return false
+
+  const inter = bboxIntersectionAreaMm2(bA, bB)
+  const boxMin = Math.max(Math.min(bboxAreaMm2(bA), bboxAreaMm2(bB)), 1e-6)
+  if (inter / boxMin < NEAR_DUPE_BBOX_OVERLAP_MIN) return false
+
+  return true
+}
+
+/**
+ * Entfernt „fast gleiche“ geschlossene Konturen (nach exaktem Hash-Dedupe).
+ * Reihenfolge der Liste bleibt: zuerst Block, dann Modellraum/Fallback → erste Quelle gewinnt (BLOCK > MODELSPACE).
+ */
+function dedupeNearDuplicatePieceDrafts(drafts: PieceDraft[]): { drafts: PieceDraft[]; removed: number } {
+  const kept: PieceDraft[] = []
+  let removed = 0
+  for (const d of drafts) {
+    let isDup = false
+    for (const k of kept) {
+      if (areNearDuplicateCuts(d, k)) {
+        isDup = true
+        break
+      }
+    }
+    if (isDup) removed++
+    else kept.push(d)
+  }
+  return { drafts: kept, removed }
 }
 
 function estimateSeamAllowanceMm(seamPts: DxfPoint[], cutCurves: Curve[]): number | null {
@@ -330,20 +536,22 @@ function extractPieceDrafts(
       }
     }
 
+    const notchesFromLayers = extractNotchesFromBlock(blk.entities, e, unitScale)
+    const drillsFromLayers = extractDrillsFromBlock(blk.entities, e, unitScale)
+
     for (const cut of cuts) {
       const cutB = boundsOf(cut.vertices)
       const seam = pickSeamForCut(cutB, seams)
-      const notchesFromLayers = extractNotchesFromBlock(blk.entities, e, unitScale)
-      const drillsFromLayers = extractDrillsFromBlock(blk.entities, e, unitScale)
       const grainLine = extractGrainFromBlock(blk.entities, e, unitScale, cutB)
       drafts.push({
         cutVertices: cut.vertices,
         closed: cut.closed,
         seamVertices: seam?.vertices ?? null,
         seamClosed: seam?.closed,
-        notchesFromLayers,
-        drillsFromLayers,
+        notchesFromLayers: [...notchesFromLayers],
+        drillsFromLayers: [...drillsFromLayers],
         grainLine,
+        importSource: 'block',
       })
     }
   }
@@ -375,6 +583,7 @@ function extractPieceDrafts(
       notchesFromLayers: [],
       drillsFromLayers: [],
       grainLine: null,
+      importSource: 'modelspace',
     })
   }
 
@@ -433,6 +642,7 @@ function extractFallbackCutDrafts(parsed: {
       notchesFromLayers: [],
       drillsFromLayers: [],
       grainLine: null,
+      importSource: 'fallback',
     })
   }
   return drafts
@@ -681,6 +891,22 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       }
     }
 
+    const dedupExact = dedupePieceDraftsByCutContour(drafts)
+    drafts = dedupExact.drafts
+    if (dedupExact.removed > 0) {
+      warnings.push(
+        `${dedupExact.removed} doppelte Schnittkontur(en) entfernt (exakt gleiche Geometrie nach Hash-Rundung). Es bleibt jeweils der zuerst verarbeitete Entwurf (üblicherweise Block/INSERT vor Modellraum).`
+      )
+    }
+
+    const dedupNear = dedupeNearDuplicatePieceDrafts(drafts)
+    drafts = dedupNear.drafts
+    if (dedupNear.removed > 0) {
+      warnings.push(
+        `${dedupNear.removed} nahezu identische Schnittkontur(en) entfernt (Größe/Fläche je ±${Math.round(NEAR_DUPE_REL_TOL * 100)} %, hohe Bounding-Box-Überlappung, nahe Schwerpunkte). Block-Entwürfe haben Vorrang vor später in der Liste stehenden Quellen.`
+      )
+    }
+
     if (drafts.length === 0) {
       return {
         pieces: [],
@@ -814,6 +1040,7 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
         drills: [...draft.drillsFromLayers],
         grainLine: draft.grainLine,
         internalLines: [],
+        internalCircles: [],
         layer: 'CUT',
         transform: { x: 0, y: 0, rotation: 0, mirrored: false },
         softVertices: [],

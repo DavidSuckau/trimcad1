@@ -2,10 +2,11 @@ import { useEffect, useRef } from 'react'
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-export function useFocusTrap<T extends HTMLElement = HTMLDivElement>() {
+export function useFocusTrap<T extends HTMLElement = HTMLDivElement>(active = true) {
   const ref = useRef<T>(null)
 
   useEffect(() => {
+    if (!active) return
     const el = ref.current
     if (!el) return
 
@@ -35,7 +36,7 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>() {
       el.removeEventListener('keydown', onKeyDown)
       previouslyFocused?.focus()
     }
-  }, [])
+  }, [active])
 
   return ref
 }

@@ -1,4 +1,4 @@
-import type { Curve, PatternPiece, Point } from '../types/model'
+import type { Curve, InternalCircle, PatternPiece, Point } from '../types/model'
 import type { BatchSelectionFilter, BatchSelectionTarget } from '../types/model'
 import { bezierAt } from '../geometry/curveToPath'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
@@ -19,6 +19,8 @@ export function batchTargetKey(t: BatchSelectionTarget): string {
       return `n:${t.pieceId}:${t.notchId}`
     case 'internalLine':
       return `il:${t.pieceId}:${t.curveIndex}`
+    case 'internalCircle':
+      return `ic:${t.pieceId}:${t.circleId}`
     case 'piece':
       return `piece:${t.pieceId}`
   }
@@ -44,11 +46,14 @@ export function filterBatchTargets(
     })
   }
 
+  if (filter === 'internalLines') {
+    return targets.filter((t) => t.kind === 'internalLine' || t.kind === 'internalCircle')
+  }
+
   const kindByFilter: Partial<Record<BatchSelectionFilter, BatchSelectionTarget['kind']>> = {
     vertices: 'vertex',
     notches: 'notch',
     curvePoints: 'curvePoint',
-    internalLines: 'internalLine',
     pieces: 'piece',
   }
   const want = kindByFilter[filter]
@@ -85,6 +90,17 @@ function curveAnySampleInRect(curve: Curve, piece: PatternPiece, r: WorldRect): 
     const local = pointOnCurveSample(curve, t)
     const w = pieceLocalToWorld(local, piece.transform)
     if (pointInWorldRect(w, r)) return true
+  }
+  return false
+}
+
+function internalCircleAnySampleInRect(ic: InternalCircle, piece: PatternPiece, r: WorldRect): boolean {
+  if (pointInWorldRect(pieceLocalToWorld(ic.center, piece.transform), r)) return true
+  const n = 8
+  for (let i = 0; i < n; i++) {
+    const ang = (i / n) * 2 * Math.PI
+    const local = { x: ic.center.x + ic.radius * Math.cos(ang), y: ic.center.y + ic.radius * Math.sin(ang) }
+    if (pointInWorldRect(pieceLocalToWorld(local, piece.transform), r)) return true
   }
   return false
 }
@@ -157,6 +173,12 @@ export function collectMarqueeTargets(pieces: PatternPiece[], rect: WorldRect): 
       const curve = piece.internalLines[ii]
       if (curveAnySampleInRect(curve, piece, rect)) {
         add({ kind: 'internalLine', pieceId: piece.id, curveIndex: ii })
+      }
+    }
+
+    for (const ic of piece.internalCircles) {
+      if (internalCircleAnySampleInRect(ic, piece, rect)) {
+        add({ kind: 'internalCircle', pieceId: piece.id, circleId: ic.id })
       }
     }
   }

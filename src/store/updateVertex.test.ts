@@ -15,6 +15,7 @@ function makeSquare(): PatternPiece {
     ],
     seamLine: [],
     internalLines: [],
+    internalCircles: [],
     notches: [],
     drills: [],
     grainLine: null,

@@ -48,6 +48,7 @@ describe('notch operations keep cutLine unchanged', () => {
           drills: [],
           grainLine: null,
           internalLines: [],
+          internalCircles: [],
           layer: 'CUT',
           transform: { x: 0, y: 0, rotation: 0, mirrored: false },
           softVertices: [],

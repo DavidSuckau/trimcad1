@@ -1,4 +1,6 @@
-import type { Curve, Point } from '../types/model'
+import type { Curve, PatternPiece, Point } from '../types/model'
+import { enumerateEdges } from './edgeEnumeration'
+import { getCurvesForSeamEdge } from './seamUtils'
 // @ts-expect-error clipper-lib has no types
 import ClipperLib from 'clipper-lib'
 import { closedPointsToLineCurves, tessellateCurvesToPoints } from './offset'
@@ -49,6 +51,33 @@ export function mirrorCurveAcrossLine(c: Curve, a: Point, b: Point): Curve {
 /** Kreuzprodukt (B−A) × (P−A); > 0: P links von der Geraden A→B (mathematisch positiv, y nach oben). */
 export function crossZ(a: Point, b: Point, p: Point): number {
   return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+}
+
+/** Spiegelachse für interne Linie: Sehne von Kurvenstart zu -ende (auch bei Bézier). */
+export function symmetryAxisEndpointsFromInternalCurve(c: Curve): { axisA: Point; axisB: Point } {
+  return { axisA: { ...c.start }, axisB: { ...c.end } }
+}
+
+/**
+ * Spiegelachse entlang einer **geraden** Kante der Master-Kontur (Seam bei NZ, sonst Cut).
+ * `null`, wenn die Kante kein reines Liniensegment ist (z. B. Bézier).
+ */
+export function symmetryAxisEndpointsFromStraightMasterEdge(
+  piece: PatternPiece,
+  edgeIndex: number,
+): { axisA: Point; axisB: Point } | null {
+  const edges = enumerateEdges(piece)
+  const edge = edges.find((e) => e.edgeIndex === edgeIndex)
+  if (!edge) return null
+  const masterK = getCurvesForSeamEdge(piece)
+  const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean) as Curve[]
+  if (curves.length === 0) return null
+  for (const seg of curves) {
+    if (seg.type === 'bezier') return null
+  }
+  const first = curves[0] as Extract<Curve, { type: 'line' }>
+  const last = curves[curves.length - 1] as Extract<Curve, { type: 'line' }>
+  return { axisA: { ...first.start }, axisB: { ...last.end } }
 }
 
 /** `left` = Halbebene mit crossZ ≥ 0. */

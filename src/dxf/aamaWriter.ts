@@ -99,6 +99,9 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
     const scaledIntPts = intPts.map((p) => ({ x: p.x * scale, y: p.y * scale }))
     out.push(dxfPolyline(AAMA_LAYERS.INTERNAL, scaledIntPts, false))
   }
+  for (const ic of piece.internalCircles) {
+    out.push(dxfCircle(AAMA_LAYERS.INTERNAL, ic.center.x * scale, ic.center.y * scale, ic.radius * scale))
+  }
 
   // TEXT layer: Teilename/Nummer
   const label = piece.name || piece.number || ''

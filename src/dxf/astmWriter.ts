@@ -200,10 +200,11 @@ function emitGerberNotchPackLocal(
   }
 
   const anchorLocal = { x: position.x * fileScale, y: position.y * fileScale }
-  let { closest: snapped, segIndex } = projectPointOntoClosedPolylineWithSegment(
+  const { closest: initialClosest, segIndex } = projectPointOntoClosedPolylineWithSegment(
     boundaryRingLocal,
     anchorLocal,
   )
+  let snapped = initialClosest
   const tol = Math.max(SNAP_TOLERANCE_MIN_FILE, fileScale * SNAP_TOLERANCE_FILE_PER_SCALE)
   let nearestV = snapped
   let nearestD = Infinity
@@ -298,6 +299,13 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     const intPts = curveToPolylinePoints(piece.internalLines)
     const scaledIntPts = intPts.map((p) => ({ x: p.x * fileScale, y: p.y * fileScale }))
     out.push(dxfPolyline(ASTM_LAYER.INTERNAL, scaledIntPts, false))
+  }
+  for (const ic of piece.internalCircles) {
+    const cx = ic.center.x * fileScale
+    const cy = ic.center.y * fileScale
+    const r = ic.radius * fileScale
+    if (![cx, cy, r].every(Number.isFinite)) continue
+    out.push(dxfCircle(ASTM_LAYER.INTERNAL, cx, cy, r))
   }
 
   const label = piece.name || piece.number || ''

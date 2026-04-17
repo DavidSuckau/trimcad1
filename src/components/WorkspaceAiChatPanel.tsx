@@ -180,7 +180,7 @@ export function WorkspaceAiChatPanel() {
         </button>
       </div>
       <p className="workspace-ai-chat-hint">
-        <strong>Bedienung:</strong> Frage eingeben (z. B. „Welche Taste für Drehpunkt?“) → <em>Antwort aus Doku</em> nutzt die
+        <strong>Bedienung:</strong> Frage eingeben (z. B. „Welche Taste für Drehpunkt?“) → <em>Antwort aus Doku</em> nutzt die
         Projekt-Dokumentation. <strong>Aktionen:</strong> Text und optional Screenshot/Skizze → <em>Vorschlag holen</em> für
         Kerben, Bohrungen, neue Teile (erst nach Bestätigung).
       </p>

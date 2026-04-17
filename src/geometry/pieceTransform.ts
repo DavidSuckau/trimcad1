@@ -16,7 +16,7 @@ export function getPiecePivotLocal(piece: PatternPiece): Point {
 export function pieceLocalToWorld(local: Point, transform: PatternPieceTransform): Point {
   const { x: tx, y: ty, rotation, mirrored } = transform
   let lx = local.x
-  let ly = local.y
+  const ly = local.y
   if (mirrored) lx = -lx
   const rad = (rotation * Math.PI) / 180
   const cos = Math.cos(rad)
@@ -36,7 +36,7 @@ export function worldToPieceLocal(world: Point, transform: PatternPieceTransform
   const cos = Math.cos(rad)
   const sin = Math.sin(rad)
   let lx = dx * cos - dy * sin
-  let ly = dx * sin + dy * cos
+  const ly = dx * sin + dy * cos
   if (mirrored) lx = -lx
   return { x: lx, y: ly }
 }

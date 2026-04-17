@@ -14,8 +14,10 @@
     (aus systematischer Code-Review April 2026).
   • LOP-058–069: Externer Tester-Feedback (April 2026) – PDF, UI, Notches,
     Nahtzugabe, Geometrie, Import, Profile.
+  • LOP-070: UX-Vision „Canvas-first / Intent statt Tool-Wüste“ (April 2026,
+    Produktstrategie; kein Feature-Blocker).
   Neue Funktionen, Erweiterungen und größere Refactorings: immer als **neuer**
-  LOP-Punkt mit der **nächsten freien ID** (nach 069 fortführen) eintragen;
+  LOP-Punkt mit der **nächsten freien ID** (nach 070 fortführen) eintragen;
   bei Überschneidung mit technischen LOP-Punkten **„Siehe auch LOP-xxx“** setzen.
 
   Legende
@@ -33,7 +35,7 @@
  --------  -------------------------------------------  ----------
  LOP-009   NotchType: strich/kerbe vs. single/double/v  [~]
  LOP-010   Notch vertexIndex: cutLine vs. Master        [~]
- LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [ ]
+ LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [~]
  LOP-016   removeNotch/toggleNotch/addCurve, flipGrain  [~] [!]
 
 
@@ -103,6 +105,15 @@
   LOP-069   Funktion               Profile auf internen Linien          [ ]
 
 
+================================================================================
+  LOP-PUNKTE – Übersicht UX-Vision / Canvas-first (ab LOP-070)
+================================================================================
+
+  ID        Kategorie              Kurztitel                             Status
+  --------  ---------------------  ------------------------------------  ----------
+  LOP-070   UX / Vision            Canvas-first, 3 Modi, Kontext-UI, KI  [ ]
+
+
   Erledigt (April 2026): LOP-042 (ErrorBoundary), LOP-046 (deletePiece),
   LOP-047 (loadProject UI-Reset), LOP-048 (Geometry-Duplikate → geometryConstants.ts),
   LOP-049 (Input-Guards), LOP-053 (Keyboard-Listener-Churn → Ref-Pattern),
@@ -160,14 +171,16 @@
   │ 'kerbe'                     │ 'v'       (V-Einschnitt)     │
   │ 'keine'                     │ (kein Notch erzeugt)         │
   └─────────────────────────────┴──────────────────────────────┘
-  Konvertierung: modelNotchFieldsFromPreset() in WorkspaceCanvas.tsx (Zeile ~88).
-  Rückrichtung: findMatchingNotchPresetIndex() in WorkspaceCanvas.tsx (Zeile ~146).
+  Konvertierung: modelNotchFieldsFromPreset() in src/notch/notchPresetMapping.ts
+  (Import in WorkspaceCanvas.tsx).
+  Rückrichtung: findMatchingNotchPresetIndex() in derselben Datei.
+  Tests: src/notch/notchPresetMapping.test.ts.
   'double' existiert im Modell, wird aber aktuell von keinem UI-Preset erzeugt
   (reserviert für LOP-021: erweiterte Notch-Typen).
 
   Empfehlung:
-  Bei Erweiterung (LOP-021) einheitliches Typsystem oder explizite Mapping-
-  Tabelle in eigener Datei. Aktuell reicht die Doku oben.
+  Bei Erweiterung (LOP-021) einheitliches Typsystem oder Mapping hier erweitern.
+  Aktuell reicht die Doku oben plus zentrale Mapping-Datei.
   Siehe auch LOP-021 (Produkt: mehrere Notch-Typen / Nutzerwahl).
 
 
@@ -187,14 +200,29 @@
   weiterhin offen (siehe LOP-009 / LOP-021).
 
 
---- LOP-014 [ ] DXF-MASTER-SPEZIFIKATION vs. AAMA/ASTM --------------------
+--- LOP-014 [~] DXF-MASTER-SPEZIFIKATION vs. AAMA/ASTM --------------------
 
   DXF-MASTER: „minimal“ (nur CUT). Rule zielformat-aama-astm: Layer CUT, SEAM,
   NOTCH, …; aamaWriter.ts / astmWriter.ts existieren.
 
-  Offen:
-  Verhältnis Master-Spez vs. AAMA/ASTM? Welcher Writer wann? Alle parallel anbieten?
-  Siehe auch LOP-020, LOP-030.
+  Umsetzung Doku (April 2026) – welcher Writer, welche UI:
+  ┌──────────────────────┬─────────────────────────────────────────────────┐
+  │ Menü / Codepfad      │ Ausgabe                                         │
+  ├──────────────────────┼─────────────────────────────────────────────────┤
+  │ Datei → Exportieren  │ downloadDxf → dxfWriter.ts (DXF-MASTER,         │
+  │ → DXF (Master)       │ docs/DXF-MASTER-SPEZIFIKATION.txt, nur CUT-     │
+  │                      │ Polylinien, R12)                                 │
+  ├──────────────────────┼─────────────────────────────────────────────────┤
+  │ → DXF AAMA (.aam)    │ downloadAamaDxf → aamaWriter.ts (Layer CUT,   │
+  │                      │ SEAM, NOTCH, DRILL, GRAIN, TEXT, INTERNAL)      │
+  ├──────────────────────┼─────────────────────────────────────────────────┤
+  │ → DXF ASTM (.ast)    │ downloadAstmDxf → astmWriter.ts (analog AAMA,  │
+  │                      │ ASTM-Layerkonstanten)                            │
+  └──────────────────────┴─────────────────────────────────────────────────┘
+  Alle drei nutzen gemeinsam dxfShared.ts (Geometrie, Dateiname, Download).
+
+  Noch offen (Produkt/QA): End-to-End-Tests Export; Nutzer-Doku „wann welches
+  Format“; LOP-020/030 (Roadmap Gerber/CSV). Technische Abgrenzung oben erledigt.
 
 
 --- LOP-016 [~] [!] Weitere Store-Funktionen cutLine-zentriert ------------
@@ -389,6 +417,69 @@
   Externer Tester (April 2026):
   • Debug-Overlay gewünscht: Punkt-IDs, Linienrichtungen, Notch-Positionen.
   • Ständiges visuelles Feedback bei Interaktionen.
+
+
+--- LOP-070 [ ] UX-Vision: Canvas-first, Intent statt Tool-Wüste -----------
+
+  Kategorie: Produkt / UX-Richtung (strategisch; Features bleiben, Präsentation
+  und Aktivierung ändern)
+
+  Ausgangslage (ehrliche Einordnung):
+  • Funktional stark, kognitiv eher Power-Tool (viele Menüs, Werkzeuge, Leisten).
+  • Risiko: neue Nutzer überfordert, nur Experten bleiben; UI wirkt „mächtig
+    aber stressig“.
+
+  Grundprinzip:
+  • Weg von „viele Buttons = viele Tools“ hin zu „ein Canvas – Kontext entscheidet“.
+  • Apple-nah heißt hier: 1 Hauptinteraktion, 1 sekundäre, Rest nur bei Bedarf
+    (progressive disclosure), nicht zwangsläufig Features streichen.
+
+  Zielbild A — Drei Hauptmodi statt vieler permanenter Werkzeuge
+  1) Erstellen: Klick/Drag erzeugt sinnvolle Defaults; Kontext (leere Fläche vs.
+     Kante vs. Linie) steuert, ob Teil, Punkt, Kerbe, Kontur folgt — weniger
+     explizites Werkzeugwechseln.
+  2) Bearbeiten: direkte Manipulation (ziehen, drehen, Snap); Doppelklick = Detail;
+     idealerweise weniger Modus-Wechsel nur zum Verschieben eines Punkts.
+  3) Naht / Technik: Nahtzugabe, Kerben, Bohrungen, Zuordnung — alles, was
+     Fachlogik ist, gebündelt statt über zerstreute Menüpunkte.
+
+  Zielbild B — Context-first UI
+  • UI-Elemente erscheinen, wenn sie Sinn ergeben (z. B. Teil gewählt → kleine
+    Aktionskarte: Bearbeiten, Naht, Duplizieren, Löschen statt dauerhaft vieler
+    globaler Buttons).
+  • Tiefe Funktionen: Kontextmenü, „Mehr…“, Rechtsklick — siehe LOP-027.
+
+  Zielbild C — Canvas ist zentral
+  • Reduktion permanenter Chrome: oben minimal (z. B. Datei, Undo/Redo, Zoom);
+    Teileliste links optional/einklappbar; DesignBar und Canvas-Toolbar nicht
+    dauerhaft „voll sichtbar“, sondern kontextabhängig oder in einem Überblicks-
+    Menü (Umsetzung iterativ; Canvas-Refactor LOP-043).
+
+  Zielbild D — Intent statt Toolwahl
+  • Beispiel: Klick auf Kante → kleine Auswahl Kerbe / Nahtzugabe / Bohrung /
+    Maß statt erst Notch-Tool aus Menü wählen.
+
+  Zielbild E — KI als Aktionslayer (optional, langfristig)
+  • Statt nur Chat-Panel: Vorschläge im Moment (z. B. nach Freitext oder Kante:
+    2–3 konkrete Aktionen / Overlays, übernehmbar), WorkspaceChat weiter nutzbar
+    aber nicht der einzige Einstieg.
+
+  Aufräum-Regel für jede sichtbare UI-Komponente:
+  • „Braucht der typische Nutzer das in >90 % der Sessions sichtbar?“ Wenn nein:
+    verstecken oder kontextualisieren.
+
+  Konkrete Umsetzungsschritte (für Reviews / Epics priorisieren):
+  1) Modell „3 Modi“ prototypisch (Toggle oder Tabs), bestehende Tools zuordnen.
+  2) Erste kontextuelle Leiste am ausgewählten Teil (Canvas-Overlay).
+  3) DesignBar/CanvasToolbar: Sichtbarkeit an Modus und Selektion koppeln.
+  4) KI: UX-Flow „Vorschlag annehmen“ ohne vollständigen Chat als Pflichtweg.
+
+  Siehe auch: LOP-027 (Kontextmenü), LOP-041 (Detail-Feintuning), LOP-043
+  (WorkspaceCanvas aufteilen erleichtert kontextuelle UI), LOP-061 (KI-Panel),
+  docs/TRIMTEX-FUNKTIONSBERICHT.md (Ist-Funktionskarte).
+
+  Stand April 2026: bewusst nur Doku/Epics – kein Produktcode bis Priorisierung
+  mit LOP-027/041/043; Umsetzung Schritt für Schritt (Modi-Toggle, Kontextleiste).
 
 
 ================================================================================
@@ -971,42 +1062,41 @@
   ANHANG B: Empfohlene Maßnahmen (Technik, konsolidiert)
 ================================================================================
 
-  Nächste sinnvolle Schritte (offen, nach Aufwand/Impact sortiert):
+  Nächste sinnvolle Schritte (offen, nach Aufwand/Impact sortiert).
+  Stand: April 2026 – Punkte 0a–0d, 4–6, 9–10, 17–18 sind inzwischen in der
+  Hauptübersicht als [✓] bzw. im Anhang „Erledigt“ dokumentiert.
 
-  Kritisch / Blocker (Tester-Feedback):
-  0a. LOP-058 PDF-Export druckfertig (Skalierung, Ränder, DPI)
-  0b. LOP-060 Farbwechsel Blau↔Rot Toggle unzuverlässig (Bug)
-  0c. LOP-062 Notch↔Vertex-Konflikt: Verschieben blockieren
-  0d. LOP-068 DXF-Import: Notch-Erkennung robuster
+  Kritisch / Blocker (Produkt + Seam-Modell):
+  A1. LOP-020 DXF-Export produktionsreif (Tests, Vollständigkeit)
+  A2. LOP-033 / LOP-016-Rest / LOP-009–010 (Seam-as-Master, addCurveToCutLine)
 
   Mittlerer Aufwand, hoher Impact:
-  1. LOP-045 Store-Selektoren in WorkspaceCanvas, Toolbar, Sidebar einführen
-  2. LOP-016 flipPieceAlongGrain, Notch/Curve-Hooks auf Master prüfen
-  3. LOP-050 Tests für deletePiece, loadProject, Batch ergänzen
-  4. LOP-063 Notch-Stabilität bei NZ-Änderung
-  5. LOP-064 Individuelle NZ: Hitbox + Hover-Feedback
-  6. LOP-067 Stückliste-Vorschau: Teilenamen groß auf Pattern
+  B1. LOP-045 weiter: verbleibende Komponenten, Memo wo sinnvoll
+  B2. LOP-055 weiter: batchDeleteFiltered intern weniger get()-Kaskaden (Risiko)
+  B3. LOP-050 weiter: kritische Store-Pfade testen
 
-  Bestehende Technik-LOP (weiterhin offen):
-  7. LOP-009/010 Notch-Modell vereinheitlichen (mit LOP-021 abstimmen)
-  8. LOP-014 DXF-Doku/Writer-Abgrenzung (mit LOP-020/030)
-
-  Geringer Aufwand (Quick Wins):
-  9. LOP-061 KI-Fenster standardmäßig ausblenden
-  10. LOP-059 Profilbezeichnung an Linie binden
+  Bestehende Technik-LOP:
+  C1. LOP-009/010 Notch-Modell (mit LOP-021 abstimmen)
+  C2. LOP-014 Rest: Nutzer-Doku / QA-Exportpfade (Code-Doku siehe Detail LOP-014)
 
   Langfristige Architektur:
-  11. LOP-043 WorkspaceCanvas aufteilen
-  12. LOP-044 useStore in Slices aufteilen
-  13. LOP-052 ESLint/Prettier einrichten
-  14. LOP-055 Batch-Actions gebündelt
-  15. LOP-051 Accessibility verbessern
-  16. LOP-041 UX-Feintuning
+  D1. LOP-043 WorkspaceCanvas aufteilen
+  D2. LOP-044 useStore in Slices aufteilen
+  D3. LOP-051 Accessibility (restliche UI)
+  D4. LOP-041 UX-Feintuning
 
   Feature-Erweiterungen:
-  17. LOP-065 Laufrichtungspfeil Skalierung entkoppeln
-  18. LOP-066 Drehpunkt (Pivot) fixieren
-  19. LOP-069 Profile auf internen Linien
+  E1. LOP-069 Profile auf internen Linien
+  E2. LOP-030–032, LOP-034–040 je nach Roadmap
+
+  Erledigt / aktualisiert (klein–mittel, April 2026):
+  • LOP-052: eslint.config.js, Prettier, npm run lint / format
+  • LOP-045: useShallow u. a. in WorkspaceCanvas, Toolbar, CanvasToolbar,
+    Settings/Stückliste/Profil/PieceProperties, Help, Shortcut, SeamMeta
+  • LOP-051: Fokusfallen HelpModal, ShortcutListModal, ProfileAssignmentDialog,
+    SeamAssignmentMetaModal
+  • LOP-050: Test deriveCutLineForPiece.test.ts
+  • LOP-014: Writer-Matrix im Detailabschnitt LOP-014
 
 
 ================================================================================
@@ -1016,45 +1106,38 @@
   Blocker / kritisch
   ------------------
   • LOP-020 DXF-Export produktionsreif
-  • LOP-058 PDF-Export druckfertig (Skalierung, Ränder, Stückliste) [NEU]
-  • LOP-060 Farbwechsel Blau↔Rot Toggle unzuverlässig [NEU]
   • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016)
   • LOP-022 Digitalisierung stabil (weitere Produkt-/UX-Themen)
-  • LOP-062 Notch↔Vertex-Konflikt: Verschieben blockieren [NEU]
-  • LOP-068 DXF-Import: Notch-Erkennung robuster [NEU]
+  (Tester-Runde erledigt: LOP-058, 060, 062, 068 – siehe Übersicht [✓])
 
   Wichtig
   -------
   • LOP-021 Notch-System (inkl. Tester-Feedback: Springen, Constraints)
   • LOP-028 Nahtlogik
   • LOP-025 Kurvenbearbeitung (Rest v. a. Produkt)
-  • LOP-045 Performance: Store-Subscriptions + Memoization
-  • LOP-050 Fehlende Tests für kritische Flows
-  • LOP-063 Notch-Stabilität bei NZ-Änderung [NEU]
-  • LOP-064 Individuelle NZ: Hitbox + Hover-Feedback [NEU]
-  • LOP-067 Stückliste-Vorschau: Teilenamen groß auf Pattern [NEU]
+  • LOP-045 Performance: Store-Subscriptions + Memoization (Teil: useShallow)
+  • LOP-050 Fehlende Tests für kritische Flows (laufend erweitert)
+  (Tester-Runde erledigt: LOP-063, 064, 067 – siehe Übersicht [✓])
 
   Quick Wins
   ----------
-  • LOP-061 KI-Fenster standardmäßig ausblenden [NEU]
-  • LOP-059 Profilbezeichnung an Linie binden [NEU]
+  (LOP-059, 061 erledigt – siehe Übersicht [✓]; nächste kleine UX-Punkte → LOP-041)
 
   Architektur / Wartbarkeit (mittelfristig)
   ------------------------------------------
   • LOP-043 WorkspaceCanvas aufteilen
   • LOP-044 useStore in Slices
-  • LOP-052 Tooling (ESLint/Prettier)
-  • LOP-055 Batch-Actions gebündelt
+  • LOP-052 Tooling (ESLint/Prettier – Basis: npm run lint/format)
+  • LOP-055 Batch-Actions gebündelt (Teil bereits umgesetzt)
 
   Erweiterung / später
   --------------------
   • LOP-034 Automatisierungen, LOP-035 Konfiguratoren
   • LOP-038 Materialdatenbank, LOP-039 Produktionsintegration
   • LOP-030–032, LOP-036–037, LOP-040–041 je nach Roadmap
-  • LOP-051 Accessibility
-  • LOP-065 Laufrichtungspfeil Skalierung entkoppeln [NEU]
-  • LOP-066 Drehpunkt (Pivot) fixieren [NEU]
-  • LOP-069 Profile auf internen Linien [NEU]
+  • LOP-051 Accessibility (restliche Stellen)
+  • LOP-069 Profile auf internen Linien
+  (LOP-065, 066 erledigt – siehe Übersicht [✓])
 
   Erledigt (April 2026, Code-Review-Runde)
   -----------------------------------------
@@ -1082,7 +1165,7 @@
     nearestCutVertexIndex maxDistMm, remapSoft REMAP_MAX_DIST_MM=50)
   ✓ LOP-045 teilw. (PieceGroup mit React.memo gewrapped)
   ✓ LOP-055 teilw. (batchSetVerticesSoft zu single-set konsolidiert)
-  ✓ LOP-009 teilw. (NotchType-Mapping UI↔Modell dokumentiert)
+  ✓ LOP-009 teilw. (NotchType-Mapping UI↔Modell: src/notch/notchPresetMapping.ts + Tests)
   ✓ LOP-058 PDF druckfertig (Kompression MEDIUM, 2400px Vorschau, Seitennummern)
   ✓ LOP-059 Profilbezeichnung dynamisch an Linie (geprüft: bereits korrekt)
   ✓ LOP-060 Farbwechsel P/E: Hover parallel Vertex+Notch, Toggle zuverlässig
@@ -1100,12 +1183,21 @@
     insertPointOnCutLine nearestCutVertexIndex mit maxDist-Schwelle
   ✓ LOP-016 teilw. (flipPieceAlongGrain auf Seam-as-Master umgestellt;
     Notch-Spiegelung über materializeNotchAnchorsOnCutLine statt resync)
-  ✓ LOP-045 teilw. (DesignBar + Sidebar: useShallow-Selektoren statt useStore())
+  ✓ LOP-045 teilw. (DesignBar + Sidebar; April 2026 +: WorkspaceCanvas, Toolbar,
+    CanvasToolbar; modale Store-Slices Settings/Stückliste/Teil-Eigenschaften/Profil;
+    Help-, Shortcut-, SeamAssignmentMeta-Modal)
   ✓ LOP-055 teilw. (batchDeleteMarqueeCompletePieces zu single-set() konsolidiert)
-  ✓ LOP-051 teilw. (useFocusTrap Hook: SettingsModal, PiecePropertiesModal,
-    StuecklisteModal – Tab-Navigation bleibt im Modal)
-  ✓ LOP-050 teilw. (flipPieceAlongGrain.test.ts: 4 Tests – cut-only, seam-master,
-    softVertex-Stabilität, Notch-Resync nach Spiegelung)
+  ✓ LOP-051 teilw. (FocusTrap: Settings, PieceProperties, Stückliste; April 2026 +:
+    HelpModal, ShortcutListModal, ProfileAssignmentDialog, SeamAssignmentMetaModal;
+    useFocusTrap(active) damit Trap beim Öffnen des Modals greift)
+  ✓ LOP-050 teilw. (flipPieceAlongGrain.test.ts; April 2026 +: deriveCutLineForPiece.test.ts)
+  ✓ LOP-052 teilw. (April 2026): eslint.config.js, eslint-config-prettier, Prettier,
+    npm-Skripte lint + format
+  ✓ LOP-014 teilw. (April 2026): Writer-/Menü-Matrix im Detailabschnitt LOP-014
+  ✓ PROF-002 teilw. (April 2026): profileKey → HSL-Farbe (Canvas + Übersichts-SVG)
+  ✓ PROF-008 teilw. (April 2026): Profil-Kanten-Warn-Toast bei updateVertex,
+    removeVertex, replaceSegmentWithBezier, movePointOnCurve,
+    convertBezierSegmentToLine (profileEdgeWarnings.ts + Tests)
 
 
 ================================================================================
@@ -1126,6 +1218,9 @@ PRIO-A (hoher Nutzen, überschaubarer Aufwand)
     - Jedes Profil bekommt eine eigene Farbe (statt immer violett)
     - Farbkodierung in der Legende / Stückliste
     - Sofortige visuelle Unterscheidung bei mehreren Profilen
+    Umsetzung (teilw., April 2026): deterministische Farbe pro profileKey (HSL)
+    auf Canvas und Arbeitsflächen-Übersichts-SVG — Stücklisten-Legende / freie
+    Farbwahl weiter offen.
 
   □ PROF-003  Profil-Übersichtstabelle im Editor
     - Kleines Sidebar-Panel mit allen zugeordneten Profilen
@@ -1156,6 +1251,10 @@ PRIO-B (nützlich, mittlerer Aufwand)
   □ PROF-008  Profil-Warnung bei Kantenlängenänderung
     - Toast-Warnung wenn Kante mit Profil unter Minimum fällt
     - Hinweis wenn Kantenlänge sich um >X% ändert
+    Umsetzung (teilw., April 2026): nach updateVertex, removeVertex,
+    replaceSegmentWithBezier, movePointOnCurve, convertBezierSegmentToLine —
+    Schwellen in profileEdgeWarnings.ts (min. mm, Relativ-Änderung); weitere
+    Aktionen (NZ, …) bei Bedarf nachziehen.
 
 PRIO-C (nice to have, Phase 2)
 ───────────────────────────────

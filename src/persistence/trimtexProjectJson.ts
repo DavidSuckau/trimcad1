@@ -75,6 +75,16 @@ function isCurve(v: unknown): v is Curve {
   return false
 }
 
+function parseInternalCircle(v: unknown): { id: string; center: Point; radius: number } | null {
+  if (typeof v !== 'object' || v === null) return null
+  const o = v as Record<string, unknown>
+  if (typeof o.id !== 'string' || !o.id) return null
+  if (!isPoint(o.center)) return null
+  const r = Number(o.radius)
+  if (!Number.isFinite(r) || r <= 0) return null
+  return { id: o.id, center: { ...(o.center as Point) }, radius: r }
+}
+
 function isViewState(v: unknown): v is ViewState {
   if (typeof v !== 'object' || v === null) return false
   const o = v as Record<string, unknown>
@@ -155,6 +165,10 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
   const cutLine = Array.isArray(raw.cutLine) ? raw.cutLine.filter(isCurve) : []
   const seamLine = Array.isArray(raw.seamLine) ? raw.seamLine.filter(isCurve) : []
   const internalLines = Array.isArray(raw.internalLines) ? raw.internalLines.filter(isCurve) : []
+  const internalCirclesRaw = (raw as { internalCircles?: unknown }).internalCircles
+  const internalCircles = Array.isArray(internalCirclesRaw)
+    ? internalCirclesRaw.map(parseInternalCircle).filter((x): x is NonNullable<typeof x> => x != null)
+    : []
   const base: PatternPiece = {
     id: typeof raw.id === 'string' ? raw.id : 'p1',
     number: typeof raw.number === 'string' ? raw.number : '001',
@@ -174,6 +188,7 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       ? { start: { ...(raw.grainLine as { start: Point }).start }, end: { ...(raw.grainLine as { end: Point }).end } }
       : null,
     internalLines,
+    internalCircles,
     layer: typeof raw.layer === 'string' ? raw.layer : 'CUT',
     transform: {
       x: typeof raw.transform?.x === 'number' ? raw.transform.x : 0,
@@ -483,6 +498,6 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
 
 /** Dateiname aus Arbeitsflächennamen ableiten (nur sichere Zeichen). */
 export function suggestedTrimTexProjectFilename(workspaceName: string): string {
-  const safe = workspaceName.replace(/[^\w\u00C0-\u024f\-]+/g, '_').replace(/_+/g, '_').slice(0, 80) || 'trimtex-projekt'
+  const safe = workspaceName.replace(/[^\w\u00C0-\u024f-]+/g, '_').replace(/_+/g, '_').slice(0, 80) || 'trimtex-projekt'
   return `${safe}.json`
 }

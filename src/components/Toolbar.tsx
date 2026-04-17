@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { VIEWBOX_CX, VIEWBOX_CY } from '../workspaceConstants'
 import { downloadDxf } from '../dxf/dxfWriter'
@@ -106,7 +107,58 @@ export function Toolbar() {
     contourEditEnabled,
     pieceSymmetryState,
     setPieceSymmetryState,
-  } = useStore()
+  } = useStore(
+    useShallow((s) => ({
+      tool: s.tool,
+      setTool: s.setTool,
+      rulerMode: s.rulerMode,
+      setRulerMode: s.setRulerMode,
+      setRulerLine: s.setRulerLine,
+      addPiece: s.addPiece,
+      workspace: s.workspace,
+      setView: s.setView,
+      selectedPieceIds: s.selectedPieceIds,
+      applyOffset: s.applyOffset,
+      removeSeamAllowance: s.removeSeamAllowance,
+      rotatePiece90: s.rotatePiece90,
+      alignPieceToGrain: s.alignPieceToGrain,
+      pendingNahtzugabeClick: s.pendingNahtzugabeClick,
+      setPendingNahtzugabeClick: s.setPendingNahtzugabeClick,
+      nahtzugabeDialogPieceId: s.nahtzugabeDialogPieceId,
+      setNahtzugabeDialogPieceId: s.setNahtzugabeDialogPieceId,
+      nahtzuordnungMode: s.nahtzuordnungMode,
+      setNahtzuordnungMode: s.setNahtzuordnungMode,
+      setShowSettingsModal: s.setShowSettingsModal,
+      setShowStuecklisteModal: s.setShowStuecklisteModal,
+      setShowHelpModal: s.setShowHelpModal,
+      setShowShortcutListModal: s.setShowShortcutListModal,
+      dxfExportScale: s.dxfExportScale,
+      dxfImportExtraCutLayers: s.dxfImportExtraCutLayers,
+      dxfImportScale: s.dxfImportScale,
+      dxfImportDetectVNotches: s.dxfImportDetectVNotches,
+      dxfImportCreateSeamLine: s.dxfImportCreateSeamLine,
+      dxfImportSeamAllowanceMm: s.dxfImportSeamAllowanceMm,
+      notchSettings: s.notchSettings,
+      activeNotchPresetIndex: s.activeNotchPresetIndex,
+      setActiveNotchPresetIndex: s.setActiveNotchPresetIndex,
+      imageDigitizeSession: s.imageDigitizeSession,
+      startDigitize: s.startDigitize,
+      startImageSession: s.startImageSession,
+      setToastMessage: s.setToastMessage,
+      loadProjectFromFile: s.loadProjectFromFile,
+      updateWorkspace: s.updateWorkspace,
+      createConfiguratorInstance: s.createConfiguratorInstance,
+      setShowConfiguratorModal: s.setShowConfiguratorModal,
+      setShowRockGeneratorModal: s.setShowRockGeneratorModal,
+      batchSelectionTargets: s.batchSelectionTargets,
+      batchDeleteMarqueeCompletePieces: s.batchDeleteMarqueeCompletePieces,
+      setEdgeSeamPickingActive: s.setEdgeSeamPickingActive,
+      setHorizontalLevelPickingActive: s.setHorizontalLevelPickingActive,
+      contourEditEnabled: s.contourEditEnabled,
+      pieceSymmetryState: s.pieceSymmetryState,
+      setPieceSymmetryState: s.setPieceSymmetryState,
+    })),
+  )
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
   const { view } = workspace
   const [openMenu, setOpenMenu] = useState<MenuId>(null)
@@ -736,7 +788,7 @@ export function Toolbar() {
                       setPendingNahtzugabeClick(false)
                       setEdgeSeamPickingActive(false)
                       setHorizontalLevelPickingActive(false)
-                      setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'axisA' })
+                      setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'chooseMethod' })
                     }
                     closeMenu()
                   }}

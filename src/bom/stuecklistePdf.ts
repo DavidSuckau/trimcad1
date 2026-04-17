@@ -26,7 +26,7 @@ function fmtTotalPerimeter(m: number): string {
 }
 
 function safeFilenamePart(name: string): string {
-  return name.replace(/[^\w\u00C0-\u024f\-]+/g, '_').replace(/_+/g, '_').slice(0, 60) || 'trimtex'
+  return name.replace(/[^\w\u00C0-\u024f-]+/g, '_').replace(/_+/g, '_').slice(0, 60) || 'trimtex'
 }
 
 /** SVG (inkl. eingebetteter data-URL-Bilder) zu PNG-Daten-URL; max. Kantenlänge in Pixeln. */

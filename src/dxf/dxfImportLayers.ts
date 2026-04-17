@@ -7,13 +7,15 @@ export function normalizeDxfLayerName(layer: string): string {
   return layer.trim().toUpperCase()
 }
 
-/** Schnittkontur / Außenlinie (wird zu einem PatternPiece.cutLine). */
+/**
+ * Schnittkontur / Außenlinie (wird zu einem PatternPiece.cutLine).
+ * Layer `0` ist absichtlich nicht enthalten (Hilfsgeometrie): bei Bedarf als zusätzlicher Schnitt-Layer in den Einstellungen eintragen.
+ */
 export const CUT_LAYER_NAMES = new Set(
   [
     'CUT',
     '1',
     'BOUNDARY',
-    '0',
     'CUTLINE',
     'NATLINE',
     'OUTLINE',
@@ -100,6 +102,8 @@ export function isGrainLayer(layer: string): boolean {
 /** Layer, die bei Fallback-Import (kein bekannter Schnitt-Layer) nicht als Kontur gelten. */
 export function isExcludedLayerFallback(layer: string): boolean {
   const n = normalizeDxfLayerName(layer)
+  /** Wie Standard-Schnitt-Layer: `0` ist zu unspezifisch und erzeugt oft Hilfs-Umrisse. */
+  if (n === '0') return true
   if (SEAM_LAYER_NAMES.has(n)) return true
   if (NOTCH_LAYER_TO_TYPE.has(n)) return true
   if (DRILL_LAYER_NAMES.has(n)) return true

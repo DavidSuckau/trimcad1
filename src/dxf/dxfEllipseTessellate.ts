@@ -19,8 +19,8 @@ export function tessellateEllipseEntity(
   const b = a * Math.max(1e-9, ratio)
   const cosR = majX / a
   const sinR = majY / a
-  let u0 = startParam != null && !Number.isNaN(startParam) ? startParam : 0
-  let u1 = endParam != null && !Number.isNaN(endParam) ? endParam : u0 + 2 * Math.PI
+  const u0 = startParam != null && !Number.isNaN(startParam) ? startParam : 0
+  const u1 = endParam != null && !Number.isNaN(endParam) ? endParam : u0 + 2 * Math.PI
   let sweep = u1 - u0
   if (sweep <= 0) sweep += 2 * Math.PI
   if (sweep > 2 * Math.PI - 1e-9) sweep = 2 * Math.PI

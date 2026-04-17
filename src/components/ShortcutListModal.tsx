@@ -1,9 +1,17 @@
 import { useEffect } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { getShortcutListGrouped } from '../data/helpEntries'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 export function ShortcutListModal() {
-  const { showShortcutListModal, setShowShortcutListModal } = useStore()
+  const { showShortcutListModal, setShowShortcutListModal } = useStore(
+    useShallow((s) => ({
+      showShortcutListModal: s.showShortcutListModal,
+      setShowShortcutListModal: s.setShowShortcutListModal,
+    })),
+  )
+  const trapRef = useFocusTrap<HTMLDivElement>(showShortcutListModal)
 
   useEffect(() => {
     if (!showShortcutListModal) return
@@ -29,7 +37,7 @@ export function ShortcutListModal() {
       aria-modal="true"
       aria-labelledby="shortcut-list-title"
     >
-      <div className="help-modal shortcut-list-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="help-modal shortcut-list-modal" onClick={(e) => e.stopPropagation()} ref={trapRef}>
         <div className="help-header">
           <h2 id="shortcut-list-title" className="help-title">
             Tastenkürzel

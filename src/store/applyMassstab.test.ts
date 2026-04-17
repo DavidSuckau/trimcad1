@@ -15,6 +15,7 @@ function makePiece(): PatternPiece {
     ],
     seamLine: [],
     internalLines: [],
+    internalCircles: [],
     notches: [],
     drills: [],
     grainLine: null,

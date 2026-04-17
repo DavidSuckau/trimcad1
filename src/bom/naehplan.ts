@@ -4,7 +4,7 @@ import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 export type NaehplanRow = {
   /** Laufende Position nach Sortierung (1 … n) */
   stepNr: number
-  /** Anzeige einer Zeile, z. B. „1 Schliessnaht / Standardnaht Teil 001 an Teil 002“ */
+  /** Anzeige einer Zeile, z. B. „1 Schliessnaht / Standardnaht Teil 001 an Teil 002“ */
   line: string
 }
 

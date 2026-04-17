@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
 import { edgeTotalLength } from '../geometry/seamUtils'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 export function ProfileAssignmentDialog() {
   const {
@@ -10,7 +12,15 @@ export function ProfileAssignmentDialog() {
     setProfileDialogAssignmentId,
     updateProfileAssignment,
     removeProfileAssignment,
-  } = useStore()
+  } = useStore(
+    useShallow((s) => ({
+      workspace: s.workspace,
+      profileDialogAssignmentId: s.profileDialogAssignmentId,
+      setProfileDialogAssignmentId: s.setProfileDialogAssignmentId,
+      updateProfileAssignment: s.updateProfileAssignment,
+      removeProfileAssignment: s.removeProfileAssignment,
+    })),
+  )
 
   const assignment =
     profileDialogAssignmentId != null
@@ -18,6 +28,8 @@ export function ProfileAssignmentDialog() {
       : null
 
   const piece = assignment ? workspace.pieces.find((p) => p.id === assignment.pieceId) : null
+
+  const trapRef = useFocusTrap<HTMLDivElement>(!!(profileDialogAssignmentId && assignment && piece))
 
   const [profileName, setProfileName] = useState('')
   const [profileKey, setProfileKey] = useState('')
@@ -78,9 +90,22 @@ export function ProfileAssignmentDialog() {
   }
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={handleClose} role="presentation">
-      <div className="nahtzugabe-dialog" style={{ minWidth: 360 }} onClick={(e) => e.stopPropagation()}>
-        <h3 className="nahtzugabe-dialog-title">Profil – Kante {assignment.edgeIndex + 1}</h3>
+    <div
+      className="nahtzugabe-dialog-overlay"
+      onClick={handleClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profile-dialog-title"
+    >
+      <div
+        className="nahtzugabe-dialog"
+        style={{ minWidth: 360 }}
+        onClick={(e) => e.stopPropagation()}
+        ref={trapRef}
+      >
+        <h3 id="profile-dialog-title" className="nahtzugabe-dialog-title">
+          Profil – Kante {assignment.edgeIndex + 1}
+        </h3>
 
         <label className="nahtzugabe-dialog-label">
           <span>Profilbezeichnung *</span>

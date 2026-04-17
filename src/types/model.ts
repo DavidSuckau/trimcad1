@@ -21,6 +21,13 @@ export type LineSegment = {
 
 export type Curve = LineSegment | BezierCurve
 
+/** Interner Kreis in Teilkoordinaten: ein Eintrag = ein Kreis (ganz löschbar). */
+export type InternalCircle = {
+  id: string
+  center: Point
+  radius: number
+}
+
 export type NotchType = 'single' | 'double' | 'v'
 
 export type Notch = {
@@ -87,6 +94,7 @@ export type PatternPiece = {
   drills: Drill[]
   grainLine: Line | null
   internalLines: Curve[]
+  internalCircles: InternalCircle[]
   /**
    * Semantische Layer-Klassifikation des Teils (derzeit v. a. für UI/Interchange).
    * Der DXF-Export ordnet Geometrie aktuell über Writer-spezifische Layerregeln zu
@@ -230,6 +238,7 @@ export type BatchSelectionTarget =
   | { kind: 'curvePoint'; pieceId: string; curveIndex: number }
   | { kind: 'notch'; pieceId: string; notchId: string }
   | { kind: 'internalLine'; pieceId: string; curveIndex: number }
+  | { kind: 'internalCircle'; pieceId: string; circleId: string }
   | { kind: 'piece'; pieceId: string }
 
 /** Einzelner Knoten beim Digitalisieren (Pen-Tool). */

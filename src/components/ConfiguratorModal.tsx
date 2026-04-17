@@ -84,7 +84,7 @@ export function ConfiguratorModal() {
     regenerateConfiguratorPart(selectedInstance.id, selectedPart.id)
   }
 
-  const isValidDraft = !!draft
+  const isValidDraft = draft
     ? (() => {
         const widthMm = draft.widthMm
         const heightMm = draft.heightMm

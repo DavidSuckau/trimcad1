@@ -78,14 +78,16 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Rechteck',
-    description: 'Neues Schnittteil als Rechteck auf der Arbeitsfläche zeichnen (Drag).',
+    description:
+      'Neues Schnittteil als Rechteck auf der Arbeitsfläche zeichnen (Drag). Beim Ziehen: Leertaste, um Breite und Hoehe in mm per Tastatur einzugeben.',
     access: 'Menü Erzeugen → Rechteck',
     shortcut: undefined,
   },
   {
     category: 'Werkzeuge',
     name: 'Linie (Kontur)',
-    description: 'Liniensegment zur Kontur eines Teils hinzufügen oder als interne Linie zeichnen.',
+    description:
+      'Liniensegment zur Kontur eines Teils hinzufügen oder als interne Linie zeichnen. Beim Ziehen: Leertaste, um die Laenge in mm per Tastatur zu setzen.',
     access: 'Menü Bearbeiten → Linie, Erzeugen → Interne Elemente → Linie',
     shortcut: undefined,
   },
@@ -99,7 +101,8 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Kreis (intern)',
-    description: 'Kreisförmiges internes Element auf einem Teil zeichnen.',
+    description:
+      'Kreisförmiges internes Element auf einem Teil zeichnen. Beim Ziehen: Leertaste, um den Radius in mm per Tastatur einzugeben.',
     access: 'Menü Erzeugen → Interne Elemente → Kreis',
     shortcut: undefined,
   },

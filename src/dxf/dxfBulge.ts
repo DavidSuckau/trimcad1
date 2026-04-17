@@ -64,7 +64,7 @@ function tessellateBulgeArc(a: Pt, b: Pt, bulge: number, segments: number): Pt[]
 
   const a1 = Math.atan2(a.y - cy, a.x - cx)
   const a2 = Math.atan2(b.y - cy, b.x - cx)
-  let start = a1
+  const start = a1
   let end = a2
   if (bulge > 0) {
     if (end < start) end += 2 * Math.PI

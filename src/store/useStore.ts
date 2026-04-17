@@ -17,23 +17,11 @@ import type {
   BatchSelectionFilter,
   BatchSelectionTarget,
   ProfileAssignment,
+  InternalCircle,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
-import {
-  offsetCurvesInwardForSeam,
-  deriveCutLineFromSeamWithValidation,
-  deriveCutLineFromSeamWithVariableAllowance,
-  offsetSegmentPoints,
-  validateContourAfterVertexMove,
-} from '../geometry/offset'
-import type { DeriveCutLineFromSeamResult } from '../geometry/offset'
-import {
-  hasVariableAllowance,
-  buildCurveIndexAllowanceMap,
-  remapEdgeSeamAllowances,
-  remapProfileAssignmentsForPiece,
-  enumerateEdges,
-} from '../geometry/edgeEnumeration'
+import { offsetCurvesInwardForSeam, offsetSegmentPoints, validateContourAfterVertexMove } from '../geometry/offset'
+import { remapEdgeSeamAllowances, remapProfileAssignmentsForPiece, enumerateEdges } from '../geometry/edgeEnumeration'
 import { deltaMinimalDegToHorizontal, masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import {
   splitBezierAt,
@@ -72,46 +60,13 @@ import { generateConfiguratorPartGeometry } from '../configurators/generators'
 import { getDefaultConfiguratorParts } from '../configurators/registry'
 import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../workspace/workspaceMarqueeSelection'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
-import {
-  buildSymmetricContour,
-  mirrorPointAcrossLine,
-  mirrorCurveAcrossLine,
-  pointInKeepHalfPlane,
-  curveReferencePoint,
-  mirrorAngleDegrees,
-  type PieceSymmetryKeepSide,
-} from '../geometry/pieceSymmetry'
+import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
+import { formatProfileEdgeGeometryWarnings, mergeWarnToasts } from '../profile/profileEdgeWarnings'
+import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece'
+import type { PieceSymmetryKeepSide } from '../geometry/pieceSymmetry'
+import type { PieceSymmetryUiState } from '../symmetry/types'
 
-/** UI: Spiegelachse für Teil-Symmetrie (Teilkoordinaten). */
-export type PieceSymmetryPhase = 'axisA' | 'axisB' | 'pickSide'
-
-export type PieceSymmetryUiState =
-  | {
-      pieceId: string
-      phase: PieceSymmetryPhase
-      axisA?: Point
-      axisB?: Point
-    }
-  | null
-
-/**
- * Wählt automatisch den richtigen Offset-Pfad: uniformer Clipper oder variabler per-Edge Offset.
- * Wenn das Teil `edgeSeamAllowances` hat die vom Default abweichen, wird der variable Algorithmus genutzt.
- */
-function deriveCutLineForPiece(
-  piece: PatternPiece,
-  seamLine: Curve[],
-  seamAllowanceMm: number
-): DeriveCutLineFromSeamResult {
-  if (hasVariableAllowance(piece)) {
-    const allowanceMap = buildCurveIndexAllowanceMap(piece)
-    let maxMm = 0
-    for (const v of allowanceMap.values()) maxMm = Math.max(maxMm, v)
-    maxMm = Math.max(maxMm, seamAllowanceMm)
-    return deriveCutLineFromSeamWithVariableAllowance(seamLine, allowanceMap, maxMm)
-  }
-  return deriveCutLineFromSeamWithValidation(seamLine, seamAllowanceMm)
-}
+export type { PieceSymmetryPhase, PieceSymmetryUiState } from '../symmetry/types'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 
@@ -278,6 +233,7 @@ function createDefaultPiece(id: string, number: string): PatternPiece {
     drills: [],
     grainLine: null,
     internalLines: [],
+    internalCircles: [],
     layer: 'CUT',
     transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     softVertices: [],
@@ -491,6 +447,13 @@ type Store = {
   /** Legacy-Name: fügt auf der Master-Kontur ein (bei Nahtzugabe faktisch seamLine). */
   addCurveToCutLine: (pieceId: string, curve: Curve) => void
   addInternalLine: (pieceId: string, curve: Curve) => void
+  addInternalCircle: (pieceId: string, circle: Omit<InternalCircle, 'id'> & { id?: string }) => void
+  updateInternalCircle: (
+    pieceId: string,
+    circleId: string,
+    patch: Partial<Pick<InternalCircle, 'center' | 'radius'>>
+  ) => void
+  removeInternalCircle: (pieceId: string, circleId: string) => void
   addInternalLines: (pieceId: string, curves: Curve[]) => void
   removeInternalLine: (pieceId: string, curveIndex: number) => void
   updateCurvePoint: (pieceId: string, curveIndex: number, pointKey: string, p: Point) => void
@@ -615,7 +578,7 @@ function detectEdgeReverseOrientation(
   if (refCurves.length === 0 || tgtCurves.length === 0) return false
   const toWorld = (p: Point, t: PatternPiece['transform']): Point => {
     let xx = p.x
-    let yy = p.y
+    const yy = p.y
     if (t.mirrored) xx = -xx
     const rad = (t.rotation * Math.PI) / 180
     const cos = Math.cos(rad)
@@ -986,6 +949,7 @@ export const useStore = create<Store>()(
       vertices: number[]
       notches: string[]
       internalLines: number[]
+      internalCircleIds: string[]
       curvePoints: number[]
     }
     const byPiece = new Map<string, G>()
@@ -993,15 +957,19 @@ export const useStore = create<Store>()(
       if (t.kind === 'piece') continue
       if (pieceIdsToDelete.has(t.pieceId)) continue
       if (!byPiece.has(t.pieceId)) {
-        byPiece.set(t.pieceId, { vertices: [], notches: [], internalLines: [], curvePoints: [] })
+        byPiece.set(t.pieceId, { vertices: [], notches: [], internalLines: [], internalCircleIds: [], curvePoints: [] })
       }
       const g = byPiece.get(t.pieceId)!
       if (t.kind === 'vertex') g.vertices.push(t.vertexIndex)
       else if (t.kind === 'notch') g.notches.push(t.notchId)
       else if (t.kind === 'internalLine') g.internalLines.push(t.curveIndex)
+      else if (t.kind === 'internalCircle') g.internalCircleIds.push(t.circleId)
       else if (t.kind === 'curvePoint') g.curvePoints.push(t.curveIndex)
     }
     for (const [pieceId, g] of byPiece) {
+      for (const cid of [...new Set(g.internalCircleIds)]) {
+        get().removeInternalCircle(pieceId, cid)
+      }
       for (const ci of [...new Set(g.internalLines)].sort((a, b) => b - a)) {
         get().removeInternalLine(pieceId, ci)
       }
@@ -1164,6 +1132,7 @@ export const useStore = create<Store>()(
       notches: [],
       drills: [],
       internalLines: geom.internalLines ?? [],
+      internalCircles: [],
       grainLine: null,
       softVertices: [],
       softVerticesMaster: [],
@@ -1307,7 +1276,7 @@ export const useStore = create<Store>()(
         return
       }
     }
-    let nextKind = patch.seamKind !== undefined ? patch.seamKind : current.seamKind ?? null
+    const nextKind = patch.seamKind !== undefined ? patch.seamKind : current.seamKind ?? null
     if (nextKind != null && !(SEAM_ASSIGNMENT_KIND_IDS as readonly string[]).includes(nextKind)) {
       set({ toastMessage: 'error:Unbekannte Nahtart.' })
       return
@@ -1583,6 +1552,51 @@ export const useStore = create<Store>()(
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) =>
           p.id === pieceId ? { ...p, internalLines: [...p.internalLines, ...curves] } : p
+        ),
+      },
+    })),
+
+  addInternalCircle: (pieceId, circle) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          const id = circle.id ?? 'ic' + Math.random().toString(36).slice(2, 10)
+          const next: InternalCircle = { id, center: { ...circle.center }, radius: circle.radius }
+          return { ...p, internalCircles: [...p.internalCircles, next] }
+        }),
+      },
+    })),
+
+  updateInternalCircle: (pieceId, circleId, patch) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          return {
+            ...p,
+            internalCircles: p.internalCircles.map((c) =>
+              c.id !== circleId
+                ? c
+                : {
+                    ...c,
+                    ...(patch.radius !== undefined ? { radius: patch.radius } : {}),
+                    ...(patch.center !== undefined ? { center: { ...patch.center } } : {}),
+                  }
+            ),
+          }
+        }),
+      },
+    })),
+
+  removeInternalCircle: (pieceId, circleId) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id !== pieceId ? p : { ...p, internalCircles: p.internalCircles.filter((c) => c.id !== circleId) }
         ),
       },
     })),
@@ -1972,6 +1986,8 @@ export const useStore = create<Store>()(
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc, notchOpts) =>
     set((s) => {
       let toastMessage: string | null = null
+      let profileToast: string | null = null
+      const profileList = s.workspace.profileAssignments ?? []
       return {
         workspace: {
           ...s.workspace,
@@ -2049,10 +2065,17 @@ export const useStore = create<Store>()(
               cutRebuiltFromSeam && cutLine.length > 0
                 ? remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices)
                 : p.softVertices
-            return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+            const promoted = applySharpCornerPromotion({ ...p, cutLine, seamLine, notches, softVertices })
+            if (p.id === pieceId) {
+              profileToast = formatProfileEdgeGeometryWarnings(p, promoted, profileList, profileList)
+            }
+            return promoted
           }),
         },
-        ...(toastMessage ? { toastMessage } : {}),
+        ...(() => {
+          const mergedToast = mergeWarnToasts(toastMessage, profileToast)
+          return mergedToast ? { toastMessage: mergedToast } : {}
+        })(),
       }
     }),
 
@@ -2098,9 +2121,14 @@ export const useStore = create<Store>()(
           p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
         return applySharpCornerPromotion({ ...p, cutLine, seamLine })
       })
+      const profileList = s.workspace.profileAssignments ?? []
+      const oldP = s.workspace.pieces.find((x) => x.id === pieceId)
+      const newP = pieces.find((x) => x.id === pieceId)
+      const profileToast = oldP && newP ? formatProfileEdgeGeometryWarnings(oldP, newP, profileList, profileList) : null
+      const mergedToast = mergeWarnToasts(toastMessage, profileToast)
       return {
         workspace: { ...s.workspace, pieces },
-        ...(toastMessage ? { toastMessage } : {}),
+        ...(mergedToast ? { toastMessage: mergedToast } : {}),
       }
     }),
 
@@ -2157,9 +2185,15 @@ export const useStore = create<Store>()(
         }
         return applySharpCornerPromotion({ ...p, cutLine, seamLine })
       })
+      const profileListMove = s.workspace.profileAssignments ?? []
+      const oldPmove = s.workspace.pieces.find((x) => x.id === pieceId)
+      const newPmove = pieces.find((x) => x.id === pieceId)
+      const profileToastMove =
+        oldPmove && newPmove ? formatProfileEdgeGeometryWarnings(oldPmove, newPmove, profileListMove, profileListMove) : null
+      const mergedToastMove = mergeWarnToasts(toastMessage, profileToastMove)
       return {
         workspace: { ...s.workspace, pieces },
-        ...(toastMessage ? { toastMessage } : {}),
+        ...(mergedToastMove ? { toastMessage: mergedToastMove } : {}),
       }
     }),
 
@@ -2253,6 +2287,11 @@ export const useStore = create<Store>()(
         profileAssignments = remapProfileAssignmentsForPiece(oldP, newP, profileAssignments)
       }
 
+      const prevProf = s.workspace.profileAssignments ?? []
+      const profileToast =
+        oldP && newP ? formatProfileEdgeGeometryWarnings(oldP, newP, prevProf, profileAssignments) : null
+      const mergedToast = mergeWarnToasts(toastMessage, profileToast)
+
       return {
         workspace: {
           ...s.workspace,
@@ -2260,7 +2299,7 @@ export const useStore = create<Store>()(
           pieces: newPieces,
           profileAssignments,
         },
-        ...(toastMessage ? { toastMessage } : {}),
+        ...(mergedToast ? { toastMessage: mergedToast } : {}),
       }
     }),
 
@@ -2295,9 +2334,15 @@ export const useStore = create<Store>()(
           p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
         return applySharpCornerPromotion({ ...p, cutLine, seamLine })
       })
+      const profileListConv = s.workspace.profileAssignments ?? []
+      const oldPconv = s.workspace.pieces.find((x) => x.id === pieceId)
+      const newPconv = pieces.find((x) => x.id === pieceId)
+      const profileToastConv =
+        oldPconv && newPconv ? formatProfileEdgeGeometryWarnings(oldPconv, newPconv, profileListConv, profileListConv) : null
+      const mergedToastConv = mergeWarnToasts(toastMessage, profileToastConv)
       return {
         workspace: { ...s.workspace, pieces },
-        ...(toastMessage ? { toastMessage } : {}),
+        ...(mergedToastConv ? { toastMessage: mergedToastConv } : {}),
       }
     }),
 
@@ -2444,6 +2489,10 @@ export const useStore = create<Store>()(
         .filter((n): n is Notch => n != null)
       const drills = piece.drills.map((d) => ({ ...d, center: mirrorX(d.center, cx) }))
       const internalLines = piece.internalLines.map((c) => mirrorCurve(c, cx))
+      const internalCircles = piece.internalCircles.map((ic) => ({
+        ...ic,
+        center: mirrorX(ic.center, cx),
+      }))
       const grainLine = piece.grainLine
         ? { start: mirrorX(piece.grainLine.start, cx), end: mirrorX(piece.grainLine.end, cx) }
         : null
@@ -2459,6 +2508,7 @@ export const useStore = create<Store>()(
                   notches,
                   drills,
                   internalLines,
+                  internalCircles,
                   grainLine,
                 })
               : p
@@ -2471,80 +2521,12 @@ export const useStore = create<Store>()(
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return { toastMessage: 'warn:Teil nicht gefunden.' }
-      const masterCurves =
-        useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
-      if (masterCurves.length < 3) return { toastMessage: 'warn:Kontur zu kurz für Symmetrie.' }
-      const sym = buildSymmetricContour(masterCurves, axisA, axisB, keepSide)
-      if (!sym.ok) {
-        return { toastMessage: `warn:${sym.message}` }
-      }
-      let cutLine: Curve[]
-      let seamLine: Curve[]
-      if (useSeamLineForVertexEditing(piece) && piece.seamAllowanceMm != null) {
-        seamLine = sym.curves
-        const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)
-        if (!derived.ok) {
-          return {
-            toastMessage: `warn:${derived.message ?? 'Schnittkontur konnte nicht abgeleitet werden.'}`,
-          }
-        }
-        cutLine = derived.cutLine
-      } else {
-        cutLine = sym.curves
-        seamLine =
-          piece.seamAllowanceMm != null && cutLine.length >= 3
-            ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
-            : []
-      }
-
-      const mirroredNotches = piece.notches.map((n) => ({
-        ...n,
-        position: mirrorPointAcrossLine(n.position, axisA, axisB),
-        angle: mirrorAngleDegrees(n.angle, axisA, axisB),
-        sNormalized: undefined as number | undefined,
-        arcLengthMm: undefined as number | undefined,
-      }))
-      const notches = mirroredNotches
-        .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
-        .filter((n): n is Notch => n != null)
-
-      const drills = piece.drills.map((d) => ({
-        ...d,
-        center: mirrorPointAcrossLine(d.center, axisA, axisB),
-      }))
-
-      const internalLines: Curve[] = []
-      for (const c of piece.internalLines) {
-        const ref = curveReferencePoint(c)
-        if (pointInKeepHalfPlane(ref, axisA, axisB, keepSide)) {
-          internalLines.push(c)
-          internalLines.push(mirrorCurveAcrossLine(c, axisA, axisB))
-        }
-      }
-
-      const grainLine = piece.grainLine
-        ? {
-            start: mirrorPointAcrossLine(piece.grainLine.start, axisA, axisB),
-            end: mirrorPointAcrossLine(piece.grainLine.end, axisA, axisB),
-          }
-        : null
-
+      const r = applyPieceSymmetryToPiece(piece, axisA, axisB, keepSide)
+      if (!r.ok) return { toastMessage: r.toastMessage }
       return {
         workspace: {
           ...s.workspace,
-          pieces: s.workspace.pieces.map((p) =>
-            p.id === pieceId
-              ? applySharpCornerPromotion({
-                  ...p,
-                  cutLine,
-                  seamLine,
-                  notches,
-                  drills,
-                  internalLines,
-                  grainLine,
-                })
-              : p
-          ),
+          pieces: s.workspace.pieces.map((p) => (p.id === pieceId ? r.piece : p)),
         },
         pieceSymmetryState: null,
         toastMessage: 'success:Teil symmetrisch gemacht.',

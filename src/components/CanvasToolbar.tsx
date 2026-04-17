@@ -1,5 +1,6 @@
 import React from 'react'
 import { useStore as useZustandStore } from 'zustand'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore, undoAction, redoAction } from '../store/useStore'
 
 const iconProps = {
@@ -30,21 +31,41 @@ const undoRedoIconProps = {
 export const CanvasToolbar: React.FC = () => {
   const canUndo = useZustandStore(useStore.temporal, (s) => s.pastStates.length > 0)
   const canRedo = useZustandStore(useStore.temporal, (s) => s.futureStates.length > 0)
-  const tool = useStore((s) => s.tool)
-  const setTool = useStore((s) => s.setTool)
-  const contourEditEnabled = useStore((s) => s.contourEditEnabled)
-  const setToastMessage = useStore((s) => s.setToastMessage)
-  const rulerMode = useStore((s) => s.rulerMode)
-  const setRulerMode = useStore((s) => s.setRulerMode)
-  const pendingNahtzugabeClick = useStore((s) => s.pendingNahtzugabeClick)
-  const setPendingNahtzugabeClick = useStore((s) => s.setPendingNahtzugabeClick)
-  const edgeSeamPickingActive = useStore((s) => s.edgeSeamPickingActive)
-  const setEdgeSeamPickingActive = useStore((s) => s.setEdgeSeamPickingActive)
-  const horizontalLevelPickingActive = useStore((s) => s.horizontalLevelPickingActive)
-  const setHorizontalLevelPickingActive = useStore((s) => s.setHorizontalLevelPickingActive)
-  const pieceSymmetryState = useStore((s) => s.pieceSymmetryState)
-  const setPieceSymmetryState = useStore((s) => s.setPieceSymmetryState)
-  const selectedPieceIds = useStore((s) => s.selectedPieceIds)
+  const {
+    tool,
+    setTool,
+    contourEditEnabled,
+    setToastMessage,
+    rulerMode,
+    setRulerMode,
+    pendingNahtzugabeClick,
+    setPendingNahtzugabeClick,
+    edgeSeamPickingActive,
+    setEdgeSeamPickingActive,
+    horizontalLevelPickingActive,
+    setHorizontalLevelPickingActive,
+    pieceSymmetryState,
+    setPieceSymmetryState,
+    selectedPieceIds,
+  } = useStore(
+    useShallow((s) => ({
+      tool: s.tool,
+      setTool: s.setTool,
+      contourEditEnabled: s.contourEditEnabled,
+      setToastMessage: s.setToastMessage,
+      rulerMode: s.rulerMode,
+      setRulerMode: s.setRulerMode,
+      pendingNahtzugabeClick: s.pendingNahtzugabeClick,
+      setPendingNahtzugabeClick: s.setPendingNahtzugabeClick,
+      edgeSeamPickingActive: s.edgeSeamPickingActive,
+      setEdgeSeamPickingActive: s.setEdgeSeamPickingActive,
+      horizontalLevelPickingActive: s.horizontalLevelPickingActive,
+      setHorizontalLevelPickingActive: s.setHorizontalLevelPickingActive,
+      pieceSymmetryState: s.pieceSymmetryState,
+      setPieceSymmetryState: s.setPieceSymmetryState,
+      selectedPieceIds: s.selectedPieceIds,
+    })),
+  )
 
   const layoutOnly = !contourEditEnabled
   const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation()
@@ -116,7 +137,7 @@ export const CanvasToolbar: React.FC = () => {
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
       setHorizontalLevelPickingActive(false)
-      setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'axisA' })
+      setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'chooseMethod' })
     }
   }
 

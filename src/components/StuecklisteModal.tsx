@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useStore } from '../store/useStore'
 import {
@@ -38,7 +39,17 @@ export function StuecklisteModal() {
     updateWorkspace,
     imageDigitizeSession,
     setToastMessage,
-  } = useStore()
+  } = useStore(
+    useShallow((s) => ({
+      workspace: s.workspace,
+      showStuecklisteModal: s.showStuecklisteModal,
+      setShowStuecklisteModal: s.setShowStuecklisteModal,
+      updatePiece: s.updatePiece,
+      updateWorkspace: s.updateWorkspace,
+      imageDigitizeSession: s.imageDigitizeSession,
+      setToastMessage: s.setToastMessage,
+    })),
+  )
   const { pieces } = workspace
   const [pdfExporting, setPdfExporting] = useState(false)
 
@@ -74,7 +85,7 @@ export function StuecklisteModal() {
     [aggregate],
   )
 
-  const trapRef = useFocusTrap<HTMLDivElement>()
+  const trapRef = useFocusTrap<HTMLDivElement>(showStuecklisteModal)
 
   if (!showStuecklisteModal) return null
 

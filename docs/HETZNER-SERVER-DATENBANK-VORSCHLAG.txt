@@ -1,0 +1,705 @@
+================================================================================
+TrimTex: Architektur- und Hosting-Konzept (SaaS + CAD + Datenhaltung)
+================================================================================
+Charakter: Systemdesign für ein industrielles CAD-/SaaS-Produkt – nicht mehr
+nur Startup-Idee oder Marketing-Skizze, sondern belastbare Zielarchitektur inkl.
+Betrieb, Mandanten, Jobs und Enterprise-Ergänzungen.
+Stand: Konzept / Architekturvorschlag – keine konkrete Implementierung.
+Ziel: Industrienahe Gesamtlinie für 2D-Zuschnitt (z. B. Sitzbezüge / technische
+      Textilien): CAD-Kern zuerst, dann Persistenz (Supabase oder BYO-Postgres),
+      Deployment (Hetzner), Jobs und Kundenbereich. Das Dokument verbindet die
+      ursprüngliche SaaS/DB-Skizze mit einer engine-first-Einordnung und einer
+      Enterprise-Ergänzung (Abschnitt 16), Reifegrad-Einordnung (3.4) und Pflicht-
+      Spezifikationen auf dem Weg zur Spitzenreife (Abschnitt 18).
+
+--------------------------------------------------------------------------------
+1. Ausgangslage (heute)
+--------------------------------------------------------------------------------
+- Die Anwendung ist aktuell eine React/Vite-SPA (größtenteils im Browser).
+- Persistenz/Logik kann später oder teilweise über einen Server und eine
+  Datenbank laufen.
+- Grafik/Geometrie: sehr große DXF-/Polygon- oder Pfad-Daten sowie schwere
+  Geometrie-Operationen führen im Browser schnell an Grenzen (siehe Abschnitt 14).
+
+--------------------------------------------------------------------------------
+2. Mental Model (wichtigster Shift)
+--------------------------------------------------------------------------------
+- Ihr baut kein „Webtool mit Datenbank und SVG“, sondern ein CAD-System für
+  2D-Zuschnitt, das im Browser interagiert und serverseitig schwere Schritte
+  ausführt.
+- Konsequenz:
+  - Geometrie-Modell (Graph, Constraints, Domänensemantik) ist die fachliche
+    Wahrheit; die Datenbank ist primär Speicher und Metadaten, nicht der
+    Systemkern.
+  - Die API ist Middleware: Auth, Mandanten-Routing, Dokumentabruf/-speicher,
+    Job-Steuerung – nicht der Ort für jede Mausbewegung oder jedes lokale Edit.
+- Pipeline-Zielrichtung (vereinfacht):
+  Geometrie-Kern → Dokumentmodell → Render-Adapter → API / Speicher
+  (nicht: UI → API → DB → SVG als einzige Wahrheit)
+
+--------------------------------------------------------------------------------
+3. Einordnung: Stärken, Risiken, Ergänzungen
+--------------------------------------------------------------------------------
+3.1 Was an der ursprünglichen Linie gut bleibt
+- Saubere Trennung: Frontend (Editor), API (Logik/Orch.), DB (Supabase oder BYO).
+- BYO-Datenbank als Enterprise-Feature (Datenhoheit); Postgres ist industrienah;
+  Connection-String nur serverseitig bleibt richtig.
+- Hetzner als Hosting-Basis: günstige CPU, gut für Worker/Jobs, MVP bis mittlere
+  Skalierung plausibel.
+- Schwere Operationen (Export DXF/ASTM, Nesting, große Geometrie-Jobs) gehören
+  nicht in den synchronen Browser-Hauptpfad.
+
+3.2 Architektonische Risiken (bewusst adressieren)
+- Zu DB-zentriert denken: Wenn das SQL-Schema die Architektur dominiert, leidet
+  später Versionierung, Parametrik, Undo/Redo und Geometrie-Deltas. Lösung:
+  Dokument- und Geometriemodell definieren, DB speichert serialisierte Snapshots,
+  Events, Pointer – nicht „die Geometrie ist die Tabelle“.
+- API als Flaschenhals: CAD ist interaktiv; nicht jede Bewegung darf einen
+  Server-Roundtrip auslösen. Lokal bleiben: Editing-State, viele Geometrie-
+  Updates, leichte Constraint-Auflösung; Server: schwere Berechnung, Export,
+  Validierung in Größenordnungen, die der Browser nicht trägt.
+- BYO-DB unterschätzen: unterschiedliche Postgres-Versionen, fehlende Extensions
+  (z. B. PostGIS), fehlschlagende Migrationen beim Kunden, VPN/Firewall/Latenz,
+  Debugging beim Kunden – das ist operativ ein zweites Produkt mit Support-
+  Grenzen, nicht nur ein Schalter.
+- „SVG + Skalierung“: In CAD ist oft nicht das Rendering das erste Problem,
+  sondern Booleans, Offsets, Schnitte, Grading – das killt den Browser schneller
+  als ein großer SVG-DOM. Rendering optimieren reicht nicht ohne leichtgewichtige
+  Geometrie-Engine im Frontend (siehe Abschnitt 4 und 14).
+- Supabase als Standard plus BYO: Gefahr doppelter Welten (RLS/Supabase-Logik
+  vs. generischer API-Speicherpfad für externe DB). Solltet: eine klare
+  Speicher-Abstraktion („Document Store Port“) mit zwei Implementierungen, statt
+  überall verzweigter Sonderlogik – idealerweise als einziges Speicher-Interface
+  im Produktcode (Abschnitt 18.3).
+
+3.3 Was ergänzt wurde (für späteren Erfolg entscheidend)
+- Geometrie-Kern als eigenes System unterhalb der UI (Abschnitt 4).
+- Versionierung / Dokumentgraph explizit (nicht nur „Zeilen in DB“).
+- Job-System präziser: Queue, deterministische Worker, reproduzierbare Outputs.
+- Optional später: Offline / Local-first (Abschnitt 16.10 und Abschnitt 13, Könntet).
+
+3.4 Gesamteinordnung und Reifegrad
+Einordnung: Das Dokument beschreibt kein leichtgewichtiges Startup-Konzept mehr,
+sondern ein Systemdesign für ein echtes industrielles CAD-/SaaS-Produkt (Zuschnitt,
+Mandanten, Jobs, BYO, Audit, Public API, Limits). Das Niveau ist damit bewusst
+„Enterprise-taugliche Zielarchitektur“, nicht nur Feature-Liste.
+
+Zur numerischen Bewertung (immer subjektiv): In einer früheren Einordnung lag das
+Gesamtpaket etwa bei 8,5/10, weil mehrere Punkte noch auszuarbeiten waren. Aus
+heutiger Sicht des gleichen Maßstabs lässt sich der verbleibende Abstand zu sehr
+hohen Noten (z. B. 9,8–10/10) schärfer auf einen Kern reduzieren:
+
+Einziger entscheidender Grund, warum es noch nicht auf diesem oberen Rand liegt:
+Der Geometry Kernel zusammen mit der State Engine (Sync, Konflikte, Undo/Redo,
+Topologie-Invarianten) ist hier noch architektonisch und inhaltlich beschrieben,
+aber noch nicht als harte, prüfbare Spezifikation ausformuliert – also noch nicht
+„ingenieurhart“ genug dokumentiert und festgezurrt. Alles andere (Cloud, DB-Modell,
+Jobs, Enterprise-Block in Abschnitt 16, Zugänge, Failure- und Compute-Themen in
+Abschnitt 18) unterstützt das industrielle Bild bereits; die Lücke ist primär die
+formale Kern- und State-Spezifikation (Abschnitt 18.1 und 18.2).
+
+Weiterhin relevante Ergänzungsbausteine (neben dem Kern), kurz:
+- Document Store als einziges Interface zwischen App und Supabase/BYO (18.3).
+- Limits, Fallback und Degradation mit konkreten Schwellen (18.5, 16.4).
+- Compute-/Storage-/Seat-Ökonomie für Angebot und Messung (18.6).
+- Explizite Failure Modes (18.7).
+
+Fazit: Qualitativ ist die Denkrichtung Systemdesign-Niveau; die nächste Qualitäts-
+stufe ist dokumentarisch-operational: Kernel + State Engine schriftlich so präzise,
+dass Implementierung, Tests und Lieferantenübergaben daran scheitern oder bestehen
+können – nicht mehr nur an der Architektur-Skizze.
+
+--------------------------------------------------------------------------------
+4. TRIM-CAD Kernarchitektur (industrienahe Zielrichtung)
+--------------------------------------------------------------------------------
+Ziel: engine-first, 2D-Zuschnitt / technische Textilien – nicht als SaaS-Skizze,
+sondern als belastbare Schichtenlogik.
+
+4.1 Grundprinzip
+- Statt „UI → API → DB → SVG“: Geometrie-Kern → Dokumentmodell → Render-Adapter
+  → API/Speicher. SVG ist Export- oder Hilfsdarstellung, nicht die Quelle der
+  Wahrheit.
+
+4.2 Kernsystem (A) – Geometry Kernel („Mini-CAD“)
+- Verantwortlich für: Kurven (Linien, Splines; Bezier/NURBS optional), Topologie
+  (welche Kante zu welchem Teil), Booleans (Union, Cut, Trim), Offsets
+  (Nahtzugabe), Intersection/Snapping, Tangentialität/Kontinuität wo nötig.
+- Speicher-Idee: kein SVG als Master; sondern z. B. GeometryGraph mit Nodes
+  (Punkte, Kurven), Edges (gerichtete Kanten), Faces (geschlossene Konturen),
+  Constraints. SVG entsteht aus dem Kernel/Adapter, nicht umgekehrt.
+
+4.3 Kernsystem (B) – Pattern / Sewing Domain Layer
+- Semantik über der Geometrie: Nahtzugaben pro Kante, Kerben, Bohrpunkte,
+  Fadenlauf, Stretch-Richtung, Nahttypen (verklebt, genäht, verschweißt, …).
+- Das ist fachliches Regelwerk + Annotationen, nicht „nur mehr Polygone“.
+
+4.4 Kernsystem (C) – Parametric und Grading Engine
+- Größenvarianten (S/M/L/XL), Parameteränderungen, Regelketten (z. B. Abhängig-
+  keiten von Material, Polsterdicke, Nahttyp).
+- Als Constraint-/Dependency-Graph mit Recalc-Engine und Dirty-Propagation
+  modellieren, nicht als lose Skript-Sammlung ohne Nachvollziehbarkeit.
+
+4.5 Kernsystem (D) – Document Model und Versionierung („CAD-Git“)
+- Document mit VersionGraph (v1, v2 abgeleitet, Branches), Patterns, Materials,
+  Parameters; Diff zwischen Versionen wo produktrelevant.
+- Nicht alles als flache Rows modellieren: Zustandsgraph/Events + Snapshots,
+  damit Grading, Teilversionen und Propagation von Änderungen beherrschbar bleiben.
+  Dazu passen die expliziten Produktobjekte und die Event-/Snapshot-Logik in
+  Abschnitt 16.1 und 16.9.
+
+4.6 Rendering Layer (strikt getrennt)
+- Interaktiv (Browser): WebGL oder Canvas, nur Viewport-Geometrie, LOD, ggf. GPU;
+  Ziel: flüssiges Editing (z. B. 60 fps), nicht Millionen DOM-Knoten als Hauptpfad.
+- Export (Server): exakte Geometrie ohne Vereinfachung; DXF, ASTM, AAMA o. ä.
+- Rendering ist Interpretation des Modells, nicht die Wahrheit.
+
+4.7 Ausführungsarchitektur (Rollen)
+- Client: UI (React), Interaktionsschicht, leichter Geometrie-Cache, Renderer
+  (WebGL/Canvas), Web Worker für lokale schwere, aber noch client-taugliche Ops.
+- Server (Hetzner): Geometry-Compute-Worker, Export-Engine, Nesting, Validierung,
+  Speicherung von Snapshots und Job-Ergebnissen.
+- API: Auth, Dokument laden/speichern, Job-Submission, Tenant-Routing (gehostete
+  DB vs. BYO), keine Mikro-Requests pro Mausbewegung.
+
+4.8 Datenfluss (Beispiel)
+- Nutzer bewegt ein Teil: im Browser wird der Geometry Graph lokal geändert,
+  sofortiges visuelles Feedback.
+- Optional/sync: an den Server kein komplettes Dokument pro Tick, sondern Diffs
+  (z. B. GeometryPatch: Typ „move_vertex“, id, neue Position).
+- Server: Versionierung speichern, bei Bedarf Worker triggern; Worker schreiben
+  deterministisch reproduzierbare Ergebnisse (Export, Nesting) zurück.
+
+4.9 Job-System (präziser als nur „Worker existieren“)
+- Message Queue (Stil BullMQ, RabbitMQ, Cloud-Äquivalent): sichtbare Jobs,
+  Retries, Dead Letter, Prioritäten.
+- Deterministische Worker-Versionen (gleiche Eingabe + gleiche Engine-Version
+  → gleicher Output) für reproduzierbare Produktion und Support.
+- Status für den Kunden (läuft, fertig, fehlgeschlagen), Timeouts, Abbruch.
+
+4.10 Typische Fehlbilder vs. Zielbild
+- Falsch: SVG als Source of Truth; DB-first ohne Dokument-/Kernmodell; API bei
+  jeder Mausbewegung; kein echter Geometrie-Kern.
+- Richtig: Geometry Kernel = Wahrheit; DB/API/Render = Speicher bzw. Middleware
+  bzw. Darstellung.
+
+4.11 Nächster vertiefender Schritt (optional)
+- „Minimal Geometry Kernel Design“: konkrete Datenstrukturen, Offset-Pipeline,
+  Constraint-Propagation, Undo/Redo auf Graph-Basis – dort entscheidet sich, ob
+  aus der Idee ein tragfähiges Produkt wird. Als strukturierte Ausarbeitung
+  dazu die vier Specs in Abschnitt 18.0–18.4 vorsehen.
+
+--------------------------------------------------------------------------------
+5. Zielbild Hosting und Datenhaltung (Kurz)
+--------------------------------------------------------------------------------
+- „Standard-SaaS“: Kunde nutzt eure Supabase-Instanz; ihr steuert Schema,
+  Backups, Auth, Richtlinien – als Speicher- und Identitätsschicht zum Kern
+  aus Abschnitt 4.
+- „Eigene Datenbank“: Kunde stellt Postgres bereit; eure API verbindet sich
+  serverseitig; ihr hostet App und Worker auf Hetzner, nicht zwingend die DB.
+
+--------------------------------------------------------------------------------
+6. Hetzner-Server: Rolle und grobe Einrichtung
+--------------------------------------------------------------------------------
+6.1 Was der Server machen sollte
+- Auslieferung der gebauten Web-App (statische Dateien) per HTTPS.
+- Reverse Proxy (Caddy oder Nginx) vor einer Node-API für Auth, Dokumente,
+  Jobs, Mandanten-Routing.
+- TLS (Let’s Encrypt), HTTP/2, Security-Header.
+- Kein Kunden-DB-Connection-String im Browser; nur API und ggf. Supabase Auth
+  im Client nach eurem Sicherheitsmodell.
+
+6.2 Empfohlene Minimal-Architektur auf einem VPS
+- OS: aktuelles Ubuntu LTS; Docker Compose oder systemd.
+- Komponenten: reverse-proxy, api, worker(s), optional Redis/Queue für Jobs.
+- CI: `npm run build`, Deploy Artefakt oder Image.
+
+6.3 Skalierung (später)
+- Mehr VPS, Load Balancer oder K8s bei echtem Bedarf; Monitoring und Backups
+  von Anfang an einplanen.
+
+6.4 Deployment-Bereich: was Cursor (IDE) leisten kann – und was nicht
+Cursor ist euer Editor mit KI-Unterstützung (Chat, Composer/Agent, ggf. Cloud-
+Agents). Im Deployment-Kontext bedeutet das: Beschleunigung beim **Erstellen und
+Iterieren** von Artefakten und Skripten auf dem Entwickler-Rechner oder im Repo –
+nicht der Ersatz für Hosting-Konten, Secrets oder den produktiven Lauf ohne eure
+Freigabe.
+
+Typisch **gut unterstützt** (von Cursor mithelfen lassen, im Repo versionieren):
+- **Container und Compose:** `Dockerfile`, `docker-compose.yml` (App, API, Worker,
+  Proxy, Redis/Queue), Healthchecks, sinnvolle Umgebungsvariablen-Platzhalter.
+- **Reverse Proxy:** Caddyfile oder Nginx-Site-Konfiguration, Security-Header,
+  TLS-Hinweise (Zertifikate weiterhin auf dem Server bzw. über ACME).
+- **CI/CD als Text:** GitHub Actions / GitLab CI YAML (Build `npm run build`, Tests,
+  Lint, Artefakt-Upload, optional Deploy-Schritt, der nur mit Secrets in der
+  CI-Umgebung läuft).
+- **Deploy-Skripte:** z. B. `rsync`/`scp`/`ssh`-Abläufe, `docker compose pull &&
+  up`, Rollback-Skizzen – als dokumentierte Shell-Skripte (Ausführung mit echten
+  Keys weiterhin durch Mensch oder CI).
+- **Konfigurationsvorlagen:** `.env.example` ohne Geheimnisse, Dokumentation zu
+  welche Variable wo gesetzt wird (Hetzner, Supabase, Queue).
+- **IaC-Schnipsel:** Terraform/Ansible-Grundgerüste für Hetzner-Ressourcen (API-
+  Token bleibt außerhalb des Chats und außerhalb des Git-Commits).
+- **Fehlerdiagnose:** Logs und Fehlermeldungen aus Terminal oder CI einlesen,
+  konkrete Korrekturvorschläge für Konfiguration oder Befehle.
+
+**Nicht** von Cursor „automatisch erledigt“ (bleibt bei euch, beim CI oder beim
+Provider):
+- Anlegen von **Hetzner-/DNS-/Supabase-Konten** und Vergabe von **2FA**; Einhalten
+  der Zugangs-Matrix aus Abschnitt 10.
+- **Secrets** in CI eintragen, Production-**Deploy auslösen** ohne Review –
+  Cursor sollte keine produktiven Passwörter/Keys dauerhaft im Chat haben; Secrets
+  nur in Passwort-Manager, CI-Secrets-Store oder auf dem Server.
+- **Erstinbetriebnahme des VPS** (SSH-Härtung, Firewall, erste TLS-Ausstellung),
+  wenn ihr das bewusst manuell oder über ein separates Automation-Owner-Konto
+  führt.
+- **SLA, Backups und Monitoring** betreiben – Konfiguration kann Cursor helfen,
+  Betrieb und Alarmierung sind organisatorisch.
+
+**Sinnvolle Arbeitsteilung:** Cursor (bzw. der Agent im Projekt) erzeugt und
+pflegt die **baubaren Texte** (Compose, CI, Skripte, Doku); **CI** baut und testet
+deterministisch; **ein klar definierter Deploy-Kanal** (Mensch mit Key oder CI mit
+Deploy-Secret) überträgt auf Hetzner. So bleibt der Deployment-Bereich
+nachvollziehbar und auditierbar (Abschnitt 16.2 passt dazu).
+
+--------------------------------------------------------------------------------
+7. Datenbank: Supabase (gehostete Variante)
+--------------------------------------------------------------------------------
+7.1 Passt gut für
+- Verwaltetes Postgres, Auth, Storage, RLS für Mandanten in der gehosteten Welt.
+- Getrennte Projekte für Staging/Production; Service-Role niemals für privilegierte
+  Dinge im öffentlichen Frontend-Build.
+
+7.2 Was ihr festlegen solltet
+- Migrationen (Supabase CLI oder anderes, mit klarer Ownership).
+- Mandantenmodell und RLS – aber: fachliche „Wahrheit“ der Geometrie bleibt im
+  Dokumentmodell (Abschnitt 4.5), die DB hält serialisierte Zustände und Metadaten.
+
+7.3 Limitierung / Mischung mit BYO
+- Wenn BYO dazukommt: eine Speicher-Schicht („Port“) reduziert Duplikatlogik
+  (nicht parallel überall Supabase-RLS-Pfade und BYO-Sonderpfade ohne gemeinsame
+  Grenze).
+
+--------------------------------------------------------------------------------
+8. Kundeneigene Datenbank (BYO DB)
+--------------------------------------------------------------------------------
+8.1 Anforderungen und Prinzipien
+- TLS, IP-Allowlists, VPN wo nötig; Connection String nur serverseitig, verschlüsselt.
+- Pro Tenant: Pools, Timeouts, Circuit Breaker.
+
+8.2 Realitätscheck („zweites Produkt“)
+- Postgres-Versionen, Extensions, fehlschlagende Migrationen, Netzwerk-Latenz,
+  Debugging beim Kunden – Support-Grenzen, kompatible Versionen und Runbooks
+  vertraglich/technisch definieren.
+
+8.3 Schema
+- Gleiches logisches Dokumentmodell wie gehostet; Migrationen mit Kundenfenster
+  oder eingeschränkte BYO-Variante (nur bestimmte Versionen).
+
+--------------------------------------------------------------------------------
+9. Mandant: welche DB, welche Auth
+--------------------------------------------------------------------------------
+- Metadaten-Tabelle `tenants`: z. B. `database_mode = 'hosted' | 'external'`,
+  `connection_secret_id`; nach Login wählt die API den Speicher-Adapter.
+- Frontend: keine DB-URLs; Kundenbereich und Editor nutzen dieselbe Session.
+
+--------------------------------------------------------------------------------
+10. Zugänge, Konten und Geheimnisse (wer braucht wo Zugang)
+--------------------------------------------------------------------------------
+Ziel: eine Checkliste, welche Systeme Accounts, Schlüssel oder Login brauchen –
+getrennt nach Mensch (Team), Maschine (Server/CI) und Endnutzer (Kunde).
+
+10.1 Hetzner (Hosting)
+- Cloud-Konsole (Hetzner Cloud): Projekte, Server anlegen/löschen, Snapshots,
+  Firewalls, Floating IPs, Load Balancer, Volumes.
+- SSH: Root oder Deploy-User mit Key-Auth (kein Passwort im Klartext); optional
+  separate Keys pro Person vs. CI-Deploy-Key.
+- Robot / Dedicated (falls später eigene Hardware): separater Zugangskreis.
+- API-Token Hetzner: für Terraform, Ansible oder CI (nur minimale Rechte, nur
+  für Automation).
+
+10.2 Supabase (wenn gehostete DB + Auth + Storage)
+- Supabase-Organisation und mindestens ein Projekt pro Umgebung (Staging,
+  Production): Dashboard-Zugang für Admins.
+- Projekt-URL, anon key (öffentlich im Frontend nur für Auth/RLS-taugliche Calls),
+  service_role key (nur Server/Worker, niemals im Browser-Build).
+- Datenbank: direkter Postgres-Zugang (Connection String) für Migrationen,
+  Backups, Notfall-psql – nur vertrauenswürdige Rollen.
+- Storage: Buckets + Policies; ggf. Service-Account für Worker, die Dateien
+  schreiben.
+- Optional: Supabase CLI lokal/CI mit Link-Token oder Access Token für
+  `db push`, Edge Functions deployen.
+
+10.3 Kundeneigene Datenbank (BYO)
+- Ihr speichert verschlüsselt den Connection String und ggf. getrennt User/
+  Passwort oder Zertifikat – technischer Zugang liegt bei eurer API/Worker-
+  Infrastruktur auf Hetzner, nicht bei TrimTex-Entwicklern-Notebooks ohne Konzept.
+- Der Kunde: Firewall-Regeln, VPN, DB-User mit minimalen Rechten nur für eure
+  App-Rolle; sie geben euch kein persönliches Admin-Passwort, sondern einen
+  technischen User.
+
+10.4 DNS und Domain
+- Registrar oder DNS-Provider (z. B. bei Hetzner DNS, Cloudflare, INWX):
+  Zugang für A/AAAA/CNAME, TLS-DCV, ggf. E-Mail (SPF/DKIM) für Passwort-Reset.
+- Wenn CDN/WAF davor: zusätzlicher Account und API-Token für Automatisierung.
+
+10.5 Quellcode und CI/CD
+- Git-Hosting (GitHub/GitLab/…): Repo-Zugriff, Branch-Schutz, Secrets für
+  Deploy (SSH zu Hetzner, Hetzner API, Supabase Tokens, Docker Registry).
+- Container-Registry (GitHub Container Registry, Docker Hub): Push/Pull-Credentials
+  auf dem Server für `docker compose pull`.
+- Workflow-Dateien (Actions, Compose) können im Editor z. B. mit Cursor entworfen
+  werden; die Ausführung und Secret-Belegung bleiben bei Git/CI (Abgrenzung Abschnitt 6.4).
+
+10.6 Auf dem VPS selbst (laufende Systeme)
+- Reverse Proxy: Zertifikats-Account (Let’s Encrypt/E-Mail für ACME).
+- Queue/Redis (falls BullMQ o. ä.): internes Passwort, nur im privaten Netz.
+- Monitoring (Uptime-Kuma, Grafana Cloud, …): eigener Login/API-Key.
+- Backup-Ziel (Hetzner Storage Box, S3-kompatibel): Access Key / Secret, Bucket-
+  Policy nur für Backup-Pfad.
+
+10.7 Endnutzer (Kunde der SaaS)
+- Login über eure Auth (z. B. Supabase Auth): E-Mail/Passwort oder Magic Link –
+  das ist kein Hetzner-Zugang, sondern Anwendungs-Identity.
+- Optional später: SSO (Azure AD, Google Workspace) – dann zusätzliche App-
+  Registrierungen und Client-Secrets in eurer API.
+
+10.8 Aufteilung „wer darf was“ (Empfehlung)
+- Org-Owner: Hetzner, DNS, Supabase-Org, Registrar – wenige Personen, 2FA.
+- Entwickler: Git, Staging-Supabase, Staging-Server oder Preview-Umgebung.
+- CI: nur Deploy-Secrets, keine menschlichen Admin-Keys auf demselben Token.
+- Support: read-only Dashboards wo möglich, kein Production-DB-Write ohne Notfall-
+  Prozess.
+
+10.9 Dokumentation im Team
+- Inventarliste: System, Zweck, welches Konto, wer Owner, wo Secrets liegen
+  (z. B. Passwort-Manager / Secret Manager), Rotationsdatum.
+
+--------------------------------------------------------------------------------
+11. Sicherheit und Betrieb (kurz)
+--------------------------------------------------------------------------------
+- Secrets rotierbar; TLS; Audit bei BYO-Zugriff; Rate Limits; keine SQL aus dem
+  Client; AV/TOMs je nach Datenort. Zugangs-Inventar siehe Abschnitt 10.
+
+--------------------------------------------------------------------------------
+12. Konkrete Umsetzungsschritte (Reihenfolge, ohne Code)
+--------------------------------------------------------------------------------
+1) Kernschichten skizzieren und begrenzen (Minimal Kernel, Dokument-JSON oder
+   binäres Format, erste Render-Strategie) – vor „alles in SQL modellieren“.
+2) Job-Queue und ein erster deterministischer Worker (z. B. Export) auf Hetzner.
+3) Supabase für Auth + gehosteten Speicher; RLS für Mandanten.
+4) Hetzner: Proxy, statische App, API, Worker, Queue (Compose/CI-Skripte können
+   im Team u. a. mit Cursor vorbereitet werden, siehe Abschnitt 6.4).
+5) BYO nur für ausgewählte Kunden mit klaren Voraussetzungen und Supportpaket.
+6) Kundenbereich (Login, Daten, Einstellungen) mit Mandanten-Isolation.
+7) Monitoring, Runbooks (DB down, Migration fehlgeschlagen, Job hängt).
+8) Zugangs-Inventar anlegen und 2FA für alle kritischen Konsole-Konten (Abschnitt 10).
+9) Vier Vertrags-Specs zuerst: Geometry Kernel (18.1), State & Sync inkl. Event/
+   Command/Snapshot-Entscheid (18.2), Document Store Contract (18.3), Job Contract
+   (18.4); dann Failure Modes (18.7) und Limit-Operationalisierung (18.5) – parallel
+   zur ersten produktiven Store-/Job-Implementierung.
+
+--------------------------------------------------------------------------------
+13. Was ihr „solltet“ vs. „könntet“
+--------------------------------------------------------------------------------
+Solltet:
+- Geometrie-zentriertes Dokumentmodell; DB als Speicher; API ohne interaktiven
+  Feintakt.
+- Speicher-Abstraktion für hosted vs. BYO; eine Job-Pipeline mit reproduzierbaren
+  Outputs.
+- Klare Browser-Limits und Server-Jobs für alles Schwergewichtige.
+- Geschäftsobjekte, Audit-/Event-Log, deterministischer Replay-Pfad, Limit-
+  Vertrag, Observability der Jobs sowie Roadmap für Public API/Webhooks und
+  Integrations-Schicht (Abschnitt 16).
+- Document Store Contract (18.3) und Job Contract (18.4) contract-first; dazu State-
+  Grenzen (18.2), Kernel-Schriftwerk (18.1) und Failure Modes (18.7).
+
+Könntet:
+- Self-Service BYO, SSO, Read-Replicas, Multi-Region.
+- Offline / Local-first: lokaler Cache des Dokuments, später synchronisierte
+  Diffs; Konfliktstrategien – erhöht Komplexität, kann aber ein Differenzierer
+  in der Branche sein.
+
+--------------------------------------------------------------------------------
+14. Browser: Geometrie-Operationen, Rendering, große Daten
+--------------------------------------------------------------------------------
+14.1 Problem
+- Riesige SVG-DOM-Bäume skalieren schlecht; häufig noch früher: Booleans, Offsets,
+  Schnitte, Grading im Hauptthread.
+
+14.2 Browser-seitig sinnvoll
+- Viewport-Culling, LOD, Web Worker für rechenintensive, aber noch lokale Schritte;
+  kompakte Geometrie-Buffers statt Massen-DOM.
+- Interaktiver Renderer: Canvas/WebGL bevorzugen; SVG nur gezielt (Selektion,
+  Export-Vorschau) wenn nötig.
+
+14.3 Server
+- Volle Tessellation, Validierung in großem Umfang, Nesting, finale Exporte;
+  Streaming-Parser für sehr große Importe; paginierte oder vereinfachte Arbeits-
+  kopie für den Editor.
+
+14.4 Produktperspektive
+- Kommunizierte Limits (siehe auch Abschnitt 16.4); anonyme Telemetrie an Grenzen
+  für Priorisierung.
+
+--------------------------------------------------------------------------------
+15. Kundenbereich (Login): eigene Daten und Einstellungen
+--------------------------------------------------------------------------------
+- Geschützter Bereich nach Auth (z. B. Supabase Auth): Projekte/Arbeitsbereiche,
+  Profil, Passwort; später Rollen, Rechnungen, BYO nur für Org-Admins.
+- Routen z. B. `/login`, `/account` oder `/portal`; Editor unter `/app` oder Root
+  mit Session-Check.
+- „Meine Daten“ und „Einstellungen“ UX-seitig trennen.
+
+--------------------------------------------------------------------------------
+16. Enterprise-Ergänzungen (externe Beratung + Abgleich mit Produkt/Code-Richtung)
+--------------------------------------------------------------------------------
+Hinweis: Ein externer Berater sieht nicht euren Quellcode; die folgenden Punkte
+ergänzen das Konzept dort, wo „Architektur da ist, aber Produkt- und Betriebs-
+Objekte noch fehlen“. Sie passen zu Abschnitt 4 (Kern) und zu eurer bestehenden
+TrimTex-Domäne (Projekte, Teile, Exporte, DXF usw. im Code).
+
+16.1 Produkt- und Geschäftsobjekt-Schicht (Business Object Model)
+Ohne explizite Objekte wird aus einem CAD-Produkt schnell „nur Dateien in einer
+Datenbank“. Zielbegriffe (an eure Domäne anbindbar):
+- Workspace: Mandanten-Container (Organisation / Team-Umfeld).
+- Project: Kundenprojekt (fachlicher Rahmen, Metadaten, Zugriffsrechte).
+- Pattern Set: technische Sammlung zusammengehöriger Schnittdaten (z. B. kompletter
+  Sitz / Auftrag).
+- Pattern Piece: Einzelteil (euer „Piece“ im Editor).
+- Variant: Grading- oder Größenlogik (S/M/L, Regeln, Parameterbezug).
+- Export Artifact: Ergebnisobjekt für DXF, ASTM, PDF usw. (Pfad, Hash, Version der
+  Engine, erzeugt zu welchem Snapshot).
+- Job: Rechenauftrag mit Status (queued, running, succeeded, failed), Eingabe-
+  Referenz, Worker-Version.
+- Snapshot: materialisierter Dokumentzustand zu einem Zeitpunkt (für schnelles
+  Laden und Reproduzierbarkeit).
+Beziehungen: Project enthält Pattern Sets; Pattern Set enthält Pieces und Varianten;
+Jobs und Exporte hängen an Snapshots oder definierten Versionen.
+
+16.2 Event- und Audit-Log (Enterprise-typisch Pflicht)
+- Jede relevante Geometrie-Änderung, Parameter-Änderung, Export-Auslösung und
+  wichtige Nutzeraktion sollte als Event persistierbar sein (Kategorie, Actor,
+  Zeitstempel, Referenz auf Objekt/Version).
+- Beispiel-Kategorien: geometry_change_event, parameter_change_event, export_event,
+  user_action_event; Job-Lifecycle zusätzlich (job_started, job_finished, job_failed).
+- Nutzen: Antworten auf „Wer hat wann was geändert und warum weicht mein Schnittteil
+  ab?“; Support und Compliance.
+
+16.3 Replay und deterministische Rekonstruktion
+- Anforderung: Version X wiederherstellen können; einen Job mit gleicher Eingabe
+  und gleicher Engine-Version erneut ausführen; Export bitgleich reproduzierbar
+  (für Produktion und Streitfälle).
+- Konzept: kombiniert aus append-only Event Stream und Snapshots (Snapshot =
+  Performance- und Wiederherstellungsschicht; fehlende Zwischenstände aus Events
+  rekonstruierbar, wo definiert).
+- Operationell: z. B. rebuild(document_id, version_id) oder „replay ab Event N“
+  nur in kontrollierten Wartungsfenstern mit klarer Engine-Version.
+
+16.4 Performance- und Limit-Vertrag (SaaS-Skalierung und Support-Schutz)
+Öffentlich oder vertraglich festhalten, z. B.:
+- maximale Polygon-/Kurven-Komplexität pro Pattern Piece oder pro Pattern Set;
+- maximale Anzahl Patterns / Pieces pro Project;
+- maximale Grading-Komplexität (Anzahl Varianten, Regeltiefe);
+- maximale Job-Laufzeit und Speicher pro Job; Warteschlangenpriorität;
+- Browser-Schwellen (LOD, Entitätenzahl) ab wann Server-Pflicht oder Ablehnung.
+Zweck: unkontrollierte Riesendateien und ein „Excel-Problem in CAD“ (alles geht,
+nichts ist begrenzt) vermeiden; Pricing und Erwartungsmanagement.
+Operationalisierung (noch auszuarbeiten, siehe Abschnitt 18.5): z. B. Soft-Limits
+(z. B. Kanten/Edges pro Piece) mit Warnung, Hard-Limits mit Ablehnung; definiertes
+Fallback-Verhalten (vereinfachte Darstellung, Server-Pflicht, Queue mit langer
+Wartezeit); Degradation-Stufen statt undefiniertem Stillstand.
+
+16.5 API als eigenes Produkt (nicht nur interne Middleware)
+- Neben der internen API für die SPA: stabile, versionierte Public API für
+  Integrationen, z. B. REST-Stil: GET /projects, POST /patterns, POST /exports,
+  POST /jobs (nur Beispiele; exakt an euer Objektmodell anpassen).
+- Authentifizierung: API-Keys oder OAuth je nach Kunde; strikte Mandanten-Scopes.
+- Webhooks für asynchrone Kunden-Systeme: z. B. job.finished, export.ready,
+  error.occurred (Payload mit Job- bzw. Export-IDs und Links zu Artefakten).
+- Ziel: Anbindung an PLM, ERP, Produktionssysteme ohne nur „im UI klicken“.
+
+16.6 Integrations-Schicht (Industrie / Plattform statt nur Tool)
+- DXF-Import-Pipelines (Validierung, Layer-Mapping, Fehlerberichte) als erster
+  fester Integrationspfad – schon im TrimTex-Kontext vorhanden, im Konzept als
+  eigene Schicht benennen.
+- Später optional: PLM-Connectoren, CSV-/BOM-Exporte, Adapter für Maschinen-
+  oder Schnittformate.
+- Das ist der Hebel von „Editor“ zu „eingebetteter Baustein in der Lieferkette“.
+
+16.7 Mandanten-Isolationsstufen (für Vertrieb und Preislogik)
+Klare Stufen statt nur „Shared vs. BYO“:
+- Level 1: Shared SaaS, logische Isolation (z. B. RLS in gehosteter DB).
+- Level 2: Dedicated Database (eigene Instanz, weiterhin eure Cloud).
+- Level 3: Dedicated Compute + Database (eigene Worker/Queue, stärkere noisy-neighbor-
+  Vermeidung).
+- Level 4: On-Prem oder Kunden-VPC (Daten und Ausführung in Kundenhoheit; höchster
+  Integrations- und Supportaufwand).
+Jede Stufe braucht eigene SLAs, Preise und technische Checklisten.
+
+16.8 Job-Observability (über „es gibt Worker“ hinaus)
+- Durchgängige Job-Trace-ID von API über Queue bis Worker; strukturierte Schritt-
+  Logs (parse, tessellate, export, upload).
+- Einheitliche Fehler-Taxonomie (user_error vs. system_error vs. timeout) für
+  Alerts und UI-Meldungen.
+- Retry-Politik pro Fehlertyp; optional Kostenmetrik pro Job (CPU-Zeit, Speicher)
+  für Controlling und Pricing.
+
+16.9 Geometrie-Versionierung (Konzept-Slice zu Abschnitt 4.5)
+- Bis Abschnitt 18.2 verbindlich entschieden ist, bleibt die Frage offen, ob
+  append-only Events, snapshot-first oder Hybrid die führende Wahrheit für Historie
+  und Replay sind; Audit kann teils unabhängig vom Kernmodell geführt werden.
+- Zielbild nach Festlegung: eine dokumentierte Hauptlinie (Source of Truth), dazu
+  Snapshots als Performance- und Export-Schicht wo sinnvoll; Geometry Kernel und
+  Worker-Versionen deterministisch halten, damit Replay und Audit stimmig bleiben.
+
+16.10 Offline / Edge-Modus (optional, strategisches Future-Slice)
+- Lokale Cache-Kopie eines Projects; Bearbeitung ohne Netz mit späterem Sync
+  über Event-Merge und Konfliktregeln.
+- Erhöht Komplexität; kann Differenzierer gegenüber klassischer reiner Online-CAD-
+  SaaS sein (siehe Abschnitt 13, Könntet).
+
+--------------------------------------------------------------------------------
+17. Kurzfassung
+--------------------------------------------------------------------------------
+Das Produkt ist als CAD-System mit Web-UI und serverseitiger Schwergewichts-
+Schicht zu denken: Geometrie-Kern, Näherei-/Pattern-Schicht, Parametrik/Grading
+und versioniertes Dokumentmodell stehen vor Datenbank und Rendering. Hetzner
+trägt API, Worker und Queue; Supabase oder BYO-Postgres persistieren Snapshots
+und Metadaten – BYO bewusst als hoher operativer Aufwand. Der Browser liefert
+flüssige Interaktion (lokaler State, Diffs, Worker, WebGL/Canvas); der Server
+liefert deterministische Jobs und exakte Exporte. Ein Kundenbereich bündelt
+Sicht auf Daten und Einstellungen an derselben Mandantenlogik. Zugänge zu
+Hetzner, Supabase, DNS, CI und Backup-Zielen sind gesondert zu inventarisieren
+und zu härten (Abschnitt 10). Für Enterprise-Reife kommen explizite
+Geschäftsobjekte, Audit- und Event-Log, Replay/Determinismus, öffentliche API
+und Webhooks, Integrations-Schicht, Limit-Verträge, Isolationsstufen und Job-
+Observability hinzu (Abschnitt 16). Gesamteinordnung: industrielles Systemdesign-
+Niveau (Abschnitt 3.4); zur obersten Bewertungsklasse (z. B. 9,8–10/10) fehlt vor
+allem die harte Ausformulierung von Geometry Kernel und State Engine sowie die
+begleitenden Vertrags-Specs (Abschnitt 18, insb. 18.1–18.4 und 18.5).
+
+--------------------------------------------------------------------------------
+18. Weg zur obersten Enterprise-Reife (Zielrichtung z. B. 9,8–10 / 10)
+--------------------------------------------------------------------------------
+Die folgenden Themen sind die wichtigsten „Missing Pieces“, um Architektur in
+baubare, prüfbare Spezifikationen zu überführen. Sie ergänzen Abschnitt 4 und 16.
+Der Schwerpunkt liegt auf Kernel + State (18.1, 18.2); Store- und Job-Verträge
+(18.3, 18.4) verhindern implizite Client-Server-Annahmen; Limits und Economics
+(18.5, 18.6) machen das System operativ und verkaufbar; Failure Modes (18.7)
+absichern den Betrieb.
+
+18.0 Ehrliche Systemphase und nächster Schritt (nicht weiter ausfransen)
+Aktueller Zustand: Die Architektur ist weitgehend richtig gedacht, aber die
+Vertragsdefinitionen zwischen den Teilen fehlen noch. Genau hier scheitern viele
+CAD-/Engine-Produkte – nicht an UI oder Cloud, sondern an unklaren State-Regeln,
+nicht strikt definierter Determinismus im Kern und impliziten Annahmen zwischen
+Client und Server.
+
+Konkreter nächster Schritt (Priorität vor weiterer Architekturerweiterung):
+vier kleine, strikte Spezifikationen extrahieren – jeweils kurz (z. B. 1–2 Seiten),
+aber formal genug zum Implementieren und Testen:
+(1) Geometry Kernel Spec – (2) State & Sync Rules – (3) Document Store Contract –
+(4) Job Contract. Erst danach lohnt sich wieder breites Ausbauen der Architektur-
+beschreibung.
+
+18.1 Geometry Kernel Spec (implementierbares Objekt, nicht nur Konzept)
+Ohne folgende Festlegungen bleibt „Kernel“ ein Begriff, kein System:
+- Minimales Datenmodell: z. B. Node / Edge / Face inkl. stabiler IDs; Referenzen
+  und Constraints als first-class; was darf referenziert werden, was nicht.
+- Atomare Operationen (explizite Liste): z. B. move_vertex, split_edge, merge_edges,
+  boolean_op, offset_edge_chain, … – mit Vor-/Nachbedingungen und welche Invarianten
+  sie erwarten oder verletzen können.
+- Invarianten: formal „wann ist ein Modell gültig / ungültig“ (geschlossene Konturen,
+  Orientierung, maximale Knotengrad, …); Verhalten bei Verletzung (ablehnen,
+  Reparaturvorschlag, Rollback).
+- Gleitkomma und Toleranzen: epsilon-Regeln, Vergleich von Koordinaten, Bogen-
+  Tessellation, was als „identisch“ gilt – wird sonst Hauptquelle für nicht
+  reproduzierbare Bugs und Export-Abweichungen.
+- Constraint-System (Typen, Reihenfolge, Zyklen, Fehlerfälle) und Topologie-
+  Änderungen (Split/Merge, Recovery bei invalidem Graphen) bleiben Teil derselben
+  Spec.
+- Determinismus: gleiche Engine-Version + gleiche Eingabe → gleiche Ausgabe unter
+  den dokumentierten Toleranzregeln.
+Hinweis: Event/Command/Snapshot und Undo gehören fachlich hierher und in 18.2;
+in der Kernel-Spec nur definieren, welche Operationen der Kern atomar anbietet
+und welche Zustände er als gültig akzeptiert.
+
+18.2 State & Sync Rules: Event vs. Command vs. Snapshot (Entscheidung erforderlich)
+Im Gesamtdokument sind Event-Log, Snapshots und Commands genannt – es fehlt noch
+eine verbindliche Festlegung (eine Hauptlinie plus Ausnahmen):
+- Was ist Source of Truth: reines Event Sourcing, snapshot-first mit optionalem
+  Event-Log für Audit, oder Hybrid mit klarer Priorität (z. B. Snapshot für
+  Startpunkt, Events für Delta, Commands für Undo)?
+- Was darf Undo wirklich sein: nur clientseitiger Command-Stack pro Session,
+  serverseitig rekonstruierbar bis zu Revision X, oder beides mit definiertem
+  Mapping?
+- Welche Ereignisse müssen append-only für Audit/Replay sein, welche nur transient?
+- Reproduzierbarkeit und Support: ohne diese Entscheidung entstehen später die
+  meisten Streit- und Debugfälle (Abschnitt 16.9 ist bewusst zu ergänzen, sobald
+  18.2 feststeht).
+
+Ergänzend die Real-Time-Grenze (wie bisher, aber an 18.2 gebunden):
+- Client State vs. server-authoritative Snapshot; wann Sync zwingend; Invalidierung;
+  Konfliktverhalten (Last-Write-Wins, Merge, Sperre pro Piece, …).
+
+18.3 Document Store Contract (contract-first, kleine stabile Kernschnittstelle)
+Die Idee „ein Store-Port“ reicht nicht; sie braucht eine explizite, versionierbare
+Schnittstelle (Namen beispielhaft), z. B.:
+- loadDocument(tenantId, documentId) → konsistenter Dokumentzustand + Metadaten.
+- commitPatch(docId, expectedRevision, patch) → Erfolg/Fehler/Konflikt inkl.
+  Konflikt-Payload; definiertes Konsistenzmodell (strong für commit vs. eventual
+  nur für Nebenindexe – explizit wählen und dokumentieren).
+- createSnapshot(docId, label?) → Referenz für Export/Jobs.
+- enqueueJob(jobSpec) → Job-Id; Anbindung an Abschnitt 18.4.
+Klare Garantien festhalten:
+- Wer gewinnt bei Konflikt (Server-Revision, Patch wird abgelehnt, Merge nur wenn
+  definiert)?
+- Was passiert bei BYO-Ausfall vs. Supabase (gleiche Fehler-Semantik über die
+  Abstraktion)?
+Ohne diesen Vertrag verzweigt BYO vs. Supabase wieder in der gesamten Codebasis.
+
+18.4 Job Contract (formal, sonst kein echtes „deterministisch“)
+Ergänzung zu Abschnitt 4.9 und 16.8:
+- Job Input Schema (versioniert, validierbar): welche Felder, welche Referenzen
+  auf Dokument/Snapshot/Engine-Version.
+- Job Output Schema: was garantiert ein erfolgreicher Job (Artefakt-Refs, Checksummen,
+  Metriken); was bedeutet „partial success“ wenn überhaupt erlaubt.
+- Idempotenz: ist derselbe logische Job mit gleicher Idempotency-Key mehrfach
+  sicher? Was passiert bei Doppel-Submit?
+- Engine-/Worker-Version: wie wird sie am Output festgehalten, damit Re-Runs
+  vergleichbar sind?
+- Determinismusregeln: gleiche Inputs + gleiche Engine-Version → gleiche Outputs
+  innerhalb dokumentierter Toleranzen (Anknüpfung an 18.1 Gleitkomma).
+
+18.5 Performance und Limits (messbar, durchsetzbar, UX-gekoppelt)
+Ergänzung zu Abschnitt 16.4: nicht nur konzeptionell, sondern operativ.
+- Messbar: konkrete Schwellen (Zahlen sind Produktentscheid), z. B. Kanten pro
+  Piece, Gesamtentitäten pro Project, Job-Timeout in Sekunden, RAM-Obergrenze.
+- Durchsetzbar: Soft-Limit (Warnung, Telemetrie) vs. Hard-Limit (Operation abgelehnt
+  mit erklärender Fehler-ID); wo im Code geprüft wird (Kernel-Eingang, Store, API).
+- UX-gekoppelt: was sieht der Nutzer bei Überschreitung (Banner, Dialog, Queue-
+  Platz, Angebot Upgrade)? Ohne das leiden Pricing und Stabilität gemeinsam.
+
+18.6 Compute Economics Layer (Pricing-/Produkt-Anbindung)
+- Jobs verbrauchen CPU und Speicher: intern Kosten pro Job messen (Anknüpfung an
+  Abschnitt 16.8 und 18.4 Output-Metriken).
+- Warteschlangen-Priorität nach Tarif (z. B. Free vs. Pro vs. Enterprise).
+- Trennung im Angebot und in der Messung: Compute (Job-Minuten), Storage (Snapshots,
+  Artefakte), Seats (Nutzer) – damit Limits aus 16.4/18.5 monetarisierbar und
+  erklärbar werden.
+
+18.7 Failure Modes Design (Enterprise-Kern, explizit modellieren)
+Festhalten, was in welchem Fall passieren soll, inkl. Nutzer- und Support-Meldung:
+- Worker crasht mitten im Job: Retry, sichtbarer Fehlerstatus, kein „hängendes“
+  Unendlich-UI.
+- BYO-Datenbank offline: lesender Modus, Warteschlange pausieren, klarer Banner,
+  keine stillen Datenverluste.
+- Geometrie wird invalid (Kernel wirft): Transaktionsgrenze, Rollback zum letzten
+  gültigen Snapshot oder geführter Reparaturmodus.
+- Client-Version ungleich Server-Version: Migrationspfad (Force-Reload, API-
+  Versionierung, abgelehnte Operationen mit erklärender Meldung).
+- Rate Limits und Queue voll: erwartbare Degradation statt undokumentiertem 500er.
+
+================================================================================
+Ende des Vorschlags
+================================================================================

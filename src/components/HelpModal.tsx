@@ -1,9 +1,14 @@
 import { useEffect } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { HELP_ENTRIES, HELP_CATEGORIES_ORDER } from '../data/helpEntries'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 export function HelpModal() {
-  const { showHelpModal, setShowHelpModal } = useStore()
+  const { showHelpModal, setShowHelpModal } = useStore(
+    useShallow((s) => ({ showHelpModal: s.showHelpModal, setShowHelpModal: s.setShowHelpModal })),
+  )
+  const trapRef = useFocusTrap<HTMLDivElement>(showHelpModal)
 
   useEffect(() => {
     if (!showHelpModal) return
@@ -32,7 +37,7 @@ export function HelpModal() {
       aria-modal="true"
       aria-labelledby="help-modal-title"
     >
-      <div className="help-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="help-modal" onClick={(e) => e.stopPropagation()} ref={trapRef}>
         <div className="help-header">
           <h2 id="help-modal-title" className="help-title">
             Anleitung
