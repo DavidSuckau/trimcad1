@@ -103,6 +103,11 @@ export type DetectedNotch = {
   angle: number
   depth: number
   width: number
+  /**
+   * U-förmige Strich-/Schlitzkerbe (rechteckige Einbuchtung): langer Kantenabschnitt bis zur Kerbe,
+   * kurze Schenkel, flacher Boden. Wenn gesetzt, entspricht das Modell `Notch.type === 'single'`.
+   */
+  isSlit?: boolean
 }
 
 function tryDetectNotchAtTip(
@@ -145,6 +150,94 @@ function tryDetectNotchAtTip(
   return { position, angle, depth, width }
 }
 
+/** Max. Länge der senkrechten „Ein“- und „Aus“-Schenkel einer Schlitzkerbe (mm). */
+const SLIT_LEG_MAX_MM = 10
+/** Boden der Schlitzkerbe (mm): typisch Breite der flachen Einbuchtung. */
+const SLIT_BOTTOM_MIN_MM = 0.8
+const SLIT_BOTTOM_MAX_MM = 35
+
+/**
+ * Strich-/Schlitzkerbe (U-Form): b–c und d–e kurz, c–d der flache Boden; a–b bzw. e–f können lang sein
+ * (Kontur vor/nach der Kerbe) — deshalb erkennt die reine V-Spitzen-Logik diese Geometrie nicht.
+ */
+function tryDetectSlitNotchAt(
+  ring: DxfPoint[],
+  i: number,
+  polygonAreaSigned: number
+): Omit<DetectedNotch, 'isSlit'> | null {
+  const n = ring.length
+  if (n < 6) return null
+  const ib = i
+  const ic = (i + 1) % n
+  const id = (i + 2) % n
+  const ie = (i + 3) % n
+  if (new Set([ib, ic, id, ie]).size < 4) return null
+
+  const b = ring[ib]
+  const c = ring[ic]
+  const d = ring[id]
+  const e = ring[ie]
+
+  const bc = dist(b, c)
+  const cd = dist(c, d)
+  const de = dist(d, e)
+
+  if (bc > SLIT_LEG_MAX_MM || de > SLIT_LEG_MAX_MM) return null
+  if (bc < DEPTH_MIN || de < DEPTH_MIN) return null
+  if (cd < SLIT_BOTTOM_MIN_MM || cd > SLIT_BOTTOM_MAX_MM) return null
+
+  /** Konkave Ecken der U-Form sind die inneren Bodenwinkel (c und d), nicht die Schultern b/e. */
+  if (!isConcaveNotchAtTip(b, c, d, polygonAreaSigned)) return null
+  if (!isConcaveNotchAtTip(c, d, e, polygonAreaSigned)) return null
+
+  const opening = dist(b, e)
+  if (opening < WIDTH_MIN * 0.4) return null
+
+  const midOx = (b.x + e.x) / 2
+  const midOy = (b.y + e.y) / 2
+  const midBx = (c.x + d.x) / 2
+  const midBy = (c.y + d.y) / 2
+  const position: Point = { x: midOx, y: midOy }
+  const rawDepth = dist({ x: midOx, y: midOy }, { x: midBx, y: midBy })
+  const rawWidth = opening
+  const inwardAngle = Math.atan2(midBy - midOy, midBx - midOx)
+  const angle = (inwardAngle * 180) / Math.PI
+  const { depth, width } = clampDepthWidth(rawDepth, rawWidth)
+
+  return { position, angle, depth, width }
+}
+
+function applySlitNotchesInRing(
+  work: DxfPoint[],
+  initialPolyArea: number
+): { ring: DxfPoint[]; slits: DetectedNotch[] } {
+  let ring = work
+  let polyArea = initialPolyArea
+  const slits: DetectedNotch[] = []
+  let guard = 0
+  while (ring.length >= 6 && guard < 200) {
+    guard++
+    const n = ring.length
+    let found: Omit<DetectedNotch, 'isSlit'> | null = null
+    let start = -1
+    for (let i = 0; i < n; i++) {
+      const det = tryDetectSlitNotchAt(ring, i, polyArea)
+      if (det) {
+        found = det
+        start = i
+        break
+      }
+    }
+    if (!found || start < 0) break
+    const rm = new Set<number>([(start + 1) % n, (start + 2) % n])
+    ring = ring.filter((_, j) => !rm.has(j))
+    slits.push({ ...found, isSlit: true })
+    polyArea = signedPolygonArea(ring)
+    if (Math.abs(polyArea) < 1e-6) break
+  }
+  return { ring, slits }
+}
+
 function buildRingVertices(vertices: DxfPoint[], options?: NotchDetectOptions): DxfPoint[] {
   if (vertices.length < 3) return [...vertices]
   const explicitClosed = options?.closedRing
@@ -165,8 +258,8 @@ function isRingMode(vertices: DxfPoint[], ring: DxfPoint[], options?: NotchDetec
 }
 
 /**
- * Erkennt geometrische Kerben (V-Einbuchtungen) in einer Vertex-Liste.
- * Nur die **Spitze** wird entfernt; die Schulterpunkte bleiben (Sehne).
+ * Erkennt geometrische Kerben in einer Vertex-Liste: V-Einbuchtungen (Spitze wird entfernt)
+ * sowie U-förmige Strich-/Schlitzkerben (Boden c–d wird entfernt, Sehne b–e).
  */
 export function detectNotchesInPolyline(
   vertices: DxfPoint[],
@@ -191,18 +284,27 @@ export function detectNotchesInPolyline(
     const polyArea = signedPolygonArea(work)
     if (Math.abs(polyArea) < 1e-6) return { cleanedVertices: [...vertices], notches: [] }
 
-    const n = work.length
+    let ring = work
+    const slitNotches: DetectedNotch[] = []
+    if (ring.length >= 6) {
+      const slitRes = applySlitNotchesInRing(ring, polyArea)
+      ring = slitRes.ring
+      slitNotches.push(...slitRes.slits)
+    }
+
+    const polyAreaForV = signedPolygonArea(ring)
+    const n = ring.length
     let i = 0
     while (i < n) {
       const iPrev = (i - 1 + n) % n
       const iNext = (i + 1) % n
       const detected = tryDetectNotchAtTip(
-        work[iPrev],
-        work[i],
-        work[iNext],
+        ring[iPrev],
+        ring[i],
+        ring[iNext],
         shortMax,
         minAng,
-        polyArea,
+        polyAreaForV,
         legLengthMode
       )
       if (detected) {
@@ -214,9 +316,9 @@ export function detectNotchesInPolyline(
       }
     }
 
-    const cleanedRing = work.filter((_, idx) => !tipIndices.has(idx))
+    const cleanedRing = ring.filter((_, idx) => !tipIndices.has(idx))
     const cleanedVertices = restoreClosingVertex(vertices, cleanedRing)
-    return { cleanedVertices, notches }
+    return { cleanedVertices, notches: [...slitNotches, ...notches] }
   }
 
   let i = 1

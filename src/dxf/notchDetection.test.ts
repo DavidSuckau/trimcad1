@@ -70,6 +70,26 @@ describe('detectNotchesInPolyline', () => {
     expect(notches).toHaveLength(0)
   })
 
+  it('erkennt U-förmige Strich-/Schlitzkerbe (langer Kantenabschnitt vor der Kerbe)', () => {
+    // Untere Kante: langes Segment (0,0)→(4,0), dann Schlitz (4,0)→(4,2)→(8,2)→(8,0), dann weiter — V-Logik scheitert am ersten Eck wegen langem Schenkel.
+    const withDup = [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 2 },
+      { x: 8, y: 2 },
+      { x: 8, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+      { x: 0, y: 0 },
+    ]
+    const { cleanedVertices, notches } = detectNotchesInPolyline(withDup)
+    expect(notches).toHaveLength(1)
+    expect(notches[0].isSlit).toBe(true)
+    expect(notches[0].depth).toBeGreaterThan(0.5)
+    expect(cleanedVertices.length).toBe(withDup.length - 2)
+  })
+
   it('legLengthMode asymmetric: ein deutlich längerer Schenkel (kurzer + langer Schenkel)', () => {
     // Kürzeres Bein ~4.1 mm, längeres ~9.9 mm — bei shortMax=9 scheitert Modus both, asymmetric erlaubt bis ~16.6 mm auf der langen Seite.
     const withDup = [

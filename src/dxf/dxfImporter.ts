@@ -961,7 +961,7 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
           id: generateId(),
           position: n.position,
           angle: n.angle,
-          type: 'v' as const,
+          type: (n.isSlit ? 'single' : 'v') as Notch['type'],
           depth: n.depth,
           width: n.width,
         })),

@@ -4855,13 +4855,24 @@ export function WorkspaceCanvas() {
       }
     } else if (dragging?.kind === 'line') {
       const { pieceId, start, current } = dragging
-      if (lineLengthEditor && lineLengthEditor.pieceId === pieceId) return
+      if (lineLengthEditor && lineLengthEditor.pieceId === pieceId) {
+        setDragging(null)
+        setHoveredPieceId(null)
+        return
+      }
       const piece = pieces.find((p) => p.id === pieceId)
       if (piece) {
         const len = Math.hypot(current.x - start.x, current.y - start.y)
         if (len >= 0.5) {
           if (tool === 'internalLine') {
-            addInternalLine(pieceId, { type: 'line', start, end: current })
+            setLineLengthEditor({
+              mode: 'draw',
+              pieceId,
+              start: { ...start },
+              current: { ...current },
+              value: len.toFixed(1),
+              drawTarget: 'internal',
+            })
           } else {
             addCurveToCutLine(pieceId, { type: 'line', start, end: current })
           }
@@ -7210,7 +7221,26 @@ export function WorkspaceCanvas() {
           <path d="M 10 22 C 30 20 40 22 40 22" />
         </svg>
       </div>
-      {(dragging?.kind === 'line' && (tool === 'internalLine' || tool === 'line') && !lineLengthEditor) && (
+      {(dragging?.kind === 'line' && tool === 'internalLine' && !lineLengthEditor) && (
+        <div style={{
+          position: 'absolute',
+          top: 16,
+          right: 16,
+          background: 'rgba(21,101,192,0.92)',
+          color: '#fff',
+          padding: '6px 10px',
+          borderRadius: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          zIndex: 9998,
+          pointerEvents: 'none',
+          maxWidth: 280,
+          textAlign: 'right',
+        }}>
+          Nach dem Loslassen: Laenge in mm. Leertaste: schon waehrend des Ziehens
+        </div>
+      )}
+      {(dragging?.kind === 'line' && tool === 'line' && !lineLengthEditor) && (
         <div style={{
           position: 'absolute',
           top: 16,

@@ -102,11 +102,14 @@ describe('updatePiece: erste Nahtzugabe (ohne bestehende seamLine)', () => {
     expect(p!.seamAllowanceMm).toBe(10)
     expect(p!.seamLine.length).toBe(4)
     expect(p!.cutLine.length).toBeGreaterThanOrEqual(3)
-    const outer = p!.cutLine[0]
-    expect(outer.type).toBe('line')
-    if (outer.type === 'line') {
-      expect(Math.hypot(outer.end.x - outer.start.x, outer.end.y - outer.start.y)).toBeGreaterThan(100)
+    // Mit tangentialen Außen-Fillets hat die CutLine viele kurze Segmente; die längste Kante bleibt ~100 mm.
+    let maxChord = 0
+    for (const c of p!.cutLine) {
+      if (c.type === 'line') {
+        maxChord = Math.max(maxChord, Math.hypot(c.end.x - c.start.x, c.end.y - c.start.y))
+      }
     }
+    expect(maxChord).toBeGreaterThan(100)
   })
 
   it('Kerbe bleibt auf cutLine positioniert bei erster Nahtzugabe (via sNormalized)', () => {

@@ -53,7 +53,7 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '..
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
-import { applySeamAssignmentCutTrim } from '../geometry/seamAssignmentCutTrim'
+import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
 import type { TrimTexProjectFileV1 } from '../persistence/trimtexProjectJson'
 import type { ConfiguratorInstance, ConfiguratorKindId, ConfiguratorPartParams } from '../configurators/types'
 import { generateConfiguratorPartGeometry } from '../configurators/generators'
@@ -772,6 +772,7 @@ export const useStore = create<Store>()(
   updatePiece: (id, upd) =>
     set((s) => {
       let toastMessage: string | null = null
+      let didDeriveCutLineFromSeam = false
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== id) return p
         const next = { ...p, ...upd }
@@ -787,6 +788,7 @@ export const useStore = create<Store>()(
             next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
             const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, derived.cutLine, p.softVertices)
             next.softVertices = mappedSoft
+            didDeriveCutLineFromSeam = true
             return forceCutVerticesSoftAfterPromotion(next, mappedSoft)
           } else if (next.cutLine.length >= 3) {
             // Wie applyOffset / Dialogtext: bisherige Schnittkontur wird Nahtlinie (Master), cutLine nach außen.
@@ -798,6 +800,7 @@ export const useStore = create<Store>()(
               toastMessage = `warn:${derived.message}`
               return p
             }
+            didDeriveCutLineFromSeam = true
             next.seamLine = seamLine
             next.cutLine = derived.cutLine
             next.notches = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, derived.cutLine)
@@ -813,14 +816,30 @@ export const useStore = create<Store>()(
             return forceCutVerticesSoftAfterPromotion(next, preserveCut)
           }
         } else {
+          // Nahtzugabe entfernt: wie removeSeamAllowance — seamLine wird wieder die alleinige Schnittkontur
+          const oldCut = p.cutLine
+          const newCut = next.seamLine.length >= 3 ? cloneCurvesArray(next.seamLine) : next.cutLine
+          const notchesRm = resyncNotchesAfterCutLineRebuilt(p.notches, oldCut, newCut)
+          const mergedCutRm = getEffectiveSoftVerticesCut(p)
+          const softVerticesRm = remapSoftVerticesToNewCutLine(oldCut, newCut, mergedCutRm)
+          next.cutLine = newCut
           next.seamLine = []
-          next.softVerticesMaster = []
+          next.seamAllowanceMm = null
           next.edgeSeamAllowances = undefined
+          next.notches = notchesRm
+          next.softVertices = softVerticesRm
+          next.softVerticesMaster = []
+          return applySharpCornerPromotion(next)
         }
         return applySharpCornerPromotion(next)
       })
+      const seamAsg = s.workspace.seamAssignments ?? []
+      const piecesAfterSeamTrim =
+        didDeriveCutLineFromSeam && seamAsg.length > 0
+          ? reapplySeamAssignmentCutTrimsForAllPieces(pieces, seamAsg).pieces
+          : pieces
       return {
-        workspace: { ...s.workspace, pieces },
+        workspace: { ...s.workspace, pieces: piecesAfterSeamTrim },
         ...(toastMessage ? { toastMessage } : {}),
       }
     }),
@@ -1196,19 +1215,16 @@ export const useStore = create<Store>()(
       pendingNahtzuordnungFirst: null,
     }))
     const after = get()
-    const pieceA = after.workspace.pieces.find((p) => p.id === pieceIdA)
-    const pieceB = after.workspace.pieces.find((p) => p.id === pieceIdB)
-    if (!pieceA || !pieceB) return
-    const trimmed = applySeamAssignmentCutTrim(pieceA, pieceB, normA, normB)
-    if (trimmed) {
+    const seamAsg = after.workspace.seamAssignments ?? []
+    const { pieces: trimmedPieces, changed: seamTrimChanged } = reapplySeamAssignmentCutTrimsForAllPieces(
+      after.workspace.pieces,
+      seamAsg
+    )
+    if (seamTrimChanged) {
       set((st) => ({
         workspace: {
           ...st.workspace,
-          pieces: st.workspace.pieces.map((p) => {
-            if (p.id === pieceIdA) return trimmed.pieceA
-            if (p.id === pieceIdB) return trimmed.pieceB
-            return p
-          }),
+          pieces: trimmedPieces,
         },
         toastMessage:
           'success:Naht-Ecken: Schnittkontur an den Enden der Kanten-Zuordnung gekürzt (Nahtlinie unverändert).',
@@ -1617,6 +1633,7 @@ export const useStore = create<Store>()(
   updateCurvePoint: (pieceId, curveIndex, pointKey, p) =>
     set((s) => {
       let toastMessage: string | null = null
+      let didDeriveCutLineFromSeam = false
       const pieces = s.workspace.pieces.map((piece) => {
         if (piece.id !== pieceId) return piece
         const seamPc = useSeamLineForPointCurveEditing(piece)
@@ -1636,6 +1653,7 @@ export const useStore = create<Store>()(
             toastMessage = `warn:${derived.message}`
             return piece
           }
+          didDeriveCutLineFromSeam = true
           const cutLine = derived.cutLine
           const notches = resyncNotchesAfterCutLineRebuilt(piece.notches, piece.cutLine, cutLine)
           const softVertices = remapSoftVerticesToNewCutLine(piece.cutLine, cutLine, piece.softVertices)
@@ -1650,8 +1668,13 @@ export const useStore = create<Store>()(
             : piece.seamLine
         return applySharpCornerPromotion({ ...piece, cutLine, seamLine })
       })
+      const seamAsg = s.workspace.seamAssignments ?? []
+      const piecesAfterSeamTrim =
+        didDeriveCutLineFromSeam && seamAsg.length > 0
+          ? reapplySeamAssignmentCutTrimsForAllPieces(pieces, seamAsg).pieces
+          : pieces
       return {
-        workspace: { ...s.workspace, pieces },
+        workspace: { ...s.workspace, pieces: piecesAfterSeamTrim },
         ...(toastMessage ? { toastMessage } : {}),
       }
     }),
@@ -1790,7 +1813,8 @@ export const useStore = create<Store>()(
         const sourceInner = p.seamLine.length >= 3 ? p.seamLine : p.cutLine
         const migratingFromCutMaster = !(p.seamLine.length >= 3 && p.seamAllowanceMm != null)
         const seamLine = cloneCurvesArray(sourceInner)
-        const derived = deriveCutLineForPiece({ ...p, seamAllowanceMm: deltaMm }, seamLine, deltaMm)
+        const pieceForDerive: PatternPiece = { ...p, seamAllowanceMm: deltaMm }
+        const derived = deriveCutLineForPiece(pieceForDerive, seamLine, deltaMm)
         if (!derived.ok) {
           toastMessage = `warn:${derived.message}`
           return p
@@ -1802,10 +1826,9 @@ export const useStore = create<Store>()(
         if (migratingFromCutMaster) {
           const migratedSoftMaster = [...new Set((p.softVertices ?? []).filter((vi) => vi >= 0 && vi < seamLine.length))].sort((a, b) => a - b)
           const nextPiece = {
-            ...p,
+            ...pieceForDerive,
             cutLine,
             seamLine,
-            seamAllowanceMm: deltaMm,
             notches,
             softVertices: [],
             softVerticesMaster: migratedSoftMaster,
@@ -1816,7 +1839,7 @@ export const useStore = create<Store>()(
           return forceCutVerticesSoftAfterPromotion(nextPiece, preserveCut)
         }
         return forceCutVerticesSoftAfterPromotion(
-          { ...p, cutLine, seamLine, seamAllowanceMm: deltaMm, notches, softVertices: mappedSoft },
+          { ...pieceForDerive, cutLine, seamLine, notches, softVertices: mappedSoft },
           mappedSoft
         )
       })

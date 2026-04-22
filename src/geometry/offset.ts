@@ -34,6 +34,12 @@ export type OffsetOptions = {
   miterLimit?: number
   /** Douglas-Peucker Toleranz (mm); kleiner = Eckpunkte bleiben erhalten */
   simplifyTolerance?: number
+  /**
+   * Tangentialer Außen-Fillet (Industrie: R = d/tan(φ/2)) nur an echten Naht-Ecken (curveIndex-Wechsel).
+   * Kein generisches „Ecken rundmachen“ (weder Clipper jtRound noch willkürliche Radien); bei true wird
+   * Douglas-Peucker auf der Schnittkontur unterdrückt, damit Tangentialität und Radius nicht verwischt werden.
+   */
+  cutCornerFillet?: boolean
 }
 
 /** Kurven in Punktliste umwandeln; Bézier wird fein abgetastet, damit die Naht oben der Kurve folgt. */
@@ -415,13 +421,19 @@ export type DeriveCutLineFromSeamResult =
   | { ok: true; cutLine: Curve[] }
   | { ok: false; message: string }
 
+export type DeriveCutLineFromSeamOptions = {
+  /** Nur bei `true`: tangentialer Fillet an Naht-Ecken. Standard: Clipper-Miter (scharf). */
+  cutCornerFillet?: boolean
+}
+
 /**
  * Schnittlinie aus Nahtlinie (Seam-as-Master): Offset nur übernehmen, wenn die Lösung plausibel ist.
  * Bei Fehler: keine stillschweigende „kaputte“ Kontur — Aufrufer soll Zustand nicht ändern und Hinweis zeigen.
  */
 export function deriveCutLineFromSeamWithValidation(
   seamLine: Curve[],
-  seamAllowanceMm: number
+  seamAllowanceMm: number,
+  deriveOptions?: DeriveCutLineFromSeamOptions
 ): DeriveCutLineFromSeamResult {
   if (seamLine.length < 3 || seamAllowanceMm <= 0) {
     return { ok: false, message: 'Nahtlinie ungültig oder Nahtzugabe fehlt.' }
@@ -455,25 +467,45 @@ export function deriveCutLineFromSeamWithValidation(
     }
   }
 
-  const { lineCurves: raw, solutionPathCount } = clipperOffsetClosedPolygon(seamLine, seamAllowanceMm, {
-    joinType: 'miter',
-    miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
-    simplifyTolerance: 0.06,
-  })
-
-  if (solutionPathCount !== 1) {
-    return {
-      ok: false,
-      message:
-        'Nahtzugabe-Offset liefert mehrere getrennte Konturen (enge Radien oder Selbstüberschneidung). Änderung verworfen.',
+  const useFillet = deriveOptions?.cutCornerFillet === true
+  let raw: Curve[]
+  if (useFillet) {
+    const allowanceMap = new Map<number, number>()
+    for (let ci = 0; ci < seamLine.length; ci++) allowanceMap.set(ci, seamAllowanceMm)
+    const poly = offsetClosedPolygonVariable(seamLine, allowanceMap, {
+      joinType: 'miter',
+      miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
+      simplifyTolerance: 0.06,
+      cutCornerFillet: true,
+    })
+    if (!poly.success || poly.lineCurves.length < 3) {
+      return {
+        ok: false,
+        message: 'Nahtzugabe-Offset ergab keine gültige Schnittkontur. Änderung verworfen.',
+      }
     }
-  }
-
-  if (raw.length < 3) {
-    return {
-      ok: false,
-      message: 'Nahtzugabe-Offset ergab keine gültige Schnittkontur. Änderung verworfen.',
+    raw = poly.lineCurves
+  } else {
+    const clip = clipperOffsetClosedPolygon(seamLine, seamAllowanceMm, {
+      joinType: 'miter',
+      miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
+      /** 0: keine DP-Vereinfachung — scharfe Miter-Ecken bleiben erhalten (reine Nahtzugabe). */
+      simplifyTolerance: 0,
+    })
+    if (clip.solutionPathCount !== 1) {
+      return {
+        ok: false,
+        message:
+          'Nahtzugabe-Offset liefert mehrere getrennte Konturen (enge Radien oder Selbstüberschneidung). Änderung verworfen.',
+      }
     }
+    if (clip.lineCurves.length < 3) {
+      return {
+        ok: false,
+        message: 'Nahtzugabe-Offset ergab keine gültige Schnittkontur. Änderung verworfen.',
+      }
+    }
+    raw = clip.lineCurves
   }
 
   let cutLine = raw
@@ -516,7 +548,8 @@ export function deriveCutLineFromSeamWithValidation(
 export function deriveCutLineFromSeamWithVariableAllowance(
   seamLine: Curve[],
   allowancePerCurveIndex: Map<number, number>,
-  maxAllowanceMm: number
+  maxAllowanceMm: number,
+  deriveOptions?: DeriveCutLineFromSeamOptions
 ): DeriveCutLineFromSeamResult {
   if (seamLine.length < 3) {
     return { ok: false, message: 'Nahtlinie ungültig.' }
@@ -552,10 +585,12 @@ export function deriveCutLineFromSeamWithVariableAllowance(
     }
   }
 
+  const useFilletVar = deriveOptions?.cutCornerFillet === true
   const { lineCurves: raw, success } = offsetClosedPolygonVariable(seamLine, allowancePerCurveIndex, {
     joinType: 'miter',
     miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
-    simplifyTolerance: 0.06,
+    simplifyTolerance: useFilletVar ? 0.06 : 0,
+    cutCornerFillet: useFilletVar,
   })
 
   if (!success || raw.length < 3) {
@@ -679,6 +714,101 @@ function lineLineIntersection(
   return { x: p1.x + t * d1x, y: p1.y + t * d1y }
 }
 
+/** Außen-Fillet nur bei Innenwinkel ≤ 150° (sonst Miter). */
+const CUT_FILLET_PHI_MAX_RAD = (150 * Math.PI) / 180
+/** Unterhalb kein Fillet (numerisch / fast kollinear). */
+const CUT_FILLET_PHI_MIN_RAD = (2 * Math.PI) / 180
+const CUT_FILLET_R_MIN_MM = 0.5
+const CUT_FILLET_R_MAX_MM = 80
+/** Feinere Abtastung = näher an exaktem Kreisbogen (Ausgabe bleibt Polylinie). */
+const CUT_FILLET_ARC_STEP_RAD = (2 * Math.PI) / 180
+
+function unitDir2(ax: number, ay: number): { x: number; y: number } | null {
+  const len = Math.hypot(ax, ay)
+  if (len < 1e-12) return null
+  return { x: ax / len, y: ay / len }
+}
+
+/** Innenwinkel an Ecke v zwischen Kanten prev→v und v→next. */
+function interiorAngleAtPolyVertex(prev: Point, v: Point, next: Point): number {
+  const e1x = v.x - prev.x
+  const e1y = v.y - prev.y
+  const e2x = next.x - v.x
+  const e2y = next.y - v.y
+  const u1 = unitDir2(e1x, e1y)
+  const u2 = unitDir2(e2x, e2y)
+  if (!u1 || !u2) return Math.PI
+  const c = Math.max(-1, Math.min(1, -(u1.x * u2.x + u1.y * u2.y)))
+  return Math.acos(c)
+}
+
+/** Punkt auf der Geraden durch lineS–lineE im Abstand dist von M; wählt die Seite näher an origPt (Naht-Ecke). */
+function pickTangentPointOnOffsetLine(
+  M: Point,
+  lineS: Point,
+  lineE: Point,
+  dist: number,
+  origPt: Point
+): Point | null {
+  const u = unitDir2(lineE.x - lineS.x, lineE.y - lineS.y)
+  if (!u) return null
+  const c1 = { x: M.x + u.x * dist, y: M.y + u.y * dist }
+  const c2 = { x: M.x - u.x * dist, y: M.y - u.y * dist }
+  const d1 = Math.hypot(c1.x - origPt.x, c1.y - origPt.y)
+  const d2 = Math.hypot(c2.x - origPt.x, c2.y - origPt.y)
+  return d1 < d2 ? c1 : c2
+}
+
+function findArcCenterFromTangents(
+  T1: Point,
+  uA: { x: number; y: number },
+  T2: Point,
+  R: number
+): Point | null {
+  const perp1 = { x: -uA.y, y: uA.x }
+  const perp2 = { x: uA.y, y: -uA.x }
+  let best: Point | null = null
+  let bestErr = Infinity
+  for (const perp of [perp1, perp2]) {
+    for (const sig of [-1, 1] as const) {
+      const Ox = T1.x + perp.x * sig * R
+      const Oy = T1.y + perp.y * sig * R
+      const err = Math.abs(Math.hypot(T2.x - Ox, T2.y - Oy) - R)
+      if (err < bestErr) {
+        bestErr = err
+        best = { x: Ox, y: Oy }
+      }
+    }
+  }
+  if (best == null || bestErr > R * 0.08) return null
+  return best
+}
+
+/** Bogenpunkte von T1 nach T2 auf Kreis um O (Radius R); Wahl der Seite über Nähe zum Miter M. */
+function arcSamplePoints(O: Point, R: number, T1: Point, T2: Point, M: Point, origPt: Point, stepRad: number): Point[] {
+  const a1 = Math.atan2(T1.y - O.y, T1.x - O.x)
+  const a2 = Math.atan2(T2.y - O.y, T2.x - O.x)
+  let d = a2 - a1
+  while (d <= -Math.PI) d += 2 * Math.PI
+  while (d > Math.PI) d -= 2 * Math.PI
+  const alt = d > 0 ? d - 2 * Math.PI : d + 2 * Math.PI
+  let sweep = Math.abs(d) <= Math.abs(alt) ? d : alt
+  const midAng = a1 + sweep / 2
+  const midX = O.x + R * Math.cos(midAng)
+  const midY = O.y + R * Math.sin(midAng)
+  const dM = Math.hypot(midX - M.x, midY - M.y)
+  const dO = Math.hypot(midX - origPt.x, midY - origPt.y)
+  if (dM > dO) sweep = sweep > 0 ? sweep - 2 * Math.PI : sweep + 2 * Math.PI
+  const n = Math.max(2, Math.ceil(Math.abs(sweep) / stepRad))
+  const out: Point[] = []
+  for (let k = 1; k < n; k++) {
+    const t = k / n
+    const ang = a1 + sweep * t
+    out.push({ x: O.x + R * Math.cos(ang), y: O.y + R * Math.sin(ang) })
+  }
+  return out
+}
+
 export type VariableOffsetResult = {
   lineCurves: Curve[]
   success: boolean
@@ -694,7 +824,8 @@ export type VariableOffsetResult = {
  * 3. Offset entlang der Auswärts-Normalen
  * 4. Miter-Intersection zwischen aufeinanderfolgenden Offset-Segmenten
  * 5. Miter-Limit (schneidet extreme Spitzen ab)
- * 6. Douglas-Peucker + Schließen
+ * 6. Optional: tangentialer Fillet R = d/tan(φ/2) an echten Naht-Ecken (kein Clipper-Round-Join)
+ * 7. Douglas-Peucker + Schließen — bei cutCornerFillet: weglassen, sonst würden Bögen optisch „einfach rund“ verwischt
  */
 export function offsetClosedPolygonVariable(
   curves: Curve[],
@@ -766,49 +897,84 @@ export function offsetClosedPolygonVariable(
   // the intersection can flip to the wrong side → bevel fallback.
   const miterLimit = options?.miterLimit ?? CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET
   const resultPts: Point[] = []
+  const appendDedup = (p: Point) => {
+    const last = resultPts[resultPts.length - 1]
+    if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-5) resultPts.push(p)
+  }
 
   for (let i = 0; i < n; i++) {
     const prev = (i - 1 + n) % n
     const segA = offsetSegs[prev]
     const segB = offsetSegs[i]
+    const origPt = polyPts[i]
+    const ciA = polySegCurveIdx[prev]
+    const ciB = polySegCurveIdx[i]
+    const maxAllowance = Math.max(allowancePerCurveIndex.get(ciA) ?? 0, allowancePerCurveIndex.get(ciB) ?? 0)
+    const dEff = Math.min(allowancePerCurveIndex.get(ciA) ?? 0, allowancePerCurveIndex.get(ciB) ?? 0)
+    const realSeamCorner = polySegCurveIdx[prev] !== polySegCurveIdx[i]
 
     const inter = lineLineIntersection(segA.s, segA.e, segB.s, segB.e)
-    if (inter) {
-      const origPt = polyPts[i]
-      const ciA = polySegCurveIdx[prev]
-      const ciB = polySegCurveIdx[i]
-      const maxAllowance = Math.max(allowancePerCurveIndex.get(ciA) ?? 0, allowancePerCurveIndex.get(ciB) ?? 0)
-      const miterDist = Math.hypot(inter.x - origPt.x, inter.y - origPt.y)
-
-      // Concave-corner check: the miter point must be on the outward side of the
-      // original vertex.  Direction from origPt to inter should align (positive dot)
-      // with the average outward normal of the two meeting edges.
-      const avgNx = (outwardNormalForSegment(polyPts[prev], polyPts[i], areaSign).nx +
-                      outwardNormalForSegment(polyPts[i], polyPts[(i + 1) % n], areaSign).nx) / 2
-      const avgNy = (outwardNormalForSegment(polyPts[prev], polyPts[i], areaSign).ny +
-                      outwardNormalForSegment(polyPts[i], polyPts[(i + 1) % n], areaSign).ny) / 2
-      const toInterX = inter.x - origPt.x
-      const toInterY = inter.y - origPt.y
-      const dotOutward = toInterX * avgNx + toInterY * avgNy
-      const isConcave = dotOutward < 0
-
-      if (isConcave || (maxAllowance > 0 && miterDist > maxAllowance * miterLimit)) {
-        // Bevel: use the endpoints of both offset segments instead of the miter point
-        resultPts.push({ ...segA.e })
-        resultPts.push({ ...segB.s })
-      } else {
-        resultPts.push(inter)
-      }
-    } else {
-      // Parallel segments: midpoint of the two offset endpoints
-      resultPts.push({ x: (segA.e.x + segB.s.x) / 2, y: (segA.e.y + segB.s.y) / 2 })
+    if (!inter) {
+      appendDedup({ x: (segA.e.x + segB.s.x) / 2, y: (segA.e.y + segB.s.y) / 2 })
+      continue
     }
+
+    const miterDist = Math.hypot(inter.x - origPt.x, inter.y - origPt.y)
+    const avgNx =
+      (outwardNormalForSegment(polyPts[prev], polyPts[i], areaSign).nx +
+        outwardNormalForSegment(polyPts[i], polyPts[(i + 1) % n], areaSign).nx) /
+      2
+    const avgNy =
+      (outwardNormalForSegment(polyPts[prev], polyPts[i], areaSign).ny +
+        outwardNormalForSegment(polyPts[i], polyPts[(i + 1) % n], areaSign).ny) /
+      2
+    const toInterX = inter.x - origPt.x
+    const toInterY = inter.y - origPt.y
+    const dotOutward = toInterX * avgNx + toInterY * avgNy
+    const isConcave = dotOutward < 0
+    const bevelForMiterLimit = maxAllowance > 0 && miterDist > maxAllowance * miterLimit
+
+    if (isConcave || bevelForMiterLimit) {
+      appendDedup({ ...segA.e })
+      appendDedup({ ...segB.s })
+      continue
+    }
+
+    let didFillet = false
+    if (options?.cutCornerFillet === true && realSeamCorner && dEff > 1e-6) {
+      const phi = interiorAngleAtPolyVertex(polyPts[prev], polyPts[i], polyPts[(i + 1) % n])
+      if (phi <= CUT_FILLET_PHI_MAX_RAD && phi >= CUT_FILLET_PHI_MIN_RAD) {
+        const halfTan = Math.tan(phi / 2)
+        if (halfTan > 1e-9) {
+          let rad = dEff / halfTan
+          rad = Math.max(CUT_FILLET_R_MIN_MM, Math.min(CUT_FILLET_R_MAX_MM, rad))
+          const tLen = rad * halfTan
+          const uA = unitDir2(segA.e.x - segA.s.x, segA.e.y - segA.s.y)
+          if (uA && tLen > 1e-6) {
+            const T1 = pickTangentPointOnOffsetLine(inter, segA.s, segA.e, tLen, origPt)
+            const T2 = pickTangentPointOnOffsetLine(inter, segB.s, segB.e, tLen, origPt)
+            if (T1 && T2) {
+              const O = findArcCenterFromTangents(T1, uA, T2, rad)
+              if (O) {
+                const arcInner = arcSamplePoints(O, rad, T1, T2, inter, origPt, CUT_FILLET_ARC_STEP_RAD)
+                appendDedup({ ...T1 })
+                for (const q of arcInner) appendDedup(q)
+                appendDedup({ ...T2 })
+                didFillet = true
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!didFillet) appendDedup({ ...inter })
   }
 
   if (resultPts.length < 3) return { lineCurves: [], success: false }
 
-  // Simplify
-  const tol = options?.simplifyTolerance ?? 0.06
+  // Simplify: bei tangentialen Fillets kein Douglas-Peucker — sonst kollabiert der Bogen zu einem undefinierten „Rund“.
+  const tol = options?.cutCornerFillet === true ? 0 : options?.simplifyTolerance ?? 0.06
   let outPts = tol > 0 ? simplifyClosedPolygon(resultPts, tol) : resultPts
   if (outPts.length < 3) outPts = resultPts
 

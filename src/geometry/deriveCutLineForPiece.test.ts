@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from '../store/useStore'
 import { deriveCutLineForPiece } from './deriveCutLineForPiece'
+import { deriveCutLineFromSeamWithValidation } from './offset'
+import { signedAreaCurves } from './curveToPath'
 import type { Workspace } from '../types/model'
 
 const square = (size: number) => [
@@ -53,5 +55,30 @@ describe('deriveCutLineForPiece', () => {
     for (let i = 0; i < r.cutLine.length; i++) {
       expect(r.cutLine[i].type).toBe(p.cutLine[i].type)
     }
+  })
+
+  it('deriveCutLineFromSeamWithValidation: opt-in Fillet vs. Standard Clipper-Miter', () => {
+    const seam = square(50)
+    const clipperMiter = deriveCutLineFromSeamWithValidation(seam, 5)
+    const tangentFillet = deriveCutLineFromSeamWithValidation(seam, 5, { cutCornerFillet: true })
+    expect(clipperMiter.ok && tangentFillet.ok).toBe(true)
+    if (!clipperMiter.ok || !tangentFillet.ok) return
+    expect(Math.sign(signedAreaCurves(clipperMiter.cutLine))).toBe(Math.sign(signedAreaCurves(tangentFillet.cutLine)))
+    expect(Math.abs(signedAreaCurves(tangentFillet.cutLine))).toBeGreaterThan(Math.abs(signedAreaCurves(seam)))
+    expect(tangentFillet.cutLine.length).toBeGreaterThan(clipperMiter.cutLine.length)
+  })
+
+  it('deriveCutLineForPiece: Standard Clipper-Miter vs. opt-in tangentialer Fillet', () => {
+    const seam = square(40)
+    const piece = useStore.getState().workspace.pieces[0]
+    const sharpDefault = deriveCutLineForPiece({ ...piece, seamAllowanceMm: 6 }, seam, 6)
+    const sharpExplicit = deriveCutLineForPiece({ ...piece, seamAllowanceMm: 6 }, seam, 6, {
+      cutCornerFillet: false,
+    })
+    const fillet = deriveCutLineForPiece({ ...piece, seamAllowanceMm: 6 }, seam, 6, { cutCornerFillet: true })
+    expect(sharpDefault.ok && sharpExplicit.ok && fillet.ok).toBe(true)
+    if (!sharpDefault.ok || !sharpExplicit.ok || !fillet.ok) return
+    expect(sharpDefault.cutLine.length).toBe(sharpExplicit.cutLine.length)
+    expect(fillet.cutLine.length).toBeGreaterThan(sharpDefault.cutLine.length)
   })
 })
