@@ -1,12 +1,11 @@
 /**
  * Optionale Nahtzuordnungs-Korrektur: nur die Schnittkontur (cutLine). seamLine unverändert.
  *
- * 1) Partner-Trim: An **beiden** Enden der zugeordneten Naht-Kante wird geprüft, ob die analytische
- *    Miter-Spitze auf einem Teil länger ist als auf dem Partner; dann wird nur die CutLine des
- *    längeren Teils auf die kürzere Länge gekürzt — symmetrisch A↔B, damit kein „Zopf“ an einer Ecke
- *    liegen bleibt, nur weil die andere dem BBox-„oben links“ näher lag.
- *
- * 2) Kappung an **beiden** Naht-Enden der Zuordnung auf **jedem** Teil (MITER_CAP_FACTOR).
+ * 1) Partner-Trim: An **beiden** Enden der zugeordneten Naht-Kante: die **längere** Miter-Spitze
+ *    (relativ zum Partner) wird entlang derselben Miter-Bahn auf die kürzere Länge gekürzt. Die
+ *    **Nahtlinie** (seamLine) und der **exakte** Nahtzugabe-Offset entlang **gerader** Nahtkanten
+ *    bleiben unverändert; es geht ausschließlich um Spitzen (Zöpfe an Außenkanten in der
+ *    Schnittkontur) — **keine** zwingende Miter-„Kappung“ entlang des ganzen Kantenverlaufs mehr.
  *
  * Bei tangential gefilleter CutLine (viele kurze Segmente): kein Vertex liegt exakt auf der
  * theoretischen Miter-Spitze → Kandidat über maximalen Abstand entlang corner→Miter.
@@ -19,12 +18,9 @@ import { bezierDerivativeAt, signedAreaCurves } from './curveToPath'
 import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 import { applySharpCornerPromotion } from './softVertexPromotion'
 import { getCurvesForSeamEdge, resolvedSeamAssignmentCurveIndices } from './seamUtils'
-import { samePoint as samePointDefault, vertexPosition as vertexAt } from './geometryConstants'
+import { vertexPosition as vertexAt } from './geometryConstants'
 
 export const SEAM_ASSIGNMENT_CUT_TRIM_ENABLED = true
-
-/** Max. Abstand Naht-Ecke → Miter-Spitze in Vielfachen der Nahtzugabe (harte Kappung). */
-const MITER_CAP_FACTOR = 2.4
 
 /** cutLine-Eckpunkt muss nahe der analytischen Miter-Spitze liegen (mm). */
 const CUT_VERTEX_MATCH_MM = 22
@@ -34,12 +30,33 @@ const EPS = 1e-9
 /** Nur echte Längendifferenz: früher 0,08 mm — dadurch blieb der längere Zopf oft unangetastet. */
 const PARTNER_TRIM_LENGTH_EPS_MM = 0.002
 
-function samePoint(a: Point, b: Point, eps = 1e-4): boolean {
-  return samePointDefault(a, b, eps)
-}
-
 function allLineSegments(curves: Curve[]): boolean {
   return curves.every((c) => c.type === 'line')
+}
+
+/**
+ * Nicht-kollineare Ecken: verhindert, dass (diskretisierte) Hilfspunkte mitten auf einer parallelen
+ * CutLine-Kante als Miter missbraucht werden und „ganze Kanten“ statt nur Zöpfe verziehen.
+ */
+function cutLineVertexIsSignificantCorner(
+  cutLine: Curve[],
+  vi: number,
+  minTurnSin: number = 0.0028
+): boolean {
+  if (!allLineSegments(cutLine)) return true
+  const n = cutLine.length
+  const a = vertexAt(cutLine, (vi - 1 + n) % n)
+  const b = vertexAt(cutLine, vi)
+  const c = vertexAt(cutLine, (vi + 1) % n)
+  const e1x = a.x - b.x
+  const e1y = a.y - b.y
+  const e2x = c.x - b.x
+  const e2y = c.y - b.y
+  const l1 = Math.hypot(e1x, e1y)
+  const l2 = Math.hypot(e2x, e2y)
+  if (l1 < 1e-7 || l2 < 1e-7) return true
+  const s = Math.abs(cross2({ x: e1x, y: e1y }, { x: e2x, y: e2y })) / (l1 * l2)
+  return s > minTurnSin
 }
 
 function replaceVertexInClosedLineCurves(curves: Curve[], vi: number, p: Point): Curve[] {
@@ -56,16 +73,6 @@ function replaceVertexInClosedLineCurves(curves: Curve[], vi: number, p: Point):
   out[i] = { type: 'line', start: { ...p }, end: { ...out[i].end } }
   out[prev] = { type: 'line', start: { ...out[prev].start }, end: { ...p } }
   return out
-}
-
-function seamEdgeEndpointsOnMaster(master: Curve[], curveIndices: number[]): [Point, Point] | null {
-  if (curveIndices.length === 0) return null
-  const firstCi = curveIndices[0]
-  const lastCi = curveIndices[curveIndices.length - 1]
-  const start = master[firstCi]?.start
-  const end = master[lastCi]?.end
-  if (!start || !end) return null
-  return [{ ...start }, { ...end }]
 }
 
 /**
@@ -126,15 +133,6 @@ function intersectLines(p1: Point, d1: Point, p2: Point, d2: Point): Point | nul
   return { x: p1.x + s * d1.x, y: p1.y + s * d1.y }
 }
 
-function masterVertexIndexForPoint(master: Curve[], p: Point, epsMm = 0.08): number | null {
-  const n = master.length
-  for (let vi = 0; vi < n; vi++) {
-    const v = vertexAt(master, vi)
-    if (Math.hypot(v.x - p.x, v.y - p.y) <= epsMm) return vi
-  }
-  return null
-}
-
 /**
  * Miter-Spitze = Schnitt der um d verschobenen Geraden zu den beiden Kanten am Vertex vi.
  * Nur für konvexe Ecken (innen) sinnvoll; Reflex-Ecken überspringen.
@@ -169,21 +167,6 @@ function analyticMiterPointAtSeamVertex(
   return { corner, miter: M }
 }
 
-function nearestVertexIndexToPoint(curves: Curve[], target: Point, maxDist: number): number | null {
-  const n = curves.length
-  let best: number | null = null
-  let bestD = maxDist
-  for (let vi = 0; vi < n; vi++) {
-    const p = vertexAt(curves, vi)
-    const dd = Math.hypot(p.x - target.x, p.y - target.y)
-    if (dd < bestD) {
-      bestD = dd
-      best = vi
-    }
-  }
-  return best
-}
-
 /**
  * Vertex auf der CutLine, der die Außen-Spitze (Miter oder Fillet-Bogen) am ehesten trägt:
  * maximaler Abstand entlang (M − corner), mit lateraler Toleranz (viele kurze Segmente).
@@ -207,6 +190,7 @@ function cutVertexIndexForAnalyticMiterCap(
   let bestVi: number | null = null
   let bestProj = -Infinity
   for (let vi = 0; vi < n; vi++) {
+    if (!cutLineVertexIsSignificantCorner(cutLine, vi)) continue
     const p = vertexAt(cutLine, vi)
     const dx = p.x - corner.x
     const dy = p.y - corner.y
@@ -217,16 +201,29 @@ function cutVertexIndexForAnalyticMiterCap(
       bestVi = vi
     }
   }
-  return bestVi ?? nearestVertexIndexToPoint(cutLine, M, CUT_VERTEX_MATCH_MM)
+  if (bestVi != null) return bestVi
+  return nearestVertexOnCutLineMiterTarget(cutLine, M, CUT_VERTEX_MATCH_MM)
 }
 
-function capMiterTowardCorner(corner: Point, miter: Point, capDistMm: number): Point {
-  const dx = miter.x - corner.x
-  const dy = miter.y - corner.y
-  const dist = Math.hypot(dx, dy)
-  if (dist <= capDistMm + 1e-9) return { ...miter }
-  const t = capDistMm / dist
-  return { x: corner.x + dx * t, y: corner.y + dy * t }
+/** Nächstes Polygon-Vertex an `target` (Distanz < maxDist), nur an echten (nicht kollinearen) Ecken. */
+function nearestVertexOnCutLineMiterTarget(
+  cutLine: Curve[],
+  target: Point,
+  maxDist: number
+): number | null {
+  const n = cutLine.length
+  let best: number | null = null
+  let bestD = maxDist
+  for (let vi = 0; vi < n; vi++) {
+    if (!cutLineVertexIsSignificantCorner(cutLine, vi)) continue
+    const p = vertexAt(cutLine, vi)
+    const dd = Math.hypot(p.x - target.x, p.y - target.y)
+    if (dd < bestD) {
+      bestD = dd
+      best = vi
+    }
+  }
+  return best
 }
 
 /**
@@ -305,8 +302,9 @@ function partnerTrimLongerMiterToShorterAtSeamEnd(
 
   const viCut =
     cutVertexIndexForAnalyticMiterCap(trimPiece.cutLine, cornerT, Mt, dTrim) ??
-    nearestVertexIndexToPoint(trimPiece.cutLine, Mt, CUT_VERTEX_MATCH_MM)
+    nearestVertexOnCutLineMiterTarget(trimPiece.cutLine, Mt, CUT_VERTEX_MATCH_MM)
   if (viCut == null) return null
+  if (!cutLineVertexIsSignificantCorner(trimPiece.cutLine, viCut)) return null
 
   const pTip = vertexAt(trimPiece.cutLine, viCut)
   /** Länge der aktuellen CutLine-Spitze (wichtig für idempotentes reapply nach erstem Trim). */
@@ -367,59 +365,6 @@ function partnerTrimLongerMiterToShorter(
   return changed ? piece : null
 }
 
-function trimPieceCutLineAtSeamEndpoints(
-  piece: PatternPiece,
-  resolvedCurveIndices: number[]
-): { cutLine: Curve[]; changed: boolean } {
-  const d = piece.seamAllowanceMm
-  if (d == null || d <= 0 || piece.seamLine.length < 3 || piece.cutLine.length < 3) {
-    return { cutLine: piece.cutLine, changed: false }
-  }
-  if (!allLineSegments(piece.cutLine)) {
-    return { cutLine: piece.cutLine, changed: false }
-  }
-
-  const master = getCurvesForSeamEdge(piece)
-  const seamLine = piece.seamLine
-  const ends = seamEdgeEndpointsOnMaster(master, resolvedCurveIndices)
-  if (!ends) return { cutLine: piece.cutLine, changed: false }
-
-  const capDist = d * MITER_CAP_FACTOR
-  let corners: Point[] = [ends[0], ends[1]]
-  if (samePoint(ends[0], ends[1])) {
-    corners = [ends[0]]
-  }
-
-  let cut = piece.cutLine
-  let changed = false
-
-  for (const cornerPt of corners) {
-    const viM = masterVertexIndexForPoint(master, cornerPt)
-    if (viM == null) continue
-
-    const analytic = analyticMiterPointAtSeamVertex(seamLine, viM, d)
-    if (!analytic) continue
-
-    const { corner, miter: M } = analytic
-    const capped = capMiterTowardCorner(corner, M, capDist)
-    if (Math.hypot(capped.x - M.x, capped.y - M.y) < 0.02) continue
-
-    const viCut =
-      cutVertexIndexForAnalyticMiterCap(cut, corner, M, d) ?? nearestVertexIndexToPoint(cut, M, CUT_VERTEX_MATCH_MM)
-    if (viCut == null) continue
-
-    const next = replaceVertexInClosedLineCurves(cut, viCut, capped)
-    const a0 = signedAreaCurves(cut)
-    const a1 = signedAreaCurves(next)
-    if (Math.abs(a1) < 1e-6 || a0 * a1 <= 0) continue
-
-    cut = next
-    changed = true
-  }
-
-  return { cutLine: cut, changed }
-}
-
 export function applySeamAssignmentCutTrim(
   pieceA: PatternPiece,
   pieceB: PatternPiece,
@@ -434,19 +379,7 @@ export function applySeamAssignmentCutTrim(
   if (tB) nextB = tB
   const tA = partnerTrimLongerMiterToShorter(nextB, nextA, resolvedIndicesB, resolvedIndicesA)
   if (tA) nextA = tA
-
-  const rA = trimPieceCutLineAtSeamEndpoints(nextA, resolvedIndicesA)
-  const rB = trimPieceCutLineAtSeamEndpoints(nextB, resolvedIndicesB)
-  if (!tA && !tB && !rA.changed && !rB.changed) return null
-
-  if (rA.changed) {
-    const notches = resyncNotchesAfterCutLineRebuilt(nextA.notches, nextA.cutLine, rA.cutLine)
-    nextA = applySharpCornerPromotion({ ...nextA, cutLine: rA.cutLine, notches })
-  }
-  if (rB.changed) {
-    const notches = resyncNotchesAfterCutLineRebuilt(nextB.notches, nextB.cutLine, rB.cutLine)
-    nextB = applySharpCornerPromotion({ ...nextB, cutLine: rB.cutLine, notches })
-  }
+  if (!tA && !tB) return null
 
   return { pieceA: nextA, pieceB: nextB }
 }

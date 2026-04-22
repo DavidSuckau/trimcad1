@@ -492,6 +492,7 @@ type Store = {
   /** Eckpunkt weich (blau) / fest (rot); gleiche Index-Basis wie updateVertex/removeVertex. */
   setVertexSoft: (pieceId: string, vertexIndex: number, soft: boolean) => void
   flipPieceAlongGrain: (pieceId: string) => void
+  flipPieceAlongAxis: (pieceId: string, axisA: Point, axisB: Point) => void
   /** Behält eine Halbebene, spiegelt sie auf die andere Seite (Master-Kontur wie bei Spiegeln entlang Fadenlauf). */
   applyPieceSymmetry: (pieceId: string, axisA: Point, axisB: Point, keepSide: PieceSymmetryKeepSide) => void
   /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
@@ -654,6 +655,41 @@ function mirrorCurve(c: Curve, cx: number): Curve {
     cp1: mirrorX(c.cp1, cx),
     cp2: mirrorX(c.cp2, cx),
   }
+}
+
+function mirrorPointAcrossAxis(p: Point, axisA: Point, axisB: Point): Point {
+  const dx = axisB.x - axisA.x
+  const dy = axisB.y - axisA.y
+  const len2 = dx * dx + dy * dy
+  if (len2 <= 1e-9) return { ...p }
+  const apx = p.x - axisA.x
+  const apy = p.y - axisA.y
+  const t = (apx * dx + apy * dy) / len2
+  const projX = axisA.x + t * dx
+  const projY = axisA.y + t * dy
+  return { x: 2 * projX - p.x, y: 2 * projY - p.y }
+}
+
+function mirrorCurveAcrossAxis(c: Curve, axisA: Point, axisB: Point): Curve {
+  if (c.type === 'line') {
+    return {
+      type: 'line',
+      start: mirrorPointAcrossAxis(c.start, axisA, axisB),
+      end: mirrorPointAcrossAxis(c.end, axisA, axisB),
+    }
+  }
+  return {
+    type: 'bezier',
+    start: mirrorPointAcrossAxis(c.start, axisA, axisB),
+    end: mirrorPointAcrossAxis(c.end, axisA, axisB),
+    cp1: mirrorPointAcrossAxis(c.cp1, axisA, axisB),
+    cp2: mirrorPointAcrossAxis(c.cp2, axisA, axisB),
+  }
+}
+
+function mirrorAngleAcrossAxisDeg(angleDeg: number, axisA: Point, axisB: Point): number {
+  const axisAngleDeg = (Math.atan2(axisB.y - axisA.y, axisB.x - axisA.x) * 180) / Math.PI
+  return 2 * axisAngleDeg - angleDeg
 }
 
 /** Wandelt Digitalisierungs-Nodes in eine geschlossene Curve[]-Kette um. */
@@ -1227,7 +1263,7 @@ export const useStore = create<Store>()(
           pieces: trimmedPieces,
         },
         toastMessage:
-          'success:Naht-Ecken: Schnittkontur an den Enden der Kanten-Zuordnung gekürzt (Nahtlinie unverändert).',
+          'success:Naht-Ecken: Überstehende Miter-Spitzen an der Schnittkontur zur Zuordnung angeglichen (Nahtlinie und parallele Nahtzugabe unverändert).',
       }))
     }
     // Direkt nach dem Zuordnen denselben zentralen Check wie nach Drag-Ende ausführen,
@@ -2519,6 +2555,67 @@ export const useStore = create<Store>()(
       }))
       const grainLine = piece.grainLine
         ? { start: mirrorX(piece.grainLine.start, cx), end: mirrorX(piece.grainLine.end, cx) }
+        : null
+      return {
+        workspace: {
+          ...s.workspace,
+          pieces: s.workspace.pieces.map((p) =>
+            p.id === pieceId
+              ? applySharpCornerPromotion({
+                  ...p,
+                  cutLine,
+                  seamLine,
+                  notches,
+                  drills,
+                  internalLines,
+                  internalCircles,
+                  grainLine,
+                })
+              : p
+          ),
+        },
+      }
+    }),
+
+  flipPieceAlongAxis: (pieceId, axisA, axisB) =>
+    set((s) => {
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      if (!piece || piece.cutLine.length < 3) return s
+      const axisLen = Math.hypot(axisB.x - axisA.x, axisB.y - axisA.y)
+      if (axisLen < 0.5) return { toastMessage: 'warn:Spiegelachse ist zu kurz.' }
+      let cutLine: Curve[]
+      let seamLine: Curve[]
+      if (useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3) {
+        seamLine = piece.seamLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+        const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
+        cutLine = derived.ok ? derived.cutLine : piece.cutLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+      } else {
+        cutLine = piece.cutLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+        seamLine = piece.seamAllowanceMm != null && cutLine.length >= 3
+          ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
+          : []
+      }
+      const mirroredNotches = piece.notches.map((n) => ({
+        ...n,
+        position: mirrorPointAcrossAxis(n.position, axisA, axisB),
+        angle: mirrorAngleAcrossAxisDeg(n.angle, axisA, axisB),
+        sNormalized: undefined as number | undefined,
+        arcLengthMm: undefined as number | undefined,
+      }))
+      const notches = mirroredNotches
+        .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
+        .filter((n): n is Notch => n != null)
+      const drills = piece.drills.map((d) => ({ ...d, center: mirrorPointAcrossAxis(d.center, axisA, axisB) }))
+      const internalLines = piece.internalLines.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+      const internalCircles = piece.internalCircles.map((ic) => ({
+        ...ic,
+        center: mirrorPointAcrossAxis(ic.center, axisA, axisB),
+      }))
+      const grainLine = piece.grainLine
+        ? {
+            start: mirrorPointAcrossAxis(piece.grainLine.start, axisA, axisB),
+            end: mirrorPointAcrossAxis(piece.grainLine.end, axisA, axisB),
+          }
         : null
       return {
         workspace: {

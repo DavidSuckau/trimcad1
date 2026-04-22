@@ -1411,6 +1411,7 @@ export function WorkspaceCanvas() {
     convertBezierSegmentToLine,
     setVertexSoft,
     flipPieceAlongGrain,
+    flipPieceAlongAxis,
     rotatePiece90,
     setPieceRotation,
     setPiecePivot,
@@ -1527,6 +1528,7 @@ export function WorkspaceCanvas() {
       convertBezierSegmentToLine: s.convertBezierSegmentToLine,
       setVertexSoft: s.setVertexSoft,
       flipPieceAlongGrain: s.flipPieceAlongGrain,
+      flipPieceAlongAxis: s.flipPieceAlongAxis,
       rotatePiece90: s.rotatePiece90,
       setPieceRotation: s.setPieceRotation,
       setPiecePivot: s.setPiecePivot,
@@ -1606,6 +1608,8 @@ export function WorkspaceCanvas() {
   } | null>(null)
   /** Symmetrie: Index in `piece.internalLines` des Teils unter dem Mauszeiger. */
   const [hoveredSymmetryInternalIdx, setHoveredSymmetryInternalIdx] = useState<number | null>(null)
+  /** Tastatur-Modus: F gedrückt -> gerade Kante wählen, dann direkt entlang dieser Kante spiegeln. */
+  const [flipByEdgeActive, setFlipByEdgeActive] = useState(false)
   const [grainContextMenu, setGrainContextMenu] = useState<{
     pieceId: string
     clientX: number
@@ -2010,6 +2014,7 @@ export function WorkspaceCanvas() {
       setSymmetryHoverWorld(null)
       setHoveredSymmetryEdge(null)
       setHoveredSymmetryInternalIdx(null)
+      setFlipByEdgeActive(false)
     }
   }, [pieceSymmetryState])
 
@@ -2019,6 +2024,7 @@ export function WorkspaceCanvas() {
       setEdgeSeamPickingActive(false)
       setPieceSymmetryState(null)
       setSymmetryHoverWorld(null)
+      setFlipByEdgeActive(false)
       setNahtzuordnungMode('idle')
       setPendingNahtzuordnungFirst(null)
       setRulerMode(false)
@@ -2087,6 +2093,7 @@ export function WorkspaceCanvas() {
           setSymmetryHoverWorld(null)
           setHoveredSymmetryEdge(null)
           setHoveredSymmetryInternalIdx(null)
+          setFlipByEdgeActive(false)
         }
         return
       }
@@ -2112,6 +2119,7 @@ export function WorkspaceCanvas() {
           setSymmetryHoverWorld(null)
           setHoveredSymmetryEdge(null)
           setHoveredSymmetryInternalIdx(null)
+          setFlipByEdgeActive(false)
           return
         }
         const local = worldToPieceLocal(world, piece)
@@ -2123,6 +2131,16 @@ export function WorkspaceCanvas() {
             const axis = symmetryAxisEndpointsFromStraightMasterEdge(piece, hoveredSymmetryEdge.edgeIndex)
             if (!axis) {
               setToastMessage('warn:Nur gerade Kanten (Linien) eignen sich als Spiegelachse.')
+              return
+            }
+            if (flipByEdgeActive) {
+              flipPieceAlongAxis(sym.pieceId, axis.axisA, axis.axisB)
+              setToastMessage('success:Teil über Kante gespiegelt.')
+              setPieceSymmetryState(null)
+              setSymmetryHoverWorld(null)
+              setHoveredSymmetryEdge(null)
+              setHoveredSymmetryInternalIdx(null)
+              setFlipByEdgeActive(false)
               return
             }
             setPieceSymmetryState({
@@ -3168,6 +3186,9 @@ export function WorkspaceCanvas() {
       alignPieceEdgeHorizontal,
       setHorizontalLevelPickingActive,
       pieceSymmetryState,
+      flipByEdgeActive,
+      flipPieceAlongAxis,
+      setFlipByEdgeActive,
       setPieceSymmetryState,
       applyPieceSymmetry,
       setSymmetryHoverWorld,
@@ -4435,6 +4456,7 @@ export function WorkspaceCanvas() {
         setSymmetryHoverWorld(null)
         setHoveredSymmetryEdge(null)
         setHoveredSymmetryInternalIdx(null)
+        setFlipByEdgeActive(false)
         return
       }
       if (!inInput && e.key === 'Escape' && tool === 'profil') {
@@ -4714,17 +4736,25 @@ export function WorkspaceCanvas() {
         selectedPieceIds.forEach((id) => alignPieceToGrain(id))
         return
       }
+      if (contourEditEnabled && (e.key === 'f' || e.key === 'F') && !inInput) {
+        e.preventDefault()
+        if (selectedPieceIds.length !== 1) {
+          setToastMessage('warn:Bitte genau ein Teil auswählen.')
+          return
+        }
+        const pieceId = selectedPieceIds[0]
+        setHoveredSymmetryEdge(null)
+        setHoveredSymmetryInternalIdx(null)
+        setFlipByEdgeActive(true)
+        setPieceSymmetryState({ pieceId, phase: 'pickEdge' })
+        return
+      }
       if (contourEditEnabled && (e.key === 'e' || e.key === 'E') && !inInput && tool === 'select' && hoveredDeletableNotch && !dragging) {
         e.preventDefault()
         setNotchEditTarget({
           pieceId: hoveredDeletableNotch.pieceId,
           notchId: hoveredDeletableNotch.notchId,
         })
-        return
-      }
-      if (contourEditEnabled && (e.key === 'f' || e.key === 'F') && !inInput && hoveredDeletableNotch) {
-        e.preventDefault()
-        toggleNotchAnchor(hoveredDeletableNotch.pieceId, hoveredDeletableNotch.notchId)
         return
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
@@ -8097,7 +8127,7 @@ export function WorkspaceCanvas() {
             <span>Interne Linie anklicken (Achse = Strecke Start–Ende; bei Kurve: Sehne).</span>
           )}
           {pieceSymmetryState.phase === 'pickEdge' && (
-            <span>Gerade Kante am Teil anklicken (wie Wasserwaage).</span>
+            <span>{flipByEdgeActive ? 'Gerade Kante anklicken — Teil wird darüber gespiegelt.' : 'Gerade Kante am Teil anklicken (wie Wasserwaage).'}</span>
           )}
           {pieceSymmetryState.phase === 'pickSide' && (
             <span>
@@ -8111,6 +8141,7 @@ export function WorkspaceCanvas() {
               setSymmetryHoverWorld(null)
               setHoveredSymmetryEdge(null)
               setHoveredSymmetryInternalIdx(null)
+              setFlipByEdgeActive(false)
             }}
             style={{
               background: 'rgba(255,255,255,0.25)',

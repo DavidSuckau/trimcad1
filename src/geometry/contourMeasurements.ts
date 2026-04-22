@@ -6,7 +6,7 @@ import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 /** Stationen näher als diese Bogenlänge (mm) gelten als identisch (Ecke + Kerbe am selben Punkt). */
 const STATION_MERGE_MM = 0.4
 /** Kürzeste angezeigte Teilstrecke (mm). */
-const MIN_DISPLAY_MM = 0.12
+const MIN_DISPLAY_MM = 0.01
 
 export type ContourMeasurement = {
   /** Bogenlänge entlang der Außenkontur (mm). */
