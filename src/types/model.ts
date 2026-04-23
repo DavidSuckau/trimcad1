@@ -90,6 +90,13 @@ export type PatternPiece = {
    * Fehlende Kanten erben `seamAllowanceMm`. Leer/undefiniert = einheitliche Nahtzugabe (Clipper).
    */
   edgeSeamAllowances?: EdgeSeamAllowance[]
+  /**
+   * true: `cutLine` ist nicht mehr der reine Außen-Offset der `seamLine` (z. B. manuelles Naht trimmen).
+   * Dann wird `cutLine` bei Spiegelung/Symmetrie und bei vielen Naht-Master-Edits parallel zur Naht mitgeführt,
+   * statt sie jedes Mal neu aus `seamLine` abzuleiten. Zurueckgesetzt bei entfernter/neu gesetzter Nahtzugabe
+   * oder wenn die Schnittkontur wieder vollstaendig aus der Naht abgeleitet wird.
+   */
+  cutLineDeviatesFromSeamAllowanceOffset?: boolean
   notches: Notch[]
   drills: Drill[]
   grainLine: Line | null

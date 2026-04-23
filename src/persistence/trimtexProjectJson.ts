@@ -213,6 +213,9 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       return Math.max(1, Math.floor(q))
     })(),
     edgeSeamAllowances: normalizeEdgeSeamAllowances((raw as { edgeSeamAllowances?: unknown }).edgeSeamAllowances),
+    ...((raw as { cutLineDeviatesFromSeamAllowanceOffset?: unknown }).cutLineDeviatesFromSeamAllowanceOffset === true
+      ? { cutLineDeviatesFromSeamAllowanceOffset: true as const }
+      : {}),
   }
   return applySharpCornerPromotion(base)
 }

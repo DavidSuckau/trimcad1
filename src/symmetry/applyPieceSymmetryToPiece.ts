@@ -27,8 +27,8 @@ export function applyPieceSymmetryToPiece(
   axisB: { x: number; y: number },
   keepSide: PieceSymmetryKeepSide
 ): ApplyPieceSymmetryToPieceResult {
-  const masterCurves =
-    useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+  const seamMaster = useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3
+  const masterCurves = seamMaster ? piece.seamLine : piece.cutLine
   if (masterCurves.length < 3) {
     return { ok: false, toastMessage: 'warn:Kontur zu kurz für Symmetrie.' }
   }
@@ -38,16 +38,25 @@ export function applyPieceSymmetryToPiece(
   }
   let cutLine: PatternPiece['cutLine']
   let seamLine: PatternPiece['seamLine']
-  if (useSeamLineForVertexEditing(piece) && piece.seamAllowanceMm != null) {
-    seamLine = sym.curves
-    const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)
-    if (!derived.ok) {
-      return {
-        ok: false,
-        toastMessage: `warn:${derived.message ?? 'Schnittkontur konnte nicht abgeleitet werden.'}`,
+  if (seamMaster && piece.seamAllowanceMm != null) {
+    if (piece.cutLineDeviatesFromSeamAllowanceOffset === true && piece.cutLine.length >= 3) {
+      const symCut = buildSymmetricContour(piece.cutLine, axisA, axisB, keepSide)
+      if (!symCut.ok) {
+        return { ok: false, toastMessage: `warn:${symCut.message}` }
       }
+      seamLine = sym.curves
+      cutLine = symCut.curves
+    } else {
+      seamLine = sym.curves
+      const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)
+      if (!derived.ok) {
+        return {
+          ok: false,
+          toastMessage: `warn:${derived.message ?? 'Schnittkontur konnte nicht abgeleitet werden.'}`,
+        }
+      }
+      cutLine = derived.cutLine
     }
-    cutLine = derived.cutLine
   } else {
     cutLine = sym.curves
     seamLine =

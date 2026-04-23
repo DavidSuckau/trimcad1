@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
 import { masterSoftVertexIndexSet } from '../geometry/seamUtils'
+import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import type { Workspace, Curve } from '../types/model'
 
 const square = (size: number): Curve[] => [
@@ -73,6 +74,33 @@ describe('flipPieceAlongGrain', () => {
     const after = useStore.getState().workspace.pieces[0]
     const soft = masterSoftVertexIndexSet(after)
     expect(soft.size).toBe(0)
+  })
+
+  it('bei abweichender cutLine (Naht trimmen): Spiegelung leitet cut nicht neu aus der Naht ab', () => {
+    useStore.getState().updatePiece('p1', { seamAllowanceMm: 10 })
+    const withSeam = useStore.getState().workspace.pieces[0]
+    const tweakedCut = withSeam.cutLine.map((c, i) =>
+      i === 0 && c.type === 'line'
+        ? { ...c, end: { x: c.end.x + 2, y: c.end.y } }
+        : c
+    )
+    useStore.setState((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === 'p1'
+            ? { ...p, cutLine: tweakedCut, cutLineDeviatesFromSeamAllowanceOffset: true as const }
+            : p
+        ),
+      },
+    }))
+    useStore.getState().flipPieceAlongGrain('p1')
+    const after = useStore.getState().workspace.pieces[0]
+    expect(after.cutLineDeviatesFromSeamAllowanceOffset).toBe(true)
+    const pure = deriveCutLineForPiece(after, after.seamLine, after.seamAllowanceMm ?? 10)
+    expect(pure.ok).toBe(true)
+    if (!pure.ok) return
+    expect(JSON.stringify(after.cutLine)).not.toBe(JSON.stringify(pure.cutLine))
   })
 
   it('Notches werden nach Spiegelung resynced', () => {

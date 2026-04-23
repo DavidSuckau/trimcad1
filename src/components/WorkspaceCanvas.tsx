@@ -43,6 +43,7 @@ import {
   getSubSegments,
   getSeamEdgeCurves,
   getCurvesForSeamEdge,
+  mapMasterVertexIndexToCutVertexIndex,
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
   bestSeamSubSegmentPairing,
@@ -1382,6 +1383,9 @@ export function WorkspaceCanvas() {
     setNahtzuordnungMode,
     pendingNahtzuordnungFirst,
     setPendingNahtzuordnungFirst,
+    nahtTrimPickCutVertexActive,
+    completeNahtTrimAtCutVertex,
+    cancelNahtTrimVertexPick,
     addSeamAssignment,
     removeSeamAssignment,
     selectPiece,
@@ -1499,6 +1503,9 @@ export function WorkspaceCanvas() {
       setNahtzuordnungMode: s.setNahtzuordnungMode,
       pendingNahtzuordnungFirst: s.pendingNahtzuordnungFirst,
       setPendingNahtzuordnungFirst: s.setPendingNahtzuordnungFirst,
+      nahtTrimPickCutVertexActive: s.nahtTrimPickCutVertexActive,
+      completeNahtTrimAtCutVertex: s.completeNahtTrimAtCutVertex,
+      cancelNahtTrimVertexPick: s.cancelNahtTrimVertexPick,
       addSeamAssignment: s.addSeamAssignment,
       removeSeamAssignment: s.removeSeamAssignment,
       selectPiece: s.selectPiece,
@@ -2027,6 +2034,7 @@ export function WorkspaceCanvas() {
       setFlipByEdgeActive(false)
       setNahtzuordnungMode('idle')
       setPendingNahtzuordnungFirst(null)
+      cancelNahtTrimVertexPick()
       setRulerMode(false)
       if (useStore.getState().digitizeState) cancelDigitize()
       setHoveredDeletablePoint(null)
@@ -2038,6 +2046,7 @@ export function WorkspaceCanvas() {
   }, [
     contourEditEnabled,
     cancelDigitize,
+    cancelNahtTrimVertexPick,
     setPendingNahtzugabeClick,
     setEdgeSeamPickingActive,
     setPieceSymmetryState,
@@ -2095,6 +2104,7 @@ export function WorkspaceCanvas() {
           setHoveredSymmetryInternalIdx(null)
           setFlipByEdgeActive(false)
         }
+        if (nahtTrimPickCutVertexActive) cancelNahtTrimVertexPick()
         return
       }
       e.preventDefault()
@@ -2320,6 +2330,62 @@ export function WorkspaceCanvas() {
           }
           return
         }
+      }
+      if (nahtTrimPickCutVertexActive && tool === 'select') {
+        const world = toWorld(e.clientX, e.clientY)
+        const ctnHit = containerRef.current
+        const svgHit = svgRef.current
+        const vHitWorld = ctnHit
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgHit, ctnHit))
+          : 5
+        const vHitSeamWorld = ctnHit
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgHit, ctnHit))
+          : 8
+        const targetId = selectedPieceIds[0]
+        const p = pieces.find((x) => x.id === targetId)
+        if (!p || p.cutLine.length < 3) {
+          setToastMessage('warn:Kein gültiges Zielteil.')
+          return
+        }
+        // Dieselben Eckpunkte wie beim Ziehen: bei Nahtzugabe Nahtlinie (rote Punkte), sonst Schnittkontur.
+        const useSeamMaster = useSeamLineForVertexEditing(p)
+        const curvesForVertices =
+          useSeamMaster && p.seamLine.length >= 3 ? p.seamLine : p.cutLine
+        const vertexHitR = useSeamMaster && p.seamLine.length >= 3 ? vHitSeamWorld : vHitWorld
+        const local = worldToPieceLocal(world, p)
+        const n = curvesForVertices.length
+        let bestVi: number | null = null
+        let bestD = Infinity
+        for (let vi = 0; vi < n; vi++) {
+          const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
+          const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
+          if (d < vertexHitR && d < bestD) {
+            bestD = d
+            bestVi = vi
+          }
+        }
+        if (bestVi != null) {
+          const cutVi =
+            useSeamMaster && p.seamLine.length >= 3
+              ? mapMasterVertexIndexToCutVertexIndex(p, bestVi)
+              : bestVi
+          if (cutVi == null) {
+            setToastMessage('warn:Diese Ecke konnte der Schnittkontur nicht zugeordnet werden.')
+            return
+          }
+          if ((p.notches ?? []).some((nt) => nt.vertexIndex === cutVi)) {
+            setToastMessage('warn:Kerbe auf diesem Eckpunkt – bitte zuerst Kerbe löschen oder verschieben.')
+            return
+          }
+          completeNahtTrimAtCutVertex(p.id, cutVi)
+          return
+        }
+        setToastMessage(
+          useSeamMaster && p.seamLine.length >= 3
+            ? 'warn:Bitte einen Eckpunkt auf der Nahtlinie treffen (Außenkontur wird dort beschnitten).'
+            : 'warn:Bitte eine Ecke der Schnittkontur treffen.'
+        )
+        return
       }
       if (!layoutOnly && edgeSeamPickingActive && !edgeAllowancePopover && hoveredEdgePicking) {
         const piece = pieces.find((p) => p.id === hoveredEdgePicking.pieceId)
@@ -3201,6 +3267,9 @@ export function WorkspaceCanvas() {
       notchEdgeLineCount,
       notchSettings,
       activeNotchPresetIndex,
+      nahtTrimPickCutVertexActive,
+      completeNahtTrimAtCutVertex,
+      cancelNahtTrimVertexPick,
     ]
   )
 
@@ -4444,7 +4513,11 @@ export function WorkspaceCanvas() {
       if (
         !inInput &&
         e.key === 'Escape' &&
-        (edgeSeamPickingActive || edgeAllowancePopover || horizontalLevelPickingActive || pieceSymmetryState)
+        (edgeSeamPickingActive ||
+          edgeAllowancePopover ||
+          horizontalLevelPickingActive ||
+          pieceSymmetryState ||
+          nahtTrimPickCutVertexActive)
       ) {
         e.preventDefault()
         setEdgeAllowancePopover(null)
@@ -4457,6 +4530,7 @@ export function WorkspaceCanvas() {
         setHoveredSymmetryEdge(null)
         setHoveredSymmetryInternalIdx(null)
         setFlipByEdgeActive(false)
+        cancelNahtTrimVertexPick()
         return
       }
       if (!inInput && e.key === 'Escape' && tool === 'profil') {
@@ -5825,22 +5899,24 @@ export function WorkspaceCanvas() {
         preserveAspectRatio="xMidYMid meet"
         style={{ display: 'block' }}
       >
-        <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>
-          {showGrid && (
-            <>
-              <defs>
-                <pattern
-                  id="grid"
-                  width={GRID_SIZE}
-                  height={GRID_SIZE}
-                  patternUnits="userSpaceOnUse"
-                >
-                  <path d={`M ${GRID_SIZE} 0 V ${GRID_SIZE * 100} M 0 ${GRID_SIZE} H ${GRID_SIZE * 100}`} fill="none" stroke={T.grid.stroke} strokeWidth={T.grid.strokeWidth} />
-                </pattern>
-              </defs>
+        {showGrid && (
+          <>
+            <defs>
+              <pattern
+                id="grid"
+                width={GRID_SIZE}
+                height={GRID_SIZE}
+                patternUnits="userSpaceOnUse"
+              >
+                <path d={`M ${GRID_SIZE} 0 V ${GRID_SIZE * 100} M 0 ${GRID_SIZE} H ${GRID_SIZE * 100}`} fill="none" stroke={T.grid.stroke} strokeWidth={T.grid.strokeWidth} />
+              </pattern>
+            </defs>
+            <g transform={`translate(${view.panX},${view.panY})`}>
               <rect width="10000" height="10000" x="-5000" y="-5000" fill="url(#grid)" opacity={T.grid.opacity} />
-            </>
-          )}
+            </g>
+          </>
+        )}
+        <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>
           {imageDigitizeSession &&
             imageDigitizeSession.imageDataUrl &&
             imageDigitizeSession.imageSizePx && (

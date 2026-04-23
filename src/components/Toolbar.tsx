@@ -14,6 +14,7 @@ import {
   suggestedTrimTexProjectFilename,
 } from '../persistence/trimtexProjectJson'
 import { validateSeamAllowance } from '../geometry/offset'
+import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
 import { SeamAssignmentMetaModal } from './SeamAssignmentMetaModal'
@@ -69,6 +70,9 @@ export function Toolbar() {
     setView,
     selectedPieceIds,
     applyOffset,
+    startNahtTrimVertexPick,
+    cancelNahtTrimVertexPick,
+    nahtTrimPickCutVertexActive,
     removeSeamAllowance,
     rotatePiece90,
     alignPieceToGrain,
@@ -119,6 +123,9 @@ export function Toolbar() {
       setView: s.setView,
       selectedPieceIds: s.selectedPieceIds,
       applyOffset: s.applyOffset,
+      startNahtTrimVertexPick: s.startNahtTrimVertexPick,
+      cancelNahtTrimVertexPick: s.cancelNahtTrimVertexPick,
+      nahtTrimPickCutVertexActive: s.nahtTrimPickCutVertexActive,
       removeSeamAllowance: s.removeSeamAllowance,
       rotatePiece90: s.rotatePiece90,
       alignPieceToGrain: s.alignPieceToGrain,
@@ -925,6 +932,20 @@ export function Toolbar() {
                   Nahtzuordnung
                 </button>
               </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  disabled={selectedPieceIds.length === 0 || workspace.pieces.length < 2}
+                  onClick={() => {
+                    startNahtTrimVertexPick()
+                    closeMenu()
+                  }}
+                  title="Zielteil wählen (erste Auswahl), optional zweites Teil als Referenz – danach Ecke an der Schnittkontur anklicken"
+                >
+                  Naht trimmen (manuell)
+                </button>
+              </li>
             </ul>
           )}
         </div>
@@ -1115,6 +1136,24 @@ export function Toolbar() {
             </button>
           </span>
         )}
+        {nahtTrimPickCutVertexActive && (() => {
+          const nahtTrimTarget =
+            selectedPieceIds.length > 0 ? workspace.pieces.find((p) => p.id === selectedPieceIds[0]) : null
+          const nahtTrimSeamMaster =
+            nahtTrimTarget != null &&
+            useSeamLineForVertexEditing(nahtTrimTarget) &&
+            nahtTrimTarget.seamLine.length >= 3
+          return (
+            <span className="nahtzuordnung-hint">
+              {nahtTrimSeamMaster
+                ? 'Eckpunkt auf der Nahtlinie des Zielteils anklicken (Außenkontur wird dort beschnitten)'
+                : 'Ecke an der Schnittkontur des Zielteils anklicken (überstehende Ecke)'}
+              <button type="button" className="nahtzuordnung-abbrechen" onClick={() => cancelNahtTrimVertexPick()}>
+                Abbrechen
+              </button>
+            </span>
+          )
+        })()}
         {tool === 'profil' && (
           <span className="nahtzuordnung-hint">
             Kante anklicken, um Profil zuzuordnen

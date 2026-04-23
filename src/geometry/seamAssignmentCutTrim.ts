@@ -304,6 +304,9 @@ function partnerTrimLongerMiterToShorterAtSeamEnd(
     cutVertexIndexForAnalyticMiterCap(trimPiece.cutLine, cornerT, Mt, dTrim) ??
     nearestVertexOnCutLineMiterTarget(trimPiece.cutLine, Mt, CUT_VERTEX_MATCH_MM)
   if (viCut == null) return null
+  // Niemals direkt den Naht-End-Eckpunkt trimmen:
+  // sonst kann sich die komplette zugeordnete Kante parallel verschieben.
+  if (viCut === viTrim) return null
   if (!cutLineVertexIsSignificantCorner(trimPiece.cutLine, viCut)) return null
 
   const pTip = vertexAt(trimPiece.cutLine, viCut)

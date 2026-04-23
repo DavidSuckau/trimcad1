@@ -374,9 +374,6 @@ function minChordLengthMm(curves: Curve[]): number {
   return m === Infinity ? 0 : m
 }
 
-/** Mindestkante beim Verschieben von Eckpunkten (mm); darunter numerische Artefakte und Clipper-Fehler. */
-export const MIN_VERTEX_EDGE_LENGTH_MM = 0.12
-
 /** Fläche unterhalb derer die Kontur als kollabiert gilt (mm²). */
 const MIN_POLYGON_SIGNED_AREA_MM2 = 0.05
 
@@ -389,13 +386,6 @@ export function validateContourAfterVertexMove(
 ): { ok: true } | { ok: false; message: string } {
   if (curves.length < 3) {
     return { ok: false, message: 'Kontur hat zu wenig Segmente.' }
-  }
-  const minChord = minChordLengthMm(curves)
-  if (minChord < MIN_VERTEX_EDGE_LENGTH_MM) {
-    return {
-      ok: false,
-      message: `Kante zu kurz (< ${MIN_VERTEX_EDGE_LENGTH_MM} mm); Ziehen nicht möglich.`,
-    }
   }
   const areaAbs = Math.abs(signedAreaCurves(curves))
   if (areaAbs < MIN_POLYGON_SIGNED_AREA_MM2) {

@@ -34,7 +34,8 @@ export function getGrainArrowLayout(piece: PatternPiece): {
   const shaftH = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y) || 1
   const awNom = 6
   const ahNom = 8
-  const tickLenNom = 3
+  /** Mittlere Querlinie: nur nach links, ca. 3 cm. */
+  const tickLenNom = 30
   const scale = Math.min(1, shaftH / (2 * ahNom))
   const aw = awNom * scale
   const ah = ahNom * scale
@@ -49,8 +50,9 @@ export function getGrainArrowLayout(piece: PatternPiece): {
   const perpY = Math.cos(angle)
   const midX = (line.start.x + line.end.x) / 2
   const midY = (line.start.y + line.end.y) / 2
-  const tickStart = { x: midX - perpX * (tickLen / 2), y: midY - perpY * (tickLen / 2) }
-  const tickEnd = { x: midX + perpX * (tickLen / 2), y: midY + perpY * (tickLen / 2) }
+  // Nur einseitig nach links der Laufrichtung (kein rechter Anteil).
+  const tickStart = { x: midX, y: midY }
+  const tickEnd = { x: midX + perpX * tickLen, y: midY + perpY * tickLen }
   const triangleD = `M ${endTip.x} ${endTip.y} L ${baseLeft.x} ${baseLeft.y} L ${baseRight.x} ${baseRight.y} Z`
   return { line, tickStart, tickEnd, endTip, baseLeft, baseRight, triangleD }
 }
