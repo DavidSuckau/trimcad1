@@ -64,13 +64,12 @@ describe('trimPieceCutLineByOtherPieceOverlap', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('mit gewählter Ecke: mehrere entfernte Ecken → eigene Meldung', () => {
+  it('mit gewählter Ecke: keine generische Mehrfach-Ecken-Blockade mehr', () => {
     const target = piece('A', rect(0, 0, 100, 100))
     const other = piece('B', rect(50, -20, 160, 120))
-    const result = trimPieceCutLineByOtherPieceOverlap(target, other, { chosenCutVertexIndex: 2 })
-    expect(result.ok).toBe(false)
+    const result = trimPieceCutLineByOtherPieceOverlap(target, other, { chosenCutVertexIndex: 1 })
     if (!result.ok) {
-      expect(result.message).toContain('mehrere Ecken')
+      expect(result.message.includes('mehrere Ecken gleichzeitig')).toBe(false)
     }
   })
 

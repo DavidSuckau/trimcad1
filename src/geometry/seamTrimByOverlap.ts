@@ -233,14 +233,10 @@ export function trimPieceCutLineByOtherPieceOverlap(
     if (removedTargetCorners.length === 0) {
       return { ok: false, message: 'An der gewählten Ecke ist kein trimmbarer Überstand.' }
     }
-    if (removedTargetCorners.length > 1) {
-      return {
-        ok: false,
-        message: 'Die Überlappung betrifft mehrere Ecken gleichzeitig – Teile anpassen oder andere Ecke wählen.',
-      }
-    }
-    const only = removedTargetCorners[0]
-    if (Math.hypot(only.x - chosenWorld.x, only.y - chosenWorld.y) > eps) {
+    const chosenIsRemoved = removedTargetCorners.some(
+      (v) => Math.hypot(v.x - chosenWorld.x, v.y - chosenWorld.y) <= eps
+    )
+    if (!chosenIsRemoved) {
       return { ok: false, message: 'Die Überlappung schneidet eine andere Ecke als die angeklickte.' }
     }
   } else if (removedTargetCorners.length !== 1) {
