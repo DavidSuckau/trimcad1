@@ -649,6 +649,30 @@ function findPivotSnapTargetAtWorld(
     }
   }
 
+  let bestAux: { dist: number; pieceId: string; point: Point } = {
+    dist: 1e15,
+    pieceId: '',
+    point: { x: 0, y: 0 },
+  }
+  for (const p of pieces) {
+    const local = worldToPieceLocal(world, p)
+    const grain = getPieceGrainLine(p)
+    const auxPoints: Point[] = [
+      grain.start,
+      grain.end,
+      { x: (grain.start.x + grain.end.x) / 2, y: (grain.start.y + grain.end.y) / 2 },
+      ...p.internalCircles.map((ic) => ic.center),
+      ...p.drills.map((d) => d.center),
+    ]
+    for (const il of p.internalLines) {
+      auxPoints.push(il.start, il.end)
+    }
+    for (const ap of auxPoints) {
+      const d = Math.hypot(local.x - ap.x, local.y - ap.y)
+      if (d < bestAux.dist) bestAux = { dist: d, pieceId: p.id, point: ap }
+    }
+  }
+
   const pieceForPivot = bestVertex.value ? pieces.find((p) => p.id === bestVertex.value!.pieceId) : null
   const useSeamPivot = pieceForPivot != null && useSeamLineForVertexEditing(pieceForPivot)
   const pivotHoverMaxDist =
@@ -659,19 +683,34 @@ function findPivotSnapTargetAtWorld(
         : hoverCurveMidHitMm
   const vertexInRange = bestVertex.value != null && bestVertex.dist <= pivotHoverMaxDist
   const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
+  const auxInRange = bestAux.pieceId !== '' && bestAux.dist <= hoverVertexHitMm
 
-  let pickNotch: boolean
-  if (vertexInRange && notchInRange) pickNotch = bestNotch.dist < bestVertex.dist
-  else if (notchInRange) pickNotch = true
-  else if (vertexInRange) pickNotch = false
-  else return null
+  type PivotPick = 'notch' | 'vertex' | 'aux'
+  let pick: PivotPick | null = null
+  let bestDist = 1e15
+  if (notchInRange && bestNotch.dist < bestDist) {
+    pick = 'notch'
+    bestDist = bestNotch.dist
+  }
+  if (vertexInRange && bestVertex.value != null && bestVertex.dist < bestDist) {
+    pick = 'vertex'
+    bestDist = bestVertex.dist
+  }
+  if (auxInRange && bestAux.dist < bestDist) {
+    pick = 'aux'
+    bestDist = bestAux.dist
+  }
+  if (!pick) return null
 
-  if (pickNotch) {
+  if (pick === 'notch') {
     const piece = pieces.find((x) => x.id === bestNotch.pieceId)
     const notch = piece?.notches.find((n) => n.id === bestNotch.notchId)
     if (!piece || !notch) return null
     const { position } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
     return { pieceId: piece.id, pivotLocal: { ...position } }
+  }
+  if (pick === 'aux') {
+    return { pieceId: bestAux.pieceId, pivotLocal: { ...bestAux.point } }
   }
 
   const v = bestVertex.value!
@@ -687,6 +726,53 @@ function findPivotSnapTargetAtWorld(
     const c = curvesPv[v.curveIndex]
     if (c?.type !== 'bezier') return null
     return { pieceId: piece.id, pivotLocal: bezierAt(c, 0.5) }
+  }
+  return null
+}
+
+function resolvePivotFromHoveredTarget(
+  hoveredPoint: DeletableHoverTarget | null,
+  hoveredNotch: { pieceId: string; notchId: string } | null,
+  hoveredInternalLine: { pieceId: string; curveIndex: number } | null,
+  hoveredInternalCircle: { pieceId: string; circleId: string } | null,
+  world: Point,
+  pieces: PatternPiece[]
+): { pieceId: string; pivotLocal: Point } | null {
+  if (hoveredNotch) {
+    const piece = pieces.find((x) => x.id === hoveredNotch.pieceId)
+    const notch = piece?.notches.find((n) => n.id === hoveredNotch.notchId)
+    if (piece && notch) {
+      const { position } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+      return { pieceId: piece.id, pivotLocal: { ...position } }
+    }
+  }
+  if (hoveredPoint) {
+    const piece = pieces.find((x) => x.id === hoveredPoint.pieceId)
+    if (!piece) return null
+    if (hoveredPoint.kind === 'vertex') {
+      const p = getMasterContourVertexLocal(piece, hoveredPoint.vertexIndex)
+      if (!p) return null
+      return { pieceId: piece.id, pivotLocal: p }
+    }
+    const curvesPv = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+    const c = curvesPv[hoveredPoint.curveIndex]
+    if (c?.type !== 'bezier') return null
+    return { pieceId: piece.id, pivotLocal: bezierAt(c, 0.5) }
+  }
+  if (hoveredInternalLine) {
+    const piece = pieces.find((x) => x.id === hoveredInternalLine.pieceId)
+    const line = piece?.internalLines[hoveredInternalLine.curveIndex]
+    if (!piece || !line) return null
+    const local = worldToPieceLocal(world, piece)
+    const dStart = Math.hypot(local.x - line.start.x, local.y - line.start.y)
+    const dEnd = Math.hypot(local.x - line.end.x, local.y - line.end.y)
+    return { pieceId: piece.id, pivotLocal: dStart <= dEnd ? { ...line.start } : { ...line.end } }
+  }
+  if (hoveredInternalCircle) {
+    const piece = pieces.find((x) => x.id === hoveredInternalCircle.pieceId)
+    const circle = piece?.internalCircles.find((c) => c.id === hoveredInternalCircle.circleId)
+    if (!piece || !circle) return null
+    return { pieceId: piece.id, pivotLocal: { ...circle.center } }
   }
   return null
 }
@@ -1686,6 +1772,7 @@ export function WorkspaceCanvas() {
     | null
   >(null)
   const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
+  const [rotateAroundPivotPieceId, setRotateAroundPivotPieceId] = useState<string | null>(null)
   /** Kerbe bearbeiten (Typ/Breite/Tiefe); unabhängig vom Hover, damit das Panel bedienbar bleibt. */
   const [notchEditTarget, setNotchEditTarget] = useState<{ pieceId: string; notchId: string } | null>(null)
   /** Kerben: Leertaste → nächster Klick setzt Kerbe in der Mitte einer geraden Kante. */
@@ -2725,6 +2812,25 @@ export function WorkspaceCanvas() {
         return
       }
       if (tool === 'select') {
+        if (rotateAroundPivotPieceId) {
+          const piece = pieces.find((p) => p.id === rotateAroundPivotPieceId)
+          if (!piece || piece.cutLine.length < 3) {
+            if (rotateAroundPivotPieceId) setPiecePivot(rotateAroundPivotPieceId, null)
+            setRotateAroundPivotPieceId(null)
+            return
+          }
+          const pivot = getPiecePivotLocal(piece)
+          const worldCenter = pieceLocalToWorld(pivot, piece)
+          const startWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
+          setDragging({
+            kind: 'rotate',
+            pieceId: piece.id,
+            startRotation: piece.transform.rotation,
+            startWorldAngle,
+          })
+          containerRef.current?.setPointerCapture?.(e.pointerId)
+          return
+        }
         if (contourEditEnabled && hoveredDeletableNotch && e.altKey) {
           e.preventDefault()
           setNotchEditTarget({
@@ -4540,6 +4646,14 @@ export function WorkspaceCanvas() {
         return
       }
       if (!inInput && e.key === 'Escape') {
+        if (rotateAroundPivotPieceId) {
+          e.preventDefault()
+          setPiecePivot(rotateAroundPivotPieceId, null)
+          setRotateAroundPivotPieceId(null)
+          setDragging((d) => (d?.kind === 'rotate' ? null : d))
+          setToastMessage('info:Drehmodus beendet. Drehpunkt wieder auf Teilmitte.')
+          return
+        }
         if (notchEditTarget) {
           e.preventDefault()
           setNotchEditTarget(null)
@@ -4740,18 +4854,27 @@ export function WorkspaceCanvas() {
         const piecesForPivot =
           selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : []
         const world = toWorld(lastPointerClientRef.current.x, lastPointerClientRef.current.y)
-        const snapped =
-          piecesForPivot.length > 0
+        const hoveredPivot = resolvePivotFromHoveredTarget(
+          hoveredDeletablePoint,
+          hoveredDeletableNotch,
+          hoveredInternalLine,
+          hoveredInternalCircle,
+          world,
+          piecesForPivot
+        )
+        const snapped = hoveredPivot
+          ?? (piecesForPivot.length > 0
             ? findPivotSnapTargetAtWorld(world, piecesForPivot, view, svgRef.current, containerRef.current)
-            : null
+            : null)
         if (snapped && selectedPieceIds.includes(snapped.pieceId)) {
           setPiecePivot(snapped.pieceId, snapped.pivotLocal)
-          setToastMessage('success:Drehpunkt hier gesetzt (Alt+D).')
+          setRotateAroundPivotPieceId(snapped.pieceId)
+          setToastMessage('success:Drehpunkt gesetzt. Drehmodus aktiv (Maus ziehen, Escape/Abbrechen beendet).')
         } else if (piecesForPivot.length === 0) {
-          setToastMessage('error:Teil auswählen, dann Maus auf Ecke, Kerbe oder Bézier-Mitte — Alt+D.')
+          setToastMessage('error:Teil auswählen, dann Maus auf Punkt/Kerbe/interne Elemente/Laufrichtung — Alt+D.')
         } else {
           setToastMessage(
-            'error:Maus näher an Ecke, Kerbe oder Bézier-Kurvenmitte (grüner Punkt), dann Alt+D.'
+            'error:Maus näher an Zielpunkt (Ecke, Kerbe, interner Endpunkt, Laufrichtung, Kreis/Bohrung) und Alt+D.'
           )
         }
         e.preventDefault()
@@ -7420,6 +7543,47 @@ export function WorkspaceCanvas() {
           }}
         >
           Gerade Kante anklicken (Mitte) — max. 20 mm zur Kante — Escape: abbrechen
+        </div>
+      )}
+      {rotateAroundPivotPieceId && tool === 'select' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            background: 'rgba(13,71,161,0.94)',
+            color: '#fff',
+            padding: '8px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 10002,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          Drehmodus aktiv: Maus ziehen dreht um gesetzten Drehpunkt
+          <button
+            type="button"
+            onClick={() => {
+              if (rotateAroundPivotPieceId) setPiecePivot(rotateAroundPivotPieceId, null)
+              setRotateAroundPivotPieceId(null)
+              setDragging((d) => (d?.kind === 'rotate' ? null : d))
+            }}
+            style={{
+              border: '1px solid rgba(255,255,255,0.75)',
+              background: 'rgba(255,255,255,0.12)',
+              color: '#fff',
+              borderRadius: 4,
+              padding: '3px 8px',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Abbrechen
+          </button>
         </div>
       )}
       {notchEdgeSpaceMenu && tool === 'notch' && !dragging && (
