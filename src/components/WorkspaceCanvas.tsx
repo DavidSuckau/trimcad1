@@ -56,7 +56,7 @@ import { masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import {
   crossZ,
   symmetryAxisEndpointsFromInternalCurve,
-  symmetryAxisEndpointsFromStraightMasterEdge,
+  symmetryAxisFromMasterEdgePick,
   SYMMETRY_INTERNAL_HOVER_MM,
 } from '../symmetry'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
@@ -1704,6 +1704,9 @@ export function WorkspaceCanvas() {
     edgeIndex: number
     curveIndices: number[]
     distance: number
+    curveHitIndex: number
+    curveHitT: number
+    snapPointLocal: Point
   } | null>(null)
   /** Symmetrie: Index in `piece.internalLines` des Teils unter dem Mauszeiger. */
   const [hoveredSymmetryInternalIdx, setHoveredSymmetryInternalIdx] = useState<number | null>(null)
@@ -2231,9 +2234,20 @@ export function WorkspaceCanvas() {
             hoveredSymmetryEdge?.pieceId === sym.pieceId &&
             hoveredSymmetryEdge.edgeIndex >= 0
           ) {
-            const axis = symmetryAxisEndpointsFromStraightMasterEdge(piece, hoveredSymmetryEdge.edgeIndex)
+            const edgesEnum = enumerateEdges(piece)
+            const pickedEdge = edgesEnum.find((ed) => ed.edgeIndex === hoveredSymmetryEdge.edgeIndex)
+            if (!pickedEdge) {
+              setToastMessage('warn:Kante nicht gefunden.')
+              return
+            }
+            const axis = symmetryAxisFromMasterEdgePick(
+              piece,
+              pickedEdge,
+              hoveredSymmetryEdge.curveHitIndex,
+              hoveredSymmetryEdge.curveHitT,
+            )
             if (!axis) {
-              setToastMessage('warn:Nur gerade Kanten (Linien) eignen sich als Spiegelachse.')
+              setToastMessage('warn:Keine gültige Spiegelachse (Tangente zu kurz oder degeneriert).')
               return
             }
             if (flipByEdgeActive) {
@@ -2310,7 +2324,7 @@ export function WorkspaceCanvas() {
           return
         }
         if (sym.phase === 'pickEdge') {
-          setToastMessage('warn:Bitte eine gerade Kante treffen (grün hervorgehoben) oder Abbrechen.')
+          setToastMessage('warn:Bitte eine Kante der Kontur treffen (grün hervorgehoben) oder Abbrechen.')
           return
         }
         if (sym.phase === 'pickInternalLine') {
@@ -3615,7 +3629,15 @@ export function WorkspaceCanvas() {
           const world = toWorld(e.clientX, e.clientY)
           const selId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === selId)
-          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+          let bestEdge: {
+            pieceId: string
+            edgeIndex: number
+            curveIndices: number[]
+            distance: number
+            curveHitIndex: number
+            curveHitT: number
+            snapPointLocal: Point
+          } | null = null
           if (p && pieceSymmetryState.pieceId === p.id) {
             const masterK = getCurvesForSeamEdge(p)
             if (masterK.length >= 3) {
@@ -3625,13 +3647,14 @@ export function WorkspaceCanvas() {
                 const edges = enumerateEdges(p)
                 for (const edge of edges) {
                   if (edge.curveIndices.includes(nearest.curveIndex)) {
-                    if (masterEdgeIsStraightLine(masterK, edge)) {
-                      bestEdge = {
-                        pieceId: p.id,
-                        edgeIndex: edge.edgeIndex,
-                        curveIndices: edge.curveIndices,
-                        distance: nearest.distance,
-                      }
+                    bestEdge = {
+                      pieceId: p.id,
+                      edgeIndex: edge.edgeIndex,
+                      curveIndices: edge.curveIndices,
+                      distance: nearest.distance,
+                      curveHitIndex: nearest.curveIndex,
+                      curveHitT: nearest.t ?? 0.5,
+                      snapPointLocal: { ...nearest.point },
                     }
                     break
                   }
@@ -7053,6 +7076,59 @@ export function WorkspaceCanvas() {
                     strokeOpacity={0.95}
                     pointerEvents="none"
                   />
+                  {(() => {
+                    const ed = enumerateEdges(piece).find((e) => e.edgeIndex === hoveredSymmetryEdge.edgeIndex)
+                    if (!ed || masterEdgeIsStraightLine(masterK, ed)) return null
+                    const wSnap = pieceLocalToWorld(hoveredSymmetryEdge.snapPointLocal, piece)
+                    const seg = masterK[hoveredSymmetryEdge.curveHitIndex]
+                    let tx = 1
+                    let ty = 0
+                    if (seg?.type === 'line') {
+                      const dx = seg.end.x - seg.start.x
+                      const dy = seg.end.y - seg.start.y
+                      const len = Math.hypot(dx, dy)
+                      if (len > 1e-9) {
+                        tx = dx / len
+                        ty = dy / len
+                      }
+                    } else if (seg?.type === 'bezier') {
+                      const d = bezierDerivativeAt(seg, hoveredSymmetryEdge.curveHitT)
+                      const len = Math.hypot(d.x, d.y)
+                      if (len > 1e-9) {
+                        tx = d.x / len
+                        ty = d.y / len
+                      }
+                    }
+                    const sl = hoveredSymmetryEdge.snapPointLocal
+                    const localA = { x: sl.x - tx * 45, y: sl.y - ty * 45 }
+                    const localB = { x: sl.x + tx * 45, y: sl.y + ty * 45 }
+                    const wa = pieceLocalToWorld(localA, piece)
+                    const wb = pieceLocalToWorld(localB, piece)
+                    return (
+                      <>
+                        <line
+                          x1={wa.x}
+                          y1={wa.y}
+                          x2={wb.x}
+                          y2={wb.y}
+                          stroke="#f59e0b"
+                          strokeWidth={2}
+                          strokeDasharray="5 4"
+                          strokeOpacity={0.95}
+                          pointerEvents="none"
+                        />
+                        <circle
+                          cx={wSnap.x}
+                          cy={wSnap.y}
+                          r={4}
+                          fill="#f59e0b"
+                          stroke="#fff"
+                          strokeWidth={1.2}
+                          pointerEvents="none"
+                        />
+                      </>
+                    )
+                  })()}
                 </g>
               )
             })()}
@@ -8393,7 +8469,11 @@ export function WorkspaceCanvas() {
             <span>Interne Linie anklicken (Achse = Strecke Start–Ende; bei Kurve: Sehne).</span>
           )}
           {pieceSymmetryState.phase === 'pickEdge' && (
-            <span>{flipByEdgeActive ? 'Gerade Kante anklicken — Teil wird darüber gespiegelt.' : 'Gerade Kante am Teil anklicken (wie Wasserwaage).'}</span>
+            <span>
+              {flipByEdgeActive
+                ? 'Kante oder Kurve anklicken — Spiegelachse: gerade Kante = Kante selbst; Kurve = Tangente am Trefferpunkt.'
+                : 'Kante oder Kurve am Teil anklicken (gerade Kante bzw. Tangente an der Kurve wie Wasserwaage).'}
+            </span>
           )}
           {pieceSymmetryState.phase === 'pickSide' && (
             <span>

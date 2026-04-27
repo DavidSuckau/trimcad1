@@ -7,7 +7,9 @@ export { SYMMETRY_INTERNAL_HOVER_MM } from './constants'
 export { applyPieceSymmetryToPiece, type ApplyPieceSymmetryToPieceResult } from './applyPieceSymmetryToPiece'
 export {
   crossZ,
+  symmetryAxisEndpointsFromCurveTangentHit,
   symmetryAxisEndpointsFromInternalCurve,
   symmetryAxisEndpointsFromStraightMasterEdge,
+  symmetryAxisFromMasterEdgePick,
   type PieceSymmetryKeepSide,
 } from '../geometry/pieceSymmetry'

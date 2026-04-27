@@ -1,11 +1,12 @@
 import type { Curve, PatternPiece, Point } from '../types/model'
-import { enumerateEdges } from './edgeEnumeration'
+import { enumerateEdges, type EnumeratedEdge } from './edgeEnumeration'
 import { getCurvesForSeamEdge } from './seamUtils'
+import { masterEdgeIsStraightLine } from './horizontalLevelEdge'
 // @ts-expect-error clipper-lib has no types
 import ClipperLib from 'clipper-lib'
 import { closedPointsToLineCurves, tessellateCurvesToPoints } from './offset'
 import { samePoint } from './geometryConstants'
-import { bezierAt } from './curveToPath'
+import { bezierAt, bezierDerivativeAt } from './curveToPath'
 
 const SCALE = 100000
 const HALF_PLANE_EXTENT_MM = 1e7
@@ -78,6 +79,63 @@ export function symmetryAxisEndpointsFromStraightMasterEdge(
   const first = curves[0] as Extract<Curve, { type: 'line' }>
   const last = curves[curves.length - 1] as Extract<Curve, { type: 'line' }>
   return { axisA: { ...first.start }, axisB: { ...last.end } }
+}
+
+/**
+ * Spiegelachse = Tangente der Kontur am Trefferpunkt (Orthogonalprojektion der Maus auf die Kurve).
+ * Lange Achsen-Endpunkte wie bei der Halbebenen-Logik, damit Spiegelungen numerisch stabil bleiben.
+ */
+export function symmetryAxisEndpointsFromCurveTangentHit(
+  curves: Curve[],
+  curveIndex: number,
+  t: number,
+): { axisA: Point; axisB: Point } | null {
+  const c = curves[curveIndex]
+  if (!c) return null
+  if (c.type === 'line') {
+    const dx = c.end.x - c.start.x
+    const dy = c.end.y - c.start.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-12) return null
+    const clampedT = Math.max(0, Math.min(1, t))
+    const px = c.start.x + clampedT * dx
+    const py = c.start.y + clampedT * dy
+    const tx = dx / len
+    const ty = dy / len
+    return {
+      axisA: { x: px - tx * HALF_PLANE_EXTENT_MM, y: py - ty * HALF_PLANE_EXTENT_MM },
+      axisB: { x: px + tx * HALF_PLANE_EXTENT_MM, y: py + ty * HALF_PLANE_EXTENT_MM },
+    }
+  }
+  const clampedT = Math.max(0, Math.min(1, t))
+  const p = bezierAt(c, clampedT)
+  const d = bezierDerivativeAt(c, clampedT)
+  const len = Math.hypot(d.x, d.y)
+  if (len < 1e-12) return null
+  const tx = d.x / len
+  const ty = d.y / len
+  return {
+    axisA: { x: p.x - tx * HALF_PLANE_EXTENT_MM, y: p.y - ty * HALF_PLANE_EXTENT_MM },
+    axisB: { x: p.x + tx * HALF_PLANE_EXTENT_MM, y: p.y + ty * HALF_PLANE_EXTENT_MM },
+  }
+}
+
+/**
+ * Spiegelachse nach Kantenwahl: rein gerade Master-Kante = Sehne Ecke–Ecke; sonst Tangente am
+ * nächsten Punkt (`curveHitIndex`, `t`) auf der Kontur.
+ */
+export function symmetryAxisFromMasterEdgePick(
+  piece: PatternPiece,
+  edge: EnumeratedEdge,
+  curveHitIndex: number,
+  curveHitT: number,
+): { axisA: Point; axisB: Point } | null {
+  const masterK = getCurvesForSeamEdge(piece)
+  if (!edge.curveIndices.includes(curveHitIndex)) return null
+  if (masterEdgeIsStraightLine(masterK, edge)) {
+    return symmetryAxisEndpointsFromStraightMasterEdge(piece, edge.edgeIndex)
+  }
+  return symmetryAxisEndpointsFromCurveTangentHit(masterK, curveHitIndex, curveHitT)
 }
 
 /** `left` = Halbebene mit crossZ ≥ 0. */

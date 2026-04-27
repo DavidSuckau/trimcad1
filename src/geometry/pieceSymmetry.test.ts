@@ -3,9 +3,12 @@ import {
   buildSymmetricContour,
   crossZ,
   mirrorPointAcrossLine,
+  symmetryAxisEndpointsFromCurveTangentHit,
   symmetryAxisEndpointsFromInternalCurve,
   symmetryAxisEndpointsFromStraightMasterEdge,
+  symmetryAxisFromMasterEdgePick,
 } from './pieceSymmetry'
+import { enumerateEdges } from './edgeEnumeration'
 import type { Curve, PatternPiece } from '../types/model'
 
 const square = (size: number): Curve[] => [
@@ -74,6 +77,44 @@ describe('pieceSymmetry', () => {
     ]
     const piece: PatternPiece = { ...squarePieceMasterCut(1), cutLine: curves, seamLine: [] }
     expect(symmetryAxisEndpointsFromStraightMasterEdge(piece, 0)).toBeNull()
+  })
+
+  it('symmetryAxisEndpointsFromCurveTangentHit: horizontale Tangente bei symmetrischer Bézier in t=0.5', () => {
+    const curves: Curve[] = [
+      {
+        type: 'bezier',
+        start: { x: 0, y: 0 },
+        end: { x: 10, y: 0 },
+        cp1: { x: 2, y: 5 },
+        cp2: { x: 8, y: 5 },
+      },
+    ]
+    const ax = symmetryAxisEndpointsFromCurveTangentHit(curves, 0, 0.5)
+    expect(ax).not.toBeNull()
+    if (!ax) return
+    const dx = ax.axisB.x - ax.axisA.x
+    const dy = ax.axisB.y - ax.axisA.y
+    expect(Math.abs(dy)).toBeLessThan(1e-6)
+    expect(Math.abs(dx)).toBeGreaterThan(1000)
+  })
+
+  it('symmetryAxisFromMasterEdgePick: Bézier-Kante nutzt Tangente, nicht null', () => {
+    const curves: Curve[] = [
+      {
+        type: 'bezier',
+        start: { x: 0, y: 0 },
+        end: { x: 10, y: 0 },
+        cp1: { x: 2, y: 5 },
+        cp2: { x: 8, y: 5 },
+      },
+      { type: 'line', start: { x: 10, y: 0 }, end: { x: 10, y: 10 } },
+      { type: 'line', start: { x: 10, y: 10 }, end: { x: 0, y: 10 } },
+      { type: 'line', start: { x: 0, y: 10 }, end: { x: 0, y: 0 } },
+    ]
+    const piece: PatternPiece = { ...squarePieceMasterCut(1), cutLine: curves, seamLine: [] }
+    const edge = enumerateEdges(piece)[0]
+    const ax = symmetryAxisFromMasterEdgePick(piece, edge, 0, 0.5)
+    expect(ax).not.toBeNull()
   })
   it('mirrorPointAcrossLine: horizontal axis y=50', () => {
     const a = { x: 0, y: 50 }
