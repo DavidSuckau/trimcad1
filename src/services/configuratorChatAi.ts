@@ -2,7 +2,6 @@ import type { ConfiguratorKindId, ConfiguratorPartParams } from '../configurator
 import { CONFIGURATOR_PATCH_KEYS, validateProposal, type ConfiguratorPatchProposal } from '../configurators/chatPatch'
 
 type RequestArgs = {
-  apiKey: string
   kindId: ConfiguratorKindId
   partLabel: string
   freeText: string
@@ -55,14 +54,11 @@ export function extractFirstJsonObject(raw: string): string | null {
 }
 
 export async function requestConfiguratorPatchProposal(args: RequestArgs): Promise<ConfiguratorPatchProposal> {
-  const key = args.apiKey.trim()
-  if (!key) throw new Error('API-Key fehlt.')
   if (!args.freeText.trim()) throw new Error('Bitte zuerst eine Chat-Anweisung eingeben.')
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('/api/ai/configurator-proposal', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({

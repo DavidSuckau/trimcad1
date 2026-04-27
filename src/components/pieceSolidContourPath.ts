@@ -1,4 +1,4 @@
-import { closedPathD } from '../geometry/curveToPath'
+import { closedPathD, curveToPathD, cutLineFormsClosedLoop } from '../geometry/curveToPath'
 import { cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
 import type { PatternPiece } from '../types/model'
 
@@ -6,6 +6,9 @@ export type PieceContourDisplayPaths = {
   solidPath: string | null
   dashedPath: string | null
   hasSeam: boolean
+  /** Wenn true: keine Flächenfüllung für die Hauptkontur (offene Polylinie). */
+  solidStrokeOnly: boolean
+  dashedStrokeOnly: boolean
 }
 
 /**
@@ -20,19 +23,34 @@ export function getPieceContourDisplayPaths(
   const { cutLine, seamLine, notches } = piece
   const notchesForCutouts = excludeNotchId ? notches.filter((n) => n.id !== excludeNotchId) : notches
   const mergedCutLine = cutLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
-  const cutPath = closedPathD(mergedCutLine)
   const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
-  const seamPath = closedPathD(mergedSeamLine)
-  const hasSeam = !!(seamPath && seamLine.length >= 3)
+
+  const cutClosed = mergedCutLine.length > 0 && cutLineFormsClosedLoop(mergedCutLine)
+  const seamClosed =
+    mergedSeamLine.length >= 2 && cutLineFormsClosedLoop(mergedSeamLine)
+
+  const cutPathRaw = cutClosed ? closedPathD(mergedCutLine) : curveToPathD(mergedCutLine, { closed: false })
+  const seamPathRaw =
+    mergedSeamLine.length === 0
+      ? ''
+      : seamClosed
+        ? closedPathD(mergedSeamLine)
+        : curveToPathD(mergedSeamLine, { closed: false })
+
+  const hasSeam = !!(seamPathRaw && String(seamPathRaw).trim() && seamLine.length >= 3)
   const solidIsCut = !hasSeam || cutSeamSwapped
-  const solidPath = solidIsCut ? cutPath : seamPath
-  const dashedPath = solidIsCut ? seamPath : cutPath
+  const solidPath = solidIsCut ? cutPathRaw : seamPathRaw
+  const dashedPath = solidIsCut ? seamPathRaw : cutPathRaw
   const solidOk = solidPath && String(solidPath).trim()
   const dashedOk = dashedPath && String(dashedPath).trim()
+  const solidStrokeOnly = solidIsCut ? !cutClosed : !seamClosed
+  const dashedStrokeOnly = solidIsCut ? !seamClosed : !cutClosed
   return {
     solidPath: solidOk ? solidPath : null,
     dashedPath: dashedOk ? dashedPath : null,
     hasSeam,
+    solidStrokeOnly,
+    dashedStrokeOnly,
   }
 }
 

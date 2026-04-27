@@ -350,6 +350,8 @@ export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
     pieces,
     view,
     seamAssignments: normalizeSeamAssignments(w.seamAssignments),
+    autoAdjustSeamAssignmentCorners:
+      (w as { autoAdjustSeamAssignmentCorners?: unknown }).autoAdjustSeamAssignmentCorners === false ? false : true,
     notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes, pieces),
     profileAssignments: normalizeProfileAssignments((w as { profileAssignments?: unknown }).profileAssignments, pieces),
     ...(typeof w.projectFileName === 'string' ? { projectFileName: w.projectFileName } : {}),

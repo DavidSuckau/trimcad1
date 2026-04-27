@@ -12,11 +12,22 @@ import ClipperLib from 'clipper-lib'
 
 const SCALE = 100000
 
-/** Eck-/Schnittpunkte-Toleranz: Teile liegen selten exakt deckungsgleich (mm). */
-const CUT_TRIM_VERTEX_MATCH_MM = 2.8
+export type TrimByOverlapConfig = {
+  /** Eck-/Schnittpunkte-Toleranz in mm. */
+  vertexToleranceMm: number
+  /** Aufblasung der Partner-Kontur in mm, um kleine Spalte robust zu überbrücken. */
+  clipInflateMm: number
+  /** Toleranz für "Kontur unverändert"-Vergleich in mm. */
+  contourEqualityEpsMm: number
+}
 
-/** Partner-Kontur leicht nach außen offsetten, damit nahezu berührende Flächen noch schneiden. */
-const OTHER_CLIP_INFLATE_MM = 1.1
+const DEFAULT_TRIM_CONFIG: TrimByOverlapConfig = {
+  vertexToleranceMm: 2.8,
+  clipInflateMm: 1.1,
+  contourEqualityEpsMm: 0.1,
+}
+/** Minimaler numerischer Stabilitätspuffer für Nicht-Ziel-Ecken (mm). */
+const NON_CHOSEN_CORNER_BOUNDARY_EPS_MM = 0.25
 
 type IntPoint = { X: number; Y: number }
 
@@ -25,13 +36,23 @@ type SeamTrimByOverlapResult =
   | { ok: true; changed: true; cutLine: Curve[]; intersectionPointsWorld: Point[] }
   | { ok: false; message: string }
 
+type ChosenCornerValidationResult =
+  | { ok: true; outWorld: Point[] }
+  | { ok: false; message: string }
+
 /** Eckpunkt-Index auf der **cutLine** (wie `updateVertex` / Schnittkontur-Ecken). */
 export type TrimPieceCutOverlapOptions = {
   chosenCutVertexIndex: number
+  config?: Partial<TrimByOverlapConfig>
 }
 
 function toIntPoint(p: Point): IntPoint {
-  return new ClipperLib.IntPoint2(Math.round(p.x * SCALE), Math.round(p.y * SCALE))
+  const x = Math.round(p.x * SCALE)
+  const y = Math.round(p.y * SCALE)
+  const IntPointCtor = (ClipperLib?.IntPoint ?? ClipperLib?.IntPoint2) as
+    | (new (X: number, Y: number) => IntPoint)
+    | undefined
+  return IntPointCtor ? new IntPointCtor(x, y) : ({ X: x, Y: y } as IntPoint)
 }
 
 function fromIntPoint(ip: IntPoint): Point {
@@ -57,13 +78,17 @@ function openRing(pts: Point[]): Point[] {
 function largestPathByAbsArea(paths: IntPoint[][]): Point[] | null {
   let best: Point[] | null = null
   let bestArea = -1
+  const areaTieEps = 1e-6
   for (const path of paths) {
     if (path.length < 3) continue
     const pts = path.map(fromIntPoint)
     const ring = openRing(pts)
     if (ring.length < 3) continue
     const area = Math.abs(signedAreaRing(ring))
-    if (area > bestArea) {
+    if (
+      area > bestArea + areaTieEps ||
+      (Math.abs(area - bestArea) <= areaTieEps && best != null && ring.length > best.length)
+    ) {
       bestArea = area
       best = ring
     }
@@ -113,7 +138,11 @@ function pointInPolygon(pt: Point, ring: Point[]): boolean {
   return inside
 }
 
-/** Eckpunkt gilt als Teil des Trim-Ergebnisses: auf Rand nahe genug oder im Inneren. */
+/**
+ * Eckpunkt gilt als Teil des Trim-Ergebnisses:
+ * - Punkt-in-Polygon (innen), ODER
+ * - Randdistanz <= eps (numerisch stabiler Randtreffer).
+ */
 function vertexOnOrInsideTrimmedRegion(v: Point, resultRing: Point[], epsMm: number): boolean {
   if (resultRing.length < 3) return false
   if (minDistPointToClosedPolyline(resultRing, v) <= epsMm) return true
@@ -145,52 +174,17 @@ function cutLineVerticesWorld(piece: PatternPiece): Point[] {
 }
 
 function worldRingFromPieceCutLine(piece: PatternPiece): Point[] {
+  // Feste Tessellation pro Kurvensegment (nicht längenabhängig): 64 Samples.
   const tess = tessellateCurvesToPoints(piece.cutLine, 64)
   return openRing(tess).map((p) => pieceLocalToWorld(p, piece.transform))
 }
 
-/**
- * Clip-Polygon für das andere Teil: leicht aufblasen, damit minimale Lücken zur Zielkontur
- * trotzdem eine Schnittmenge liefern (Ecken nicht exakt deckungsgleich).
- */
-function otherClipPolygonWorldInflated(otherPiece: PatternPiece): Point[] {
-  const base = worldRingFromPieceCutLine(otherPiece)
-  if (base.length < 3) return base
-  const curves = closedPointsToLineCurves(base, 0)
-  const off = clipperOffsetClosedPolygon(curves, OTHER_CLIP_INFLATE_MM, {
-    joinType: 'miter',
-    miterLimit: 3,
-    simplifyTolerance: 0,
-  })
-  if (off.solutionPathCount !== 1 || off.lineCurves.length < 3) return base
-  const inflated = openRing(tessellateCurvesToPoints(off.lineCurves, 48))
-  return inflated.length >= 3 ? inflated : base
-}
-
-/**
- * Manuelles "Naht trimmen":
- * Zielteil wird auf die Schnittmenge mit dem Referenzteil reduziert (nur cutLine).
- * seamLine bleibt unverändert und wird außerhalb dieser Funktion nicht verändert.
- */
-export function trimPieceCutLineByOtherPieceOverlap(
-  targetPiece: PatternPiece,
-  otherPiece: PatternPiece,
-  options?: TrimPieceCutOverlapOptions
-): SeamTrimByOverlapResult {
-  if (targetPiece.cutLine.length < 3 || otherPiece.cutLine.length < 3) {
-    return { ok: false, message: 'Teilkontur ist zu kurz für Naht trimmen.' }
-  }
-  const targetWorld = worldRingFromPieceCutLine(targetPiece)
-  const otherClipWorld = otherClipPolygonWorldInflated(otherPiece)
-  const targetVertsWorld = cutLineVerticesWorld(targetPiece)
-  if (targetWorld.length < 3 || otherClipWorld.length < 3 || targetVertsWorld.length < 3) {
-    return { ok: false, message: 'Kontur konnte nicht ausgewertet werden.' }
-  }
-
+function intersectLargestPath(subjectWorld: Point[], clipWorld: Point[]): Point[] | null {
+  if (subjectWorld.length < 3 || clipWorld.length < 3) return null
   const clip = new ClipperLib.Clipper()
   clip.StrictlySimple = true
-  clip.AddPath(targetWorld.map(toIntPoint), ClipperLib.PolyType.ptSubject, true)
-  clip.AddPath(otherClipWorld.map(toIntPoint), ClipperLib.PolyType.ptClip, true)
+  clip.AddPath(subjectWorld.map(toIntPoint), ClipperLib.PolyType.ptSubject, true)
+  clip.AddPath(clipWorld.map(toIntPoint), ClipperLib.PolyType.ptClip, true)
   const solution: IntPoint[][] = []
   clip.Execute(
     ClipperLib.ClipType.ctIntersection,
@@ -198,64 +192,85 @@ export function trimPieceCutLineByOtherPieceOverlap(
     ClipperLib.PolyFillType.pftNonZero,
     ClipperLib.PolyFillType.pftNonZero
   )
+  return largestPathByAbsArea(solution)
+}
 
-  if (solution.length === 0) {
-    return { ok: true, changed: false, reason: 'Kein Überlappungsbereich gefunden.' }
+function isUnchangedAgainstTarget(targetWorld: Point[], outWorld: Point[], epsMm: number): boolean {
+  return (
+    targetWorld.length === outWorld.length &&
+    targetWorld.every((p) => minDistPointToClosedPolyline(outWorld, p) <= epsMm)
+  )
+}
+
+function validateChosenCornerAndRefine(
+  outWorldInitial: Point[],
+  chosenIdx: number,
+  targetVertsWorld: Point[],
+  targetWorld: Point[],
+  otherClipWorldBase: Point[],
+  tightEps: number
+): ChosenCornerValidationResult {
+  if (!Number.isInteger(chosenIdx) || chosenIdx < 0 || chosenIdx >= targetVertsWorld.length) {
+    return { ok: false, message: 'Ungültiger Eckpunkt-Index für Naht trimmen.' }
   }
-  if (solution.length > 1) {
+  const chosenWorld = targetVertsWorld[chosenIdx]
+  const removedTargetCornersTight = targetVertsWorld.filter(
+    (v) => !vertexOnOrInsideTrimmedRegion(v, outWorldInitial, tightEps)
+  )
+  if (removedTargetCornersTight.length === 0) {
+    return { ok: false, message: 'An der gewählten Ecke ist kein trimmbarer Überstand.' }
+  }
+  const chosenIsRemoved = removedTargetCornersTight.some(
+    (v) => Math.hypot(v.x - chosenWorld.x, v.y - chosenWorld.y) <= tightEps
+  )
+  if (!chosenIsRemoved) {
+    return { ok: false, message: 'Die Überlappung schneidet eine andere Ecke als die angeklickte.' }
+  }
+  // Im Klick-Modus darf ausschließlich die gewählte Ecke angepasst werden.
+  const otherRemovedCornerExists = removedTargetCornersTight.some(
+    (v) => Math.hypot(v.x - chosenWorld.x, v.y - chosenWorld.y) > tightEps
+  )
+  if (otherRemovedCornerExists) {
     return {
       ok: false,
-      message: 'Naht trimmen ist mehrdeutig (mehrere getrennte Überlappungsflächen).',
+      message: 'Trim würde weitere Ecken/Kanten verändern. Bitte Teilposition anpassen oder anderes Referenzteil wählen.',
     }
   }
 
-  const outWorldRaw = largestPathByAbsArea(solution)
-  if (!outWorldRaw || outWorldRaw.length < 3) {
-    return { ok: false, message: 'Naht trimmen ergab keine gültige Zielkontur.' }
-  }
-
-  const eps = CUT_TRIM_VERTEX_MATCH_MM
-
-  const unchanged =
-    targetWorld.length === outWorldRaw.length &&
-    targetWorld.every((p) => minDistPointToClosedPolyline(outWorldRaw, p) <= eps)
-  if (unchanged) {
-    return { ok: true, changed: false, reason: 'Keine überstehenden Außenbereiche gefunden.' }
-  }
-
-  const removedTargetCorners = targetVertsWorld.filter((v) => !vertexOnOrInsideTrimmedRegion(v, outWorldRaw, eps))
-  const chosenIdx = options?.chosenCutVertexIndex
-  if (chosenIdx != null) {
-    if (!Number.isInteger(chosenIdx) || chosenIdx < 0 || chosenIdx >= targetVertsWorld.length) {
-      return { ok: false, message: 'Ungültiger Eckpunkt-Index für Naht trimmen.' }
-    }
-    const chosenWorld = targetVertsWorld[chosenIdx]
-    if (removedTargetCorners.length === 0) {
-      return { ok: false, message: 'An der gewählten Ecke ist kein trimmbarer Überstand.' }
-    }
-    const chosenIsRemoved = removedTargetCorners.some(
-      (v) => Math.hypot(v.x - chosenWorld.x, v.y - chosenWorld.y) <= eps
-    )
-    if (!chosenIsRemoved) {
-      return { ok: false, message: 'Die Überlappung schneidet eine andere Ecke als die angeklickte.' }
-    }
-  } else if (removedTargetCorners.length !== 1) {
-    return {
-      ok: false,
-      message:
-        'Naht trimmen unterstützt hier nur einen einzelnen Eck-Trim. Mehrere Außenbereiche (z. B. oben und unten) wurden erkannt.',
+  // Präzisionslauf: wenn möglich die echte (nicht aufgeblasene) Partnerkontur nehmen,
+  // damit die gewählte Ecke vollständig bis zur Originalkante abgeschnitten wird.
+  let outWorld = outWorldInitial
+  const outWorldExact = intersectLargestPath(targetWorld, otherClipWorldBase)
+  if (outWorldExact && outWorldExact.length >= 3) {
+    const removedExact = targetVertsWorld.filter((v) => !vertexOnOrInsideTrimmedRegion(v, outWorldExact, tightEps))
+    const chosenRemovedExact = removedExact.some((v) => Math.hypot(v.x - chosenWorld.x, v.y - chosenWorld.y) <= tightEps)
+    if (chosenRemovedExact) {
+      outWorld = outWorldExact
     }
   }
 
-  const retainedCorners = targetVertsWorld.filter((v) => vertexOnOrInsideTrimmedRegion(v, outWorldRaw, eps))
-  if (retainedCorners.length < 2) {
-    return {
-      ok: false,
-      message: 'Naht trimmen benötigt mindestens zwei erhaltene Ecken der Zielkontur (Abstand/Toleranz prüfen).',
+  // Zusätzlicher Schutz: Nicht gewählte Ecken sollen auf dem Rand bleiben (nicht nach innen wandern).
+  // So verhindern wir, dass gegenüberliegende Kanten "mitgeschnitten" werden.
+  for (let i = 0; i < targetVertsWorld.length; i++) {
+    if (i === chosenIdx) continue
+    const dToBoundary = minDistPointToClosedPolyline(outWorld, targetVertsWorld[i])
+    if (dToBoundary > Math.max(tightEps, NON_CHOSEN_CORNER_BOUNDARY_EPS_MM)) {
+      return {
+        ok: false,
+        message: 'Trim würde auch andere Kanten verändern. Bitte nur lokal überlappende Ecke wählen.',
+      }
     }
   }
+  return { ok: true, outWorld }
+}
 
+function buildTrimmedCutLine(
+  targetPiece: PatternPiece,
+  outWorldRaw: Point[],
+  contourEqualityEpsMm: number
+): { ok: true; changed: false; reason: string } | { ok: true; changed: true; cutLine: Curve[] } | { ok: false; message: string } {
   const startRefWorld = pieceLocalToWorld(targetPiece.cutLine[0].start, targetPiece.transform)
+  // Ringstart nahe Referenz ausrichten, damit Reihenfolge/Equality-Vergleiche stabil bleiben.
   const alignedWorld = alignRingStartNearReference(outWorldRaw, startRefWorld)
   const alignedLocal = alignedWorld.map((p) => worldToPieceLocal(p, targetPiece.transform))
   const cutLine = closedPointsToLineCurves(alignedLocal, 0)
@@ -278,8 +293,8 @@ export function trimPieceCutLineByOtherPieceOverlap(
         break
       }
       if (
-        Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) > 1e-4 ||
-        Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y) > 1e-4
+        Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) > contourEqualityEpsMm ||
+        Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y) > contourEqualityEpsMm
       ) {
         equal = false
         break
@@ -287,9 +302,109 @@ export function trimPieceCutLineByOtherPieceOverlap(
     }
     if (equal) return { ok: true, changed: false, reason: 'Keine überstehenden Außenbereiche gefunden.' }
   }
+  return { ok: true, changed: true, cutLine }
+}
+
+/**
+ * Clip-Polygon für das andere Teil: leicht aufblasen, damit minimale Lücken zur Zielkontur
+ * trotzdem eine Schnittmenge liefern (Ecken nicht exakt deckungsgleich).
+ */
+function otherClipPolygonWorldInflated(otherPiece: PatternPiece, config: TrimByOverlapConfig): Point[] {
+  const base = worldRingFromPieceCutLine(otherPiece)
+  if (base.length < 3) return base
+  const curves = closedPointsToLineCurves(base, 0)
+  const off = clipperOffsetClosedPolygon(curves, config.clipInflateMm, {
+    joinType: 'miter',
+    miterLimit: 3,
+    simplifyTolerance: 0,
+  })
+  if (off.solutionPathCount !== 1 || off.lineCurves.length < 3) return base
+  // Feste Tessellation pro Kurvensegment (nicht längenabhängig): 48 Samples.
+  const inflated = openRing(tessellateCurvesToPoints(off.lineCurves, 48))
+  return inflated.length >= 3 ? inflated : base
+}
+
+/**
+ * Manuelles "Naht trimmen":
+ * Zielteil wird auf die Schnittmenge mit dem Referenzteil reduziert (nur cutLine).
+ * seamLine bleibt unverändert und wird außerhalb dieser Funktion nicht verändert.
+ */
+export function trimPieceCutLineByOtherPieceOverlap(
+  targetPiece: PatternPiece,
+  otherPiece: PatternPiece,
+  options?: TrimPieceCutOverlapOptions
+): SeamTrimByOverlapResult {
+  const config: TrimByOverlapConfig = { ...DEFAULT_TRIM_CONFIG, ...(options?.config ?? {}) }
+  if (targetPiece.cutLine.length < 3 || otherPiece.cutLine.length < 3) {
+    return { ok: false, message: 'Teilkontur ist zu kurz für Naht trimmen.' }
+  }
+  const targetWorld = worldRingFromPieceCutLine(targetPiece)
+  const otherClipWorldBase = worldRingFromPieceCutLine(otherPiece)
+  const otherClipWorld = otherClipPolygonWorldInflated(otherPiece, config)
+  const targetVertsWorld = cutLineVerticesWorld(targetPiece)
+  if (
+    targetWorld.length < 3 ||
+    otherClipWorld.length < 3 ||
+    otherClipWorldBase.length < 3 ||
+    targetVertsWorld.length < 3
+  ) {
+    return { ok: false, message: 'Kontur konnte nicht ausgewertet werden.' }
+  }
+
+  const outWorldInflated = intersectLargestPath(targetWorld, otherClipWorld)
+  if (!outWorldInflated || outWorldInflated.length < 3) {
+    return { ok: true, changed: false, reason: 'Kein Überlappungsbereich gefunden.' }
+  }
+  let outWorldRaw = outWorldInflated
+
+  const eps = config.vertexToleranceMm
+  const tightEps = config.contourEqualityEpsMm
+
+  if (isUnchangedAgainstTarget(targetWorld, outWorldRaw, tightEps)) {
+    return { ok: true, changed: false, reason: 'Keine überstehenden Außenbereiche gefunden.' }
+  }
+
+  const removedTargetCorners = targetVertsWorld.filter((v) => !vertexOnOrInsideTrimmedRegion(v, outWorldRaw, eps))
+  const chosenIdx = options?.chosenCutVertexIndex
+  if (chosenIdx != null) {
+    const chosenCheck = validateChosenCornerAndRefine(
+      outWorldRaw,
+      chosenIdx,
+      targetVertsWorld,
+      targetWorld,
+      otherClipWorldBase,
+      tightEps
+    )
+    if (!chosenCheck.ok) {
+      return { ok: false, message: chosenCheck.message }
+    }
+    outWorldRaw = chosenCheck.outWorld
+  } else if (removedTargetCorners.length !== 1) {
+    return {
+      ok: false,
+      message:
+        'Naht trimmen unterstützt hier nur einen einzelnen Eck-Trim. Mehrere Außenbereiche (z. B. oben und unten) wurden erkannt.',
+    }
+  }
+
+  const retainedCorners = targetVertsWorld.filter((v) => vertexOnOrInsideTrimmedRegion(v, outWorldRaw, eps))
+  if (retainedCorners.length < 2) {
+    return {
+      ok: false,
+      message: 'Naht trimmen benötigt mindestens zwei erhaltene Ecken der Zielkontur (Abstand/Toleranz prüfen).',
+    }
+  }
+
+  const built = buildTrimmedCutLine(targetPiece, outWorldRaw, config.contourEqualityEpsMm)
+  if (!built.ok) {
+    return { ok: false, message: built.message }
+  }
+  if (!built.changed) {
+    return { ok: true, changed: false, reason: built.reason }
+  }
 
   const intersectionPointsWorld = outWorldRaw.filter((p) =>
     targetVertsWorld.some((q) => Math.hypot(p.x - q.x, p.y - q.y) <= eps)
   )
-  return { ok: true, changed: true, cutLine, intersectionPointsWorld }
+  return { ok: true, changed: true, cutLine: built.cutLine, intersectionPointsWorld }
 }

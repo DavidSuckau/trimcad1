@@ -6,6 +6,7 @@ import { downloadDxf } from '../dxf/dxfWriter'
 import { downloadAamaDxf } from '../dxf/aamaWriter'
 import { downloadAstmDxf } from '../dxf/astmWriter'
 import { importDxfFromString, parseExtraCutLayers } from '../dxf/dxfImporter'
+import { importDxfOpenContoursFromString } from '../dxf/dxfOpenContourImporter'
 import { downloadBlob } from '../dxf/dxfShared'
 import {
   buildTrimTexProjectFile,
@@ -170,11 +171,12 @@ export function Toolbar() {
   const { view } = workspace
   const [openMenu, setOpenMenu] = useState<MenuId>(null)
   const [erzeugenSubmenu, setErzeugenSubmenu] = useState<'interne-elemente' | 'konfigurator' | null>(null)
-  const [dateiSubmenu, setDateiSubmenu] = useState<'exportieren' | null>(null)
+  const [dateiSubmenu, setDateiSubmenu] = useState<'exportieren' | 'importieren' | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const dxfImportInputRef = useRef<HTMLInputElement>(null)
+  const dxfOpenTemplateImportInputRef = useRef<HTMLInputElement>(null)
   const jsonImportInputRef = useRef<HTMLInputElement>(null)
   const imageImportInputRef = useRef<HTMLInputElement>(null)
 
@@ -257,6 +259,11 @@ export function Toolbar() {
     closeMenu()
   }
 
+  const handleImportDxfOpenTemplate = () => {
+    dxfOpenTemplateImportInputRef.current?.click()
+    closeMenu()
+  }
+
   const handleJsonFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -308,6 +315,40 @@ export function Toolbar() {
           setToastMessage('success:' + result.pieces.length + ' Schnittteil(e) importiert.' + hint)
         } else {
           setToastMessage('error:Keine Schnittteile in der DXF-Datei gefunden')
+        }
+      } catch (err) {
+        setToastMessage('error:' + (err instanceof Error ? err.message : 'Import-Fehler'))
+      }
+    }
+    reader.readAsText(file, 'UTF-8')
+  }
+
+  const handleDxfOpenTemplateFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    closeMenu()
+    const reader = new FileReader()
+    reader.onerror = () => setToastMessage('error:Datei konnte nicht gelesen werden')
+    reader.onload = () => {
+      try {
+        const content = reader.result as string
+        const result = importDxfOpenContoursFromString(content, {
+          extraCutLayers: parseExtraCutLayers(dxfImportExtraCutLayers),
+          importScale: dxfImportScale,
+          createSeamLineOnImport: dxfImportCreateSeamLine,
+          importSeamAllowanceMm: dxfImportSeamAllowanceMm,
+        })
+        if (result.error) {
+          setToastMessage('error:' + result.error)
+        } else if (result.pieces.length > 0) {
+          for (const piece of result.pieces) {
+            addPiece(piece)
+          }
+          const hint = result.warnings?.length ? ' ' + result.warnings.join(' ') : ''
+          setToastMessage('success:' + result.pieces.length + ' Vorlage(n) aus offenen Konturen importiert.' + hint)
+        } else {
+          setToastMessage('error:Keine offenen Schnittkonturen importiert')
         }
       } catch (err) {
         setToastMessage('error:' + (err instanceof Error ? err.message : 'Import-Fehler'))
@@ -396,6 +437,13 @@ export function Toolbar() {
         onChange={handleDxfFileChange}
       />
       <input
+        ref={dxfOpenTemplateImportInputRef}
+        type="file"
+        accept=".dxf"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+        onChange={handleDxfOpenTemplateFileChange}
+      />
+      <input
         ref={imageImportInputRef}
         type="file"
         accept="image/*"
@@ -468,10 +516,26 @@ export function Toolbar() {
                   Projekt öffnen (JSON) …
                 </button>
               </li>
-              <li>
-                <button type="button" className="menubar-dropdown-btn" onClick={handleImportDxf}>
-                  DXF importieren …
-                </button>
+              <li
+                className="menubar-submenu-wrap"
+                onMouseEnter={() => setDateiSubmenu('importieren')}
+                onMouseLeave={() => setDateiSubmenu(null)}
+              >
+                <span className="menubar-dropdown-btn menubar-dropdown-btn-submenu">Importieren</span>
+                {dateiSubmenu === 'importieren' && (
+                  <ul className="menubar-dropdown menubar-submenu">
+                    <li>
+                      <button type="button" className="menubar-dropdown-btn" onClick={handleImportDxf}>
+                        DXF (geschlossene Konturen) …
+                      </button>
+                    </li>
+                    <li>
+                      <button type="button" className="menubar-dropdown-btn" onClick={handleImportDxfOpenTemplate}>
+                        DXF Vorlage (offene Kontur) …
+                      </button>
+                    </li>
+                  </ul>
+                )}
               </li>
               <li
                 className="menubar-submenu-wrap"

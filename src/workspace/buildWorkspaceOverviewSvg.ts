@@ -1,10 +1,7 @@
 import type { PatternPiece, ProfileAssignment } from '../types/model'
-import { closedPathD, bezierDerivativeAt, signedAreaCurves, curvesBounds } from '../geometry/curveToPath'
-import {
-  cutLineWithNotchCutouts,
-  getNotchPositionAndAngleOnCutLine,
-  seamLineWithNotchCutouts,
-} from '../geometry/notchOnCurve'
+import { bezierDerivativeAt, signedAreaCurves, curvesBounds } from '../geometry/curveToPath'
+import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { getPieceContourDisplayPaths } from '../components/pieceSolidContourPath'
 import { getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import { getCurvesForSeamEdge } from '../geometry/seamUtils'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
@@ -62,23 +59,27 @@ export function buildWorkspaceOverviewSvgDocument(
       : T.piece.fill
     const fillOp = useFill ? '0.82' : '0'
 
-    const mergedCut = cutLineWithNotchCutouts(p.cutLine, p.notches, p.seamLine)
-    const mergedSeam = seamLineWithNotchCutouts(p.cutLine, p.notches, p.seamLine)
-    const cutPath = closedPathD(mergedCut)
-    const seamPath = closedPathD(mergedSeam)
-    const hasSeam = !!(seamPath && p.seamLine.length >= 3)
+    const { solidPath, dashedPath, hasSeam, solidStrokeOnly, dashedStrokeOnly } = getPieceContourDisplayPaths(
+      p,
+      false,
+      undefined,
+    )
+    const dashedFill = dashedStrokeOnly ? 'none' : fill
+    const dashedFillOp = dashedStrokeOnly ? '0' : fillOp
+    const solidFill = solidStrokeOnly ? 'none' : fill
+    const solidFillOp = solidStrokeOnly ? '0' : fillOp
 
     parts.push(`<g transform="${escapeXmlAttr(tx)}">`)
-    if (hasSeam && cutPath && seamPath) {
+    if (hasSeam && dashedPath && solidPath) {
       parts.push(
-        `<path d="${escapeXmlAttr(cutPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="${T.overview.strokeSeam}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
+        `<path d="${escapeXmlAttr(dashedPath)}" fill="${dashedFill}" fill-opacity="${dashedFillOp}" stroke="${T.overview.strokeSeam}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
       parts.push(
-        `<path d="${escapeXmlAttr(seamPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
+        `<path d="${escapeXmlAttr(solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
-    } else if (cutPath) {
+    } else if (solidPath) {
       parts.push(
-        `<path d="${escapeXmlAttr(cutPath)}" fill="${fill}" fill-opacity="${fillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidth}"/>`,
+        `<path d="${escapeXmlAttr(solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidth}"/>`,
       )
     } else {
       parts.push(`<circle cx="0" cy="0" r="3" fill="none" stroke="${T.overview.empty}" stroke-width="0.5"/>`)

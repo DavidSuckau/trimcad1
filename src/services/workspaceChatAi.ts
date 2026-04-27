@@ -25,7 +25,6 @@ const HELP_SYSTEM_PROMPT = [
 ].join('\n')
 
 export type WorkspaceHelpRequestArgs = {
-  apiKey: string
   question: string
   pieceCount: number
   selectedCount: number
@@ -33,8 +32,6 @@ export type WorkspaceHelpRequestArgs = {
 }
 
 export async function requestWorkspaceHelpAnswer(args: WorkspaceHelpRequestArgs): Promise<string> {
-  const key = args.apiKey.trim()
-  if (!key) throw new Error('API-Key fehlt.')
   const q = args.question.trim()
   if (!q) throw new Error('Bitte eine Frage eingeben.')
 
@@ -45,10 +42,9 @@ export async function requestWorkspaceHelpAnswer(args: WorkspaceHelpRequestArgs)
     `Frage: ${q}`,
   ].join('\n')
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('/api/ai/workspace-help', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -74,7 +70,6 @@ export async function requestWorkspaceHelpAnswer(args: WorkspaceHelpRequestArgs)
 }
 
 export type WorkspaceChatRequestArgs = {
-  apiKey: string
   freeText: string
   pieceCount: number
   selectedCount: number
@@ -120,8 +115,6 @@ function buildPrompt(args: WorkspaceChatRequestArgs): string {
 }
 
 export async function requestWorkspaceChatProposal(args: WorkspaceChatRequestArgs): Promise<WorkspaceChatProposal> {
-  const key = args.apiKey.trim()
-  if (!key) throw new Error('API-Key fehlt.')
   if (!args.freeText.trim() && !args.imageBase64) {
     throw new Error('Bitte Text eingeben oder ein Bild anhaengen.')
   }
@@ -138,10 +131,9 @@ export async function requestWorkspaceChatProposal(args: WorkspaceChatRequestArg
     })
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('/api/ai/workspace-proposal', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({

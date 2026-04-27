@@ -1,0 +1,55 @@
+name: Deploy to Hetzner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-hetzner-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build production bundle for root domain
+        run: |
+          npm ci
+          VITE_APP_BASE=/ npm run build
+          tar -czf dist.tar.gz -C dist .
+
+      - name: Upload bundle to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: ${{ secrets.HETZNER_PORT || 22 }}
+          source: dist.tar.gz
+          target: /tmp
+
+      - name: Extract bundle on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: ${{ secrets.HETZNER_PORT || 22 }}
+          script: |
+            root="${{ secrets.HETZNER_WEB_ROOT }}"
+            mkdir -p "$root"
+            rm -rf "${root:?}/"*
+            tar -xzf /tmp/dist.tar.gz -C "$root"
+            rm -f /tmp/dist.tar.gz

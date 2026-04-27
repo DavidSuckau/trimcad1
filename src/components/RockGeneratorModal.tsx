@@ -195,7 +195,6 @@ export function RockGeneratorModal() {
   const [measures, setMeasures] = useState<BodyMeasuresCm>({ ...STANDARD_BODY })
   const [showTechnicalPreview, setShowTechnicalPreview] = useState(false)
   const photoPreviewUrl = `${import.meta.env.BASE_URL}rock-preview-photo.png?v=20260327-1`
-  const [openAiApiKey, setOpenAiApiKey] = useState('')
   const [personPrompt, setPersonPrompt] = useState('')
   const [rockColor, setRockColor] = useState('#1a1a1a')
   const [beltColor, setBeltColor] = useState('#3a3a3a')
@@ -302,11 +301,6 @@ export function RockGeneratorModal() {
   }
 
   const generateAiPreview = async () => {
-    const key = openAiApiKey.trim()
-    if (!key) {
-      setAiError('Bitte OpenAI API-Key eingeben.')
-      return
-    }
     setAiError(null)
     setIsGeneratingAi(true)
     try {
@@ -331,10 +325,9 @@ export function RockGeneratorModal() {
         'Volle Figur inkl. Schuhe sichtbar.',
       ].join(' ')
 
-      const resp = await fetch('https://api.openai.com/v1/images/generations', {
+      const resp = await fetch('/api/ai/rock-preview-image', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${key}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -653,19 +646,9 @@ export function RockGeneratorModal() {
             <div style={{ marginTop: 18, borderTop: '1px solid #ddd', paddingTop: 12 }}>
               <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>KI-Preview (OpenAI)</h4>
               <p style={{ margin: '0 0 10px', fontSize: 12, color: '#555' }}>
-                API-Key wird nur temporär im Browser verwendet und nicht gespeichert.
+                Die KI-Anfrage läuft serverseitig über den konfigurierten Backend-Proxy.
               </p>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <label className="nahtzugabe-dialog-label">
-                  <span>OpenAI API-Key</span>
-                  <input
-                    type="password"
-                    className="nahtzugabe-dialog-input"
-                    value={openAiApiKey}
-                    onChange={(e) => setOpenAiApiKey(e.target.value)}
-                    placeholder="sk-..."
-                  />
-                </label>
                 <label className="nahtzugabe-dialog-label">
                   <span>Stil</span>
                   <input

@@ -1,5 +1,7 @@
+import { memo, useMemo } from 'react'
 import { useStore } from '../store/useStore'
 import { useShallow } from 'zustand/react/shallow'
+import type { PatternPiece } from '../types/model'
 
 function ChevronLeftIcon() {
   return (
@@ -26,6 +28,95 @@ function TrashIcon() {
   )
 }
 
+type PieceItemProps = {
+  piece: PatternPiece
+  isSelected: boolean
+  selectPiece: (id: string) => void
+  deletePiece: (id: string) => void
+  setPiecePropertiesDialogPieceId: (id: string | null) => void
+}
+
+const PieceItem = memo(function PieceItem({
+  piece,
+  isSelected,
+  selectPiece,
+  deletePiece,
+  setPiecePropertiesDialogPieceId,
+}: PieceItemProps) {
+  const { id, number, name } = piece
+
+  return (
+    <li
+      className={`piece-item${isSelected ? ' selected' : ''}`}
+      role="option"
+      tabIndex={0}
+      aria-selected={isSelected}
+      onClick={() => selectPiece(id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          selectPiece(id)
+        }
+      }}
+    >
+      <span className="piece-number">{number}</span>
+      <span
+        className="piece-name"
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          setPiecePropertiesDialogPieceId(id)
+        }}
+        title="Doppelklick: Teil-Eigenschaften (Name, Nummer, Füllung …)"
+      >
+        {name}
+      </span>
+      <button
+        type="button"
+        className="piece-delete"
+        onClick={(e) => {
+          e.stopPropagation()
+          if (window.confirm('Dieses Teil wirklich löschen?')) {
+            deletePiece(id)
+          }
+        }}
+        aria-label="Teil löschen"
+      >
+        <TrashIcon />
+      </button>
+    </li>
+  )
+})
+
+type PieceListProps = {
+  pieces: PatternPiece[]
+  selectedSet: ReadonlySet<string>
+  selectPiece: (id: string) => void
+  deletePiece: (id: string) => void
+  setPiecePropertiesDialogPieceId: (id: string | null) => void
+}
+
+function PieceList({ pieces, selectedSet, selectPiece, deletePiece, setPiecePropertiesDialogPieceId }: PieceListProps) {
+  return (
+    <ul
+      className="piece-list"
+      role="listbox"
+      aria-labelledby="sidebar-teile-heading"
+      aria-multiselectable="true"
+    >
+      {pieces.map((p) => (
+        <PieceItem
+          key={p.id}
+          piece={p}
+          isSelected={selectedSet.has(p.id)}
+          selectPiece={selectPiece}
+          deletePiece={deletePiece}
+          setPiecePropertiesDialogPieceId={setPiecePropertiesDialogPieceId}
+        />
+      ))}
+    </ul>
+  )
+}
+
 export function Sidebar() {
   const { workspace, selectedPieceIds, addPiece, selectPiece, deletePiece, setPiecePropertiesDialogPieceId, sidebarCollapsed, setSidebarCollapsed } =
     useStore(
@@ -40,7 +131,9 @@ export function Sidebar() {
         setSidebarCollapsed: s.setSidebarCollapsed,
       }))
     )
-  const { pieces } = workspace
+
+  const pieces = workspace?.pieces ?? []
+  const selectedSet = useMemo(() => new Set(selectedPieceIds), [selectedPieceIds])
 
   return (
     <aside className={`sidebar${sidebarCollapsed ? ' sidebar--collapsed' : ''}`} aria-label="Teileliste">
@@ -73,47 +166,13 @@ export function Sidebar() {
           </div>
           <div className="sidebar-section" id="sidebar-piece-list-panel" role="region" aria-labelledby="sidebar-teile-heading">
             <div className="piece-list-card">
-              <ul className="piece-list">
-                {pieces.map((p) => (
-                  <li
-                    key={p.id}
-                    className={`piece-item ${selectedPieceIds.includes(p.id) ? 'selected' : ''}`}
-                    role="button"
-                    tabIndex={0}
-                    aria-selected={selectedPieceIds.includes(p.id)}
-                    onClick={() => selectPiece(p.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        selectPiece(p.id)
-                      }
-                    }}
-                  >
-                    <span className="piece-number">{p.number}</span>
-                    <span
-                      className="piece-name"
-                      onDoubleClick={(e) => {
-                        e.stopPropagation()
-                        setPiecePropertiesDialogPieceId(p.id)
-                      }}
-                      title="Doppelklick: Teil-Eigenschaften (Name, Nummer, Füllung …)"
-                    >
-                      {p.name}
-                    </span>
-                    <button
-                      type="button"
-                      className="piece-delete"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deletePiece(p.id)
-                      }}
-                      aria-label="Teil löschen"
-                    >
-                      <TrashIcon />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <PieceList
+                pieces={pieces}
+                selectedSet={selectedSet}
+                selectPiece={selectPiece}
+                deletePiece={deletePiece}
+                setPiecePropertiesDialogPieceId={setPiecePropertiesDialogPieceId}
+              />
             </div>
             <button type="button" className="sidebar-btn sidebar-btn--add" onClick={() => addPiece()}>
               + Teil hinzufügen

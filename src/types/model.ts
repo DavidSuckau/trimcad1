@@ -210,6 +210,11 @@ export type Workspace = {
   view: ViewState
   /** Nahtzuordnungen (welche Naht an welcher zusammennähen). Nur für die Ansicht, nicht DXF-Export. */
   seamAssignments: SeamAssignment[]
+  /**
+   * true (default): Bei Nahtzuordnung werden überstehende Miter-Ecken an beiden Teilen automatisch angeglichen.
+   * false: Keine automatische Eck-Anpassung.
+   */
+  autoAdjustSeamAssignmentCorners?: boolean
   /** Freie Notizzettel (nur Editor, nicht DXF-Export). */
   notes?: WorkspaceNote[]
   /** Profilzuordnungen an Kanten (nur Visualisierung/Stückliste, nicht DXF-Export). */

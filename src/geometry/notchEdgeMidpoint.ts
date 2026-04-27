@@ -2,15 +2,26 @@ import type { LineSegment, Point } from '../types/model'
 
 /** Kantenlänge eines Liniensegments in mm. */
 export function lineSegmentLengthMm(seg: LineSegment): number {
-  return Math.hypot(seg.end.x - seg.start.x, seg.end.y - seg.start.y)
+  const dx = seg.end.x - seg.start.x
+  const dy = seg.end.y - seg.start.y
+  return Math.hypot(dx, dy)
 }
 
 /** Punkt auf Liniensegment; t in [0,1] von start nach end. */
-export function pointAtLineSegmentT(seg: LineSegment, t: number): Point {
+export function pointAtLineSegmentT(
+  seg: LineSegment,
+  t: number,
+  options?: { strict?: boolean },
+): Point {
+  if (options?.strict && (t < 0 || t > 1)) {
+    throw new Error('t must be between 0 and 1')
+  }
   const u = Math.min(1, Math.max(0, t))
+  const dx = seg.end.x - seg.start.x
+  const dy = seg.end.y - seg.start.y
   return {
-    x: seg.start.x + u * (seg.end.x - seg.start.x),
-    y: seg.start.y + u * (seg.end.y - seg.start.y),
+    x: seg.start.x + u * dx,
+    y: seg.start.y + u * dy,
   }
 }
 
@@ -19,6 +30,9 @@ export function pointAtLineSegmentT(seg: LineSegment, t: number): Point {
  * n = 1 → nur Mitte (t = 0.5).
  */
 export function evenlySpacedTsOnLineSegment(n: number): number[] {
+  if (!Number.isFinite(n)) throw new Error('n must be finite')
+  if (!Number.isInteger(n)) throw new Error('n must be an integer')
+  if (n < 0) throw new Error('n must be >= 0')
   if (n < 1) return []
   if (n === 1) return [0.5]
   return Array.from({ length: n }, (_, i) => (i + 1) / (n + 1))

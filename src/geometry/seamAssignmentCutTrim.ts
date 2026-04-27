@@ -372,9 +372,11 @@ export function applySeamAssignmentCutTrim(
   pieceA: PatternPiece,
   pieceB: PatternPiece,
   resolvedIndicesA: number[],
-  resolvedIndicesB: number[]
+  resolvedIndicesB: number[],
+  options?: { enabled?: boolean }
 ): { pieceA: PatternPiece; pieceB: PatternPiece } | null {
-  if (!SEAM_ASSIGNMENT_CUT_TRIM_ENABLED) return null
+  const enabled = options?.enabled ?? SEAM_ASSIGNMENT_CUT_TRIM_ENABLED
+  if (!enabled) return null
 
   let nextA = pieceA
   let nextB = pieceB
@@ -393,7 +395,8 @@ export function applySeamAssignmentCutTrim(
  */
 export function reapplySeamAssignmentCutTrimsForAllPieces(
   pieces: PatternPiece[],
-  seamAssignments: readonly SeamAssignment[]
+  seamAssignments: readonly SeamAssignment[],
+  options?: { enabled?: boolean }
 ): { pieces: PatternPiece[]; changed: boolean } {
   if (seamAssignments.length === 0) return { pieces, changed: false }
   let next = pieces
@@ -406,7 +409,8 @@ export function reapplySeamAssignmentCutTrimsForAllPieces(
       pieceA,
       pieceB,
       resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA),
-      resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)
+      resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB),
+      options
     )
     if (trimmed) {
       changed = true

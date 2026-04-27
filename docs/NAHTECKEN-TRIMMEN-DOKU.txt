@@ -1,0 +1,112 @@
+Naht trimmen (manuell) - Technische Doku
+=======================================
+
+Ziel und Scope
+--------------
+Die Funktion trimmt nur die Schnittkontur (`cutLine`) eines Zielteils gegen ein Referenzteil.
+Die Nahtlinie (`seamLine`) bleibt immer unverändert.
+
+Implementierung: `src/geometry/seamTrimByOverlap.ts`
+
+Kernbegriffe (mathematisch)
+---------------------------
+- "Betroffene Ecke":
+  Ein Ziel-Vertex v gilt als betroffen/entfernt, wenn
+  `vertexOnOrInsideTrimmedRegion(v, resultRing, eps) == false`.
+  Das bedeutet: v liegt weder auf dem Rand (Distanz <= eps) noch im Inneren des Ergebnispolygons.
+  Intern prüft die Funktion also explizit "Punkt-in-Polygon + Randdistanz <= eps".
+
+- "Größte resultierende Fläche":
+  Bei mehreren Intersection-Polygonen wird das Polygon mit maximaler
+  `abs(signedAreaRing)` in mm^2 gewählt.
+  Tie-Break bei gleicher Fläche (innerhalb 1e-6): Polygon mit mehr Ringpunkten.
+  Falls weiterhin gleich, bleibt das zuerst gefundene Polygon.
+
+- "Nur ein Eck-Trim":
+  Allgemeiner Modus (ohne angeklickte Ecke): genau 1 betroffene Ecke erlaubt.
+  0 oder >1 betroffene Ecken => kompletter Abbruch (kein Teil-Trim).
+
+Algorithmus (Ablauf)
+--------------------
+1) Eingang validieren
+   - `targetPiece.cutLine.length >= 3`
+   - `otherPiece.cutLine.length >= 3`
+
+2) Geometrie in Weltkoordinaten
+   - Zielring: `targetWorld`
+   - Referenzring (Basis): `otherClipWorldBase`
+   - Referenzring (inflated): `otherClipWorld`
+
+3) Robuste Intersection (inflated)
+   - `targetWorld INTERSECT otherClipWorld`
+   - Wenn kein Ergebnis: No-Op ("Kein Überlappungsbereich gefunden.")
+
+4) Gleichheitscheck (No-Op)
+   - Wenn Zielring und Ergebnisring innerhalb `contourEqualityEpsMm` praktisch gleich sind:
+     No-Op ("Keine überstehenden Außenbereiche gefunden.")
+
+5) Modus-Logik
+   a) Klick-Modus (`chosenCutVertexIndex` gesetzt):
+      - Gültiger Index?
+      - Ist die gewählte Ecke betroffen?
+      - Sind andere Ecken betroffen? => Abbruch
+      - Präzisionslauf mit nicht-inflated Referenzring:
+        `targetWorld INTERSECT otherClipWorldBase`
+        Dieses Ergebnis wird nur übernommen, wenn die gewählte Ecke dort ebenfalls betroffen ist.
+      - Zusatzschutz:
+        Alle nicht gewählten Ecken müssen auf dem Rand bleiben
+        (Distanz <= max(eps, NON_CHOSEN_CORNER_BOUNDARY_EPS_MM)).
+        `NON_CHOSEN_CORNER_BOUNDARY_EPS_MM = 0.25` ist ein minimaler numerischer Stabilitätspuffer.
+        Sonst Abbruch, um Kanten auf der Gegenseite zu schützen.
+
+   b) Allgemeiner Modus (kein Klick-Index):
+      - Genau 1 betroffene Ecke erlaubt, sonst Abbruch.
+
+6) Ergebnis-Kontur bauen
+   - Ringstart an Referenz ausrichten
+   - Welt -> Lokal
+   - `closedPointsToLineCurves`
+   - `validateContourAfterVertexMove`
+   - Gleichheitscheck gegen alte `cutLine` (innerhalb `contourEqualityEpsMm`)
+
+7) Rückgabe
+   - `ok: true, changed: false` bei No-Op
+   - `ok: true, changed: true, cutLine` bei erfolgreichem Trim
+   - `ok: false, message` bei Abbruch/Fehler
+
+Abbruchverhalten (explizit)
+---------------------------
+- Kein Schnittbereich -> No-Op
+- Ungültiger Klick-Index -> Abbruch
+- Gewählte Ecke nicht betroffen -> Abbruch
+- Mehr als eine betroffene Ecke im Klick-Modus -> Abbruch
+- Mehr als eine betroffene Ecke im allgemeinen Modus -> Abbruch
+- Nicht gewählte Ecken würden merklich vom Rand wegdriften -> Abbruch
+- Ungültige Zielkontur nach Aufbau/Validierung -> Abbruch
+
+Konfiguration
+-------------
+Typ: `TrimByOverlapConfig`
+- `vertexToleranceMm`:
+  Toleranz für Eck-Treffer / betroffen-Check in Standardprüfungen.
+- `clipInflateMm`:
+  Aufblasen des Referenzrings für robusten ersten Intersection-Lauf.
+- `contourEqualityEpsMm`:
+  Feinere Toleranz für Gleichheits- und Präzisionsprüfungen.
+
+Defaultwerte:
+- `vertexToleranceMm = 2.8`
+- `clipInflateMm = 1.1`
+- `contourEqualityEpsMm = 0.1`
+
+Wichtige Invarianten
+--------------------
+- `seamLine` wird nie verändert.
+- Im Klick-Modus wird nur lokal an der gewählten Ecke gearbeitet.
+- Gegenüberliegende Kanten sollen nicht mitgeschnitten werden.
+
+Hinweise
+--------
+- Die Logik nutzt feste tessellierte Rings (`64`/`48` Punkte pro Kurvensegment, nicht längenabhängig) für Clipper.
+- Bei sehr komplexen Kurven können adaptive Tessellation oder Cache sinnvoll sein.
+

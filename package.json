@@ -8,8 +8,10 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:secure": "concurrently -k -n VITE,AI \"vite\" \"node server/aiProxyServer.mjs\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "ai-proxy": "node server/aiProxyServer.mjs",
     "test": "vitest run",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{js,json}\""
@@ -17,6 +19,11 @@
   "dependencies": {
     "bezier-js": "^6.1.3",
     "clipper-lib": "^6.4.2",
+    "dompurify": "^3.3.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "react": "^18.3.1",
@@ -30,6 +37,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^9.1.2",
     "eslint-plugin-react-hooks": "^5.2.0",

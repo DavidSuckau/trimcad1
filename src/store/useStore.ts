@@ -737,6 +737,7 @@ export const useStore = create<Store>()(
     pieces: [],
     view: defaultView,
     seamAssignments: [],
+    autoAdjustSeamAssignmentCorners: true,
     notes: [],
     profileAssignments: [],
   },
@@ -888,7 +889,9 @@ export const useStore = create<Store>()(
       const seamAsg = s.workspace.seamAssignments ?? []
       const piecesAfterSeamTrim =
         didDeriveCutLineFromSeam && seamAsg.length > 0
-          ? reapplySeamAssignmentCutTrimsForAllPieces(pieces, seamAsg).pieces
+          ? reapplySeamAssignmentCutTrimsForAllPieces(pieces, seamAsg, {
+              enabled: s.workspace.autoAdjustSeamAssignmentCorners !== false,
+            }).pieces
           : pieces
       return {
         workspace: { ...s.workspace, pieces: piecesAfterSeamTrim },
@@ -1270,7 +1273,8 @@ export const useStore = create<Store>()(
     const seamAsg = after.workspace.seamAssignments ?? []
     const { pieces: trimmedPieces, changed: seamTrimChanged } = reapplySeamAssignmentCutTrimsForAllPieces(
       after.workspace.pieces,
-      seamAsg
+      seamAsg,
+      { enabled: after.workspace.autoAdjustSeamAssignmentCorners !== false }
     )
     if (seamTrimChanged) {
       set((st) => ({
@@ -1738,7 +1742,9 @@ export const useStore = create<Store>()(
       const seamAsg = s.workspace.seamAssignments ?? []
       const piecesAfterSeamTrim =
         didDeriveCutLineFromSeam && seamAsg.length > 0
-          ? reapplySeamAssignmentCutTrimsForAllPieces(pieces, seamAsg).pieces
+          ? reapplySeamAssignmentCutTrimsForAllPieces(pieces, seamAsg, {
+              enabled: s.workspace.autoAdjustSeamAssignmentCorners !== false,
+            }).pieces
           : pieces
       const mergedCurvePointToast = mergeWarnToasts(
         toastMessage,

@@ -348,6 +348,19 @@ export function pointAtPathLength(
   return { curveIndex: curves.length - 1, t: 1, point }
 }
 
+const CUT_LINE_CLOSED_LOOP_EPS_MM = 0.01
+
+/** True wenn Start der ersten Kurve mit Ende der letzten zusammenfällt (geschlossene Kontur in mm). */
+export function cutLineFormsClosedLoop(curves: Curve[]): boolean {
+  if (curves.length === 0) return false
+  const s = curves[0].start
+  const last = curves[curves.length - 1]
+  const e = last.type === 'line' ? last.end : bezierAt(last, 1)
+  const dx = s.x - e.x
+  const dy = s.y - e.y
+  return Math.hypot(dx, dy) < CUT_LINE_CLOSED_LOOP_EPS_MM
+}
+
 /** Eine durchgehende geschlossene Kontur (ein Pfad) – Füllung gilt für das ganze Teil. */
 export function closedPathD(curves: Curve[]): string {
   return curveToPathD(curves, { closed: true })

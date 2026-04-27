@@ -1,4 +1,5 @@
 import type { PatternPiece, ProfileAssignment } from '../types/model'
+import DOMPurify from 'dompurify'
 import type { OverviewImageSession } from '../workspace/workspaceOverviewBounds'
 import { buildWorkspaceOverviewSvgDocument } from '../workspace/buildWorkspaceOverviewSvg'
 
@@ -10,7 +11,24 @@ type Props = {
 }
 
 export function WorkspaceOverviewPreview({ pieces, imageSession, imageDataUrl, profileAssignments }: Props) {
-  const svgDoc = buildWorkspaceOverviewSvgDocument(pieces, imageSession, imageDataUrl, profileAssignments)
+  const unsafeSvgDoc = buildWorkspaceOverviewSvgDocument(pieces, imageSession, imageDataUrl, profileAssignments)
+  const svgDoc = unsafeSvgDoc
+    ? DOMPurify.sanitize(unsafeSvgDoc, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+        FORBID_TAGS: ['script', 'foreignObject'],
+        FORBID_ATTR: [
+          'onload',
+          'onerror',
+          'onclick',
+          'onmouseover',
+          'onmouseenter',
+          'onmouseleave',
+          'onfocus',
+          'onblur',
+          'onanimationstart',
+        ],
+      })
+    : null
 
   if (!svgDoc) {
     return (

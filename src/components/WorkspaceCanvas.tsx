@@ -960,7 +960,7 @@ const PieceGroup = memo(function PieceGroup({
   const { cutLine, seamLine, notches, drills, internalLines, internalCircles } = piece
   const ptPs = 1 / Math.max(viewZoom, 1e-6)
   const tx = pieceGroupTransformAttr(piece)
-  const { solidPath, dashedPath, hasSeam } = getPieceContourDisplayPaths(
+  const { solidPath, dashedPath, hasSeam, solidStrokeOnly, dashedStrokeOnly } = getPieceContourDisplayPaths(
     piece,
     !!cutSeamSwapped,
     notchIdBeingDragged ?? undefined,
@@ -975,6 +975,10 @@ const PieceGroup = memo(function PieceGroup({
         ? T.piece.fillSelected
         : T.piece.fill
   const interiorFillOpacity = interiorFill === 'none' ? undefined : (isSelected && T.piece.fill === 'none' ? 1 : 0.82)
+  const dashedFill = dashedStrokeOnly ? 'none' : interiorFill
+  const dashedFillOpacity = dashedStrokeOnly ? undefined : interiorFillOpacity
+  const solidFill = solidStrokeOnly ? 'none' : interiorFill
+  const solidFillOpacity = solidStrokeOnly ? undefined : interiorFillOpacity
 
   const solidStroke = isHovered ? T.piece.strokeHover
     : isSelected ? T.piece.strokeSelected
@@ -992,10 +996,11 @@ const PieceGroup = memo(function PieceGroup({
       {hasSeam && dashedPath && (
         <path
           d={dashedPath}
-          fill={interiorFill}
-          fillOpacity={interiorFillOpacity}
+          fill={dashedFill}
+          fillOpacity={dashedFillOpacity}
           stroke={T.piece.strokeDashed}
           strokeWidth={T.piece.strokeWidthDashed * ptPs}
+          strokeLinecap={dashedStrokeOnly ? 'round' : undefined}
           opacity={T.piece.dashOpacity}
           pointerEvents="none"
         />
@@ -1003,10 +1008,11 @@ const PieceGroup = memo(function PieceGroup({
       {solidPath && (
         <path
           d={solidPath}
-          fill={interiorFill}
-          fillOpacity={interiorFillOpacity}
+          fill={solidFill}
+          fillOpacity={solidFillOpacity}
           stroke={solidStroke}
           strokeWidth={solidStrokeWidth * ptPs}
+          strokeLinecap={solidStrokeOnly ? 'round' : undefined}
           pointerEvents="none"
         />
       )}
@@ -2452,10 +2458,30 @@ export function WorkspaceCanvas() {
           }
         }
         if (bestVi != null) {
-          const cutVi =
+          let cutVi =
             useSeamMaster && p.seamLine.length >= 3
               ? mapMasterVertexIndexToCutVertexIndex(p, bestVi)
               : bestVi
+          if (cutVi == null && p.cutLine.length > 0) {
+            // Fallback: falls Master->Cut-Mapping wegen stärkerer Konturabweichung fehlschlägt,
+            // die nächstliegende Cut-Ecke zur angeklickten Master-Ecke verwenden.
+            const masterVertexPos =
+              bestVi === 0 ? curvesForVertices[0].start : curvesForVertices[bestVi - 1].end
+            let nearestCutVi = 0
+            let nearestCutDist = Infinity
+            for (let cvi = 0; cvi < p.cutLine.length; cvi++) {
+              const cutVertexPos = cvi === 0 ? p.cutLine[0].start : p.cutLine[cvi - 1].end
+              const d = Math.hypot(
+                cutVertexPos.x - masterVertexPos.x,
+                cutVertexPos.y - masterVertexPos.y
+              )
+              if (d < nearestCutDist) {
+                nearestCutDist = d
+                nearestCutVi = cvi
+              }
+            }
+            cutVi = nearestCutVi
+          }
           if (cutVi == null) {
             setToastMessage('warn:Diese Ecke konnte der Schnittkontur nicht zugeordnet werden.')
             return

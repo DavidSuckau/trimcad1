@@ -9,13 +9,21 @@ import {
 } from '../types/model'
 
 export function SeamAssignmentMetaModal() {
-  const { seamAssignmentMetaDialogId, setSeamAssignmentMetaDialogId, updateSeamAssignmentMeta, setToastMessage, workspace } =
+  const {
+    seamAssignmentMetaDialogId,
+    setSeamAssignmentMetaDialogId,
+    updateSeamAssignmentMeta,
+    setToastMessage,
+    updateWorkspace,
+    workspace,
+  } =
     useStore(
       useShallow((s) => ({
         seamAssignmentMetaDialogId: s.seamAssignmentMetaDialogId,
         setSeamAssignmentMetaDialogId: s.setSeamAssignmentMetaDialogId,
         updateSeamAssignmentMeta: s.updateSeamAssignmentMeta,
         setToastMessage: s.setToastMessage,
+        updateWorkspace: s.updateWorkspace,
         workspace: s.workspace,
       })),
     )
@@ -29,12 +37,14 @@ export function SeamAssignmentMetaModal() {
 
   const [orderStr, setOrderStr] = useState('')
   const [kind, setKind] = useState<SeamAssignmentKindId | ''>('')
+  const [autoCornerAdjust, setAutoCornerAdjust] = useState(true)
 
   useEffect(() => {
     if (!assignment) return
     setOrderStr(assignment.orderNumber != null ? String(assignment.orderNumber) : '')
     setKind((assignment.seamKind as SeamAssignmentKindId | undefined) ?? '')
-  }, [assignment?.id, assignment?.orderNumber, assignment?.seamKind])
+    setAutoCornerAdjust(workspace.autoAdjustSeamAssignmentCorners !== false)
+  }, [assignment?.id, assignment?.orderNumber, assignment?.seamKind, workspace.autoAdjustSeamAssignmentCorners])
 
   if (!seamAssignmentMetaDialogId || !assignment || !pieceA || !pieceB) return null
 
@@ -62,6 +72,7 @@ export function SeamAssignmentMetaModal() {
       orderNumber,
       seamKind: kind === '' ? null : kind,
     })
+    updateWorkspace({ autoAdjustSeamAssignmentCorners: autoCornerAdjust })
   }
 
   return (
@@ -97,6 +108,14 @@ export function SeamAssignmentMetaModal() {
               </option>
             ))}
           </select>
+        </label>
+        <label className="nahtzugabe-dialog-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={autoCornerAdjust}
+            onChange={(e) => setAutoCornerAdjust(e.target.checked)}
+          />
+          <span>Ecken bei Nahtzuordnung automatisch anpassen</span>
         </label>
         <div className="nahtzugabe-dialog-actions" style={{ justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
           <button

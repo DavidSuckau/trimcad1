@@ -30,7 +30,6 @@ function toOptionalNumber(v: string): number | undefined {
 }
 
 export function ConfiguratorAiChatPanel({ kindId, partLabel, currentParams, onApplyProposal }: Props) {
-  const [openAiApiKey, setOpenAiApiKey] = useState('')
   const [freeText, setFreeText] = useState('')
   const [structuredInput, setStructuredInput] = useState<Record<string, string>>({})
   const [proposal, setProposal] = useState<ConfiguratorPatchProposal | null>(null)
@@ -63,7 +62,6 @@ export function ConfiguratorAiChatPanel({ kindId, partLabel, currentParams, onAp
     setIsLoading(true)
     try {
       const result = await requestConfiguratorPatchProposal({
-        apiKey: openAiApiKey,
         kindId,
         partLabel,
         freeText,
@@ -85,17 +83,6 @@ export function ConfiguratorAiChatPanel({ kindId, partLabel, currentParams, onAp
       <p style={{ margin: '0 0 10px', fontSize: 12, color: '#555' }}>
         Freitext + strukturierte Maße. Vorschlaege werden erst nach deiner Bestaetigung angewendet.
       </p>
-
-      <label className="nahtzugabe-dialog-label">
-        <span>OpenAI API-Key</span>
-        <input
-          type="password"
-          className="nahtzugabe-dialog-input"
-          value={openAiApiKey}
-          onChange={(e) => setOpenAiApiKey(e.target.value)}
-          placeholder="sk-..."
-        />
-      </label>
 
       <label className="nahtzugabe-dialog-label" style={{ marginTop: 8 }}>
         <span>Anweisung</span>

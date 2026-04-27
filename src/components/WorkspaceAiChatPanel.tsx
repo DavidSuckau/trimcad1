@@ -51,7 +51,6 @@ export function WorkspaceAiChatPanel() {
   const selectedPieceIds = useStore((s) => s.selectedPieceIds)
 
   const [expanded, setExpanded] = useState(false)
-  const [openAiApiKey, setOpenAiApiKey] = useState('')
   const [freeText, setFreeText] = useState('')
   const [attachedImage, setAttachedImage] = useState<AttachedImage | null>(null)
   const [proposal, setProposal] = useState<WorkspaceChatProposal | null>(null)
@@ -76,10 +75,9 @@ export function WorkspaceAiChatPanel() {
     })
   }, [pieces])
 
-  const canAskHelp =
-    openAiApiKey.trim().length > 0 && freeText.trim().length > 0 && !isLoading
+  const canAskHelp = freeText.trim().length > 0 && !isLoading
   const canRequestProposal =
-    openAiApiKey.trim().length > 0 && (freeText.trim().length > 0 || attachedImage != null) && !isLoading
+    (freeText.trim().length > 0 || attachedImage != null) && !isLoading
 
   const requestHelpFromDocs = async () => {
     setError(null)
@@ -88,7 +86,6 @@ export function WorkspaceAiChatPanel() {
     setLoadingKind('help')
     try {
       const text = await requestWorkspaceHelpAnswer({
-        apiKey: openAiApiKey,
         question: freeText,
         pieceCount: pieces.length,
         selectedCount: selectedPieceIds.length,
@@ -111,7 +108,6 @@ export function WorkspaceAiChatPanel() {
     setLoadingKind('proposal')
     try {
       const result = await requestWorkspaceChatProposal({
-        apiKey: openAiApiKey,
         freeText,
         pieceCount: pieces.length,
         selectedCount: selectedPieceIds.length,
@@ -184,17 +180,6 @@ export function WorkspaceAiChatPanel() {
         Projekt-Dokumentation. <strong>Aktionen:</strong> Text und optional Screenshot/Skizze → <em>Vorschlag holen</em> für
         Kerben, Bohrungen, neue Teile (erst nach Bestätigung).
       </p>
-      <label className="nahtzugabe-dialog-label">
-        <span>OpenAI API-Key</span>
-        <input
-          type="password"
-          className="nahtzugabe-dialog-input"
-          value={openAiApiKey}
-          onChange={(e) => setOpenAiApiKey(e.target.value)}
-          placeholder="sk-..."
-          autoComplete="off"
-        />
-      </label>
       <label className="nahtzugabe-dialog-label" style={{ marginTop: 8 }}>
         <span>Anweisung</span>
         <textarea
