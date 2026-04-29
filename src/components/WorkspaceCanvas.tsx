@@ -1439,6 +1439,13 @@ const PieceGroup = memo(function PieceGroup({
 export function WorkspaceCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+  const activeTouchPointsRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
+  const touchPanPointerIdRef = useRef<number | null>(null)
+  const pinchStartRef = useRef<{
+    distance: number
+    centerClient: { x: number; y: number }
+    view: { zoom: number; panX: number; panY: number }
+  } | null>(null)
   const {
     workspace,
     selectedPieceIds,
@@ -2177,6 +2184,42 @@ export function WorkspaceCanvas() {
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!containerRef.current) return
+      const navigationOnlyPointer =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(pointer: coarse)').matches &&
+        e.pointerType !== 'pen'
+      if (navigationOnlyPointer) {
+        e.preventDefault()
+        closeSegmentMenu()
+        setWorkspaceImageQuickMenu(null)
+        if (e.pointerType === 'touch') {
+          activeTouchPointsRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          const activeTouches = [...activeTouchPointsRef.current.values()]
+          if (activeTouches.length >= 2) {
+            const a = activeTouches[0]
+            const b = activeTouches[1]
+            const distance = Math.max(Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), 1)
+            pinchStartRef.current = {
+              distance,
+              centerClient: { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 },
+              view: { zoom: view.zoom, panX: view.panX, panY: view.panY },
+            }
+            touchPanPointerIdRef.current = null
+            setDragging(null)
+          } else {
+            pinchStartRef.current = null
+            touchPanPointerIdRef.current = e.pointerId
+            setDragging({
+              kind: 'pan',
+              startClient: { x: e.clientX, y: e.clientY },
+              startPan: { x: view.panX, y: view.panY },
+            })
+          }
+        }
+        return
+      }
       /** UI-Leiste Fensterauswahl: nicht als Canvas-Klick/Marquee behandeln (sonst blockiert preventDefault das Dropdown). */
       if (e.target instanceof Element && e.target.closest('.batch-selection-bar')) {
         return
@@ -3425,6 +3468,55 @@ export function WorkspaceCanvas() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      const navigationOnlyPointer =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(pointer: coarse)').matches &&
+        e.pointerType !== 'pen'
+      if (navigationOnlyPointer) {
+        if (e.pointerType !== 'touch') return
+        const tracked = activeTouchPointsRef.current.get(e.pointerId)
+        if (!tracked) return
+        e.preventDefault()
+        activeTouchPointsRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY })
+        const activeTouches = [...activeTouchPointsRef.current.values()]
+        if (activeTouches.length >= 2) {
+          const a = activeTouches[0]
+          const b = activeTouches[1]
+          const centerClient = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 }
+          const distance = Math.max(Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), 1)
+          if (!pinchStartRef.current) {
+            pinchStartRef.current = {
+              distance,
+              centerClient,
+              view: { zoom: view.zoom, panX: view.panX, panY: view.panY },
+            }
+          }
+          if (!svgRef.current || !pinchStartRef.current) return
+          const svgRect = svgRef.current.getBoundingClientRect()
+          const scale = Math.min(svgRect.width / VIEWBOX_WIDTH, svgRect.height / VIEWBOX_HEIGHT)
+          const offsetX = (svgRect.width - VIEWBOX_WIDTH * scale) / 2
+          const offsetY = (svgRect.height - VIEWBOX_HEIGHT * scale) / 2
+          const pinch = pinchStartRef.current
+          const centerSvgX = (centerClient.x - svgRect.left - offsetX) / scale
+          const centerSvgY = (centerClient.y - svgRect.top - offsetY) / scale
+          const startCenterSvgX = (pinch.centerClient.x - svgRect.left - offsetX) / scale
+          const startCenterSvgY = (pinch.centerClient.y - svgRect.top - offsetY) / scale
+          const startZoom = pinch.view.zoom
+          const factor = distance / Math.max(pinch.distance, 1)
+          const newZoom = Math.max(0.1, Math.min(10, startZoom * factor))
+          const worldCenterX = (startCenterSvgX - pinch.view.panX) / startZoom
+          const worldCenterY = (startCenterSvgY - pinch.view.panY) / startZoom
+          setView({
+            zoom: newZoom,
+            panX: centerSvgX - worldCenterX * newZoom,
+            panY: centerSvgY - worldCenterY * newZoom,
+          })
+          return
+        }
+        pinchStartRef.current = null
+        if (dragging?.kind !== 'pan' || touchPanPointerIdRef.current !== e.pointerId) return
+      }
       const worldSym = toWorld(e.clientX, e.clientY)
       if (pieceSymmetryState?.phase === 'axisB' && pieceSymmetryState.axisA) {
         setSymmetryHoverWorld(worldSym)
@@ -5061,6 +5153,19 @@ export function WorkspaceCanvas() {
   }, [])
 
   const handlePointerUp = useCallback((_e?: React.PointerEvent) => {
+    if (_e?.pointerType === 'touch') {
+      activeTouchPointsRef.current.delete(_e.pointerId)
+      if (activeTouchPointsRef.current.size < 2) pinchStartRef.current = null
+      if (dragging?.kind === 'pan' && touchPanPointerIdRef.current === _e.pointerId) {
+        setDragging(null)
+        touchPanPointerIdRef.current = null
+      }
+      if (activeTouchPointsRef.current.size === 0) {
+        touchPanPointerIdRef.current = null
+      } else {
+        return
+      }
+    }
     if (dragging?.kind === 'digitizeDrag') {
       finishDigitizeDrag()
       setDragging(null)
@@ -5379,8 +5484,12 @@ export function WorkspaceCanvas() {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onPointerLeave={() => {
         handlePointerUp()
+        activeTouchPointsRef.current.clear()
+        pinchStartRef.current = null
+        touchPanPointerIdRef.current = null
         setHoveredDeletablePoint(null)
         setHoveredDeletableNotch(null)
         setNotchPreview(null)
