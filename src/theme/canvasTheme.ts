@@ -40,6 +40,10 @@ export const canvasTheme = {
     /** Hover auf Teil */
     strokeHover: '#e53935',
     strokeWidthHover: 0.8,
+    /** Dialog-Hover (Nahtanpassung): visuell klarer als normaler Hover. */
+    strokeDialogHover: '#1e5fb0',
+    strokeWidthDialogHover: 0.9,
+    fillDialogHover: 'none',
     /** Gestrichelte Gegen-Kontur (Naht vs Schnitt) */
     strokeDashed: '#888888',
     strokeWidthDashed: 0.5,
@@ -67,6 +71,8 @@ export const canvasTheme = {
     stroke: '#000000',
     fill: '#ffffff',
     strokeHover: '#1565c0',
+    roleFill: '#1565c0',
+    roleFillHover: '#0d47a1',
   },
 
   // ── Bohrungen (Drills) ───────────────────────────────────────────
@@ -238,6 +244,9 @@ export const canvasThemeDark: CanvasTheme = {
     strokeWidthSelected: 0.7,
     strokeHover: '#FF5050',
     strokeWidthHover: 0.8,
+    strokeDialogHover: '#7ec3f8',
+    strokeWidthDialogHover: 0.9,
+    fillDialogHover: 'none',
     strokeDashed: '#999999',
     strokeWidthDashed: 0.5,
     dashOpacity: 0.5,
@@ -259,6 +268,8 @@ export const canvasThemeDark: CanvasTheme = {
     stroke: '#ffffff',
     fill: '#2D2F31',
     strokeHover: '#4AA5FF',
+    roleFill: '#4AA5FF',
+    roleFillHover: '#82b1ff',
   },
 
   drill: {

@@ -43,6 +43,8 @@ import {
   getSubSegments,
   getSeamEdgeCurves,
   getCurvesForSeamEdge,
+  deriveNotchRoleRangeOnEdge,
+  edgeLengthInNotchRange,
   mapMasterVertexIndexToCutVertexIndex,
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
@@ -63,7 +65,7 @@ import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
-import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType } from '../types/model'
+import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType, NotchRole } from '../types/model'
 import { findMatchingNotchPresetIndex, modelNotchFieldsFromPreset } from '../notch/notchPresetMapping'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
@@ -76,6 +78,11 @@ let T: CanvasTheme = canvasTheme
 const GRID_SIZE = 10
 /** Kerben Kantenmitte: max. gleichzeitig verteilte Kerben pro Kante. */
 const NOTCH_EDGE_LINE_MAX = 30
+const NOTCH_ROLE_LABELS: Record<NotchRole, string> = {
+  nahtanfang: 'Nahtanfang',
+  nahtende: 'Nahtende',
+  beides: 'Beides',
+}
 
 /**
  * Kontur-/Bearbeitungspunkte: Größe in „Bildschirm-SVG-Einheiten“ (nach view.zoom im Parent).
@@ -904,6 +911,7 @@ const PieceGroup = memo(function PieceGroup({
   piece,
   isSelected,
   isHovered,
+  isDialogHovered = false,
   hoveredSegmentCurveIndex,
   hoveredSegmentOnSeam = false,
   onPointerDown,
@@ -922,6 +930,10 @@ const PieceGroup = memo(function PieceGroup({
   showInternalLines,
   showPieceNames,
   showContourMeasurements,
+  showRotationRing,
+  isRotationRingHovered,
+  isRotationHandleHovered,
+  isRotationActive,
   hoveredInternalLineCurveIndex,
   hoveredInternalCircleId,
   onContextMenu,
@@ -931,6 +943,7 @@ const PieceGroup = memo(function PieceGroup({
   piece: PatternPiece
   isSelected: boolean
   isHovered: boolean
+  isDialogHovered?: boolean
   hoveredSegmentCurveIndex: number | null
   hoveredSegmentOnSeam?: boolean
   onPointerDown: (e: React.PointerEvent) => void
@@ -948,6 +961,10 @@ const PieceGroup = memo(function PieceGroup({
   showInternalLines?: boolean
   showPieceNames?: boolean
   showContourMeasurements?: boolean
+  showRotationRing?: boolean
+  isRotationRingHovered?: boolean
+  isRotationHandleHovered?: boolean
+  isRotationActive?: boolean
   hoveredInternalLineCurveIndex?: number | null
   hoveredInternalCircleId?: string | null
   onContextMenu?: (e: React.MouseEvent) => void
@@ -966,26 +983,31 @@ const PieceGroup = memo(function PieceGroup({
     notchIdBeingDragged ?? undefined,
   )
   const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
+  const isDialogHighlightActive = isDialogHovered
   const interiorFill =
-    piece.fillInterior != null && piece.fillInterior !== false
-      ? typeof piece.fillInterior === 'string'
-        ? piece.fillInterior
-        : materialFill ?? T.piece.fillSelected
-      : isSelected
-        ? T.piece.fillSelected
-        : T.piece.fill
+    isDialogHighlightActive
+      ? T.piece.fillDialogHover
+      : piece.fillInterior != null && piece.fillInterior !== false
+        ? typeof piece.fillInterior === 'string'
+          ? piece.fillInterior
+          : materialFill ?? T.piece.fillSelected
+        : isSelected
+          ? T.piece.fillSelected
+          : T.piece.fill
   const interiorFillOpacity = interiorFill === 'none' ? undefined : (isSelected && T.piece.fill === 'none' ? 1 : 0.82)
   const dashedFill = dashedStrokeOnly ? 'none' : interiorFill
   const dashedFillOpacity = dashedStrokeOnly ? undefined : interiorFillOpacity
   const solidFill = solidStrokeOnly ? 'none' : interiorFill
   const solidFillOpacity = solidStrokeOnly ? undefined : interiorFillOpacity
 
-  const solidStroke = isHovered ? T.piece.strokeHover
-    : isSelected ? T.piece.strokeSelected
-    : T.piece.stroke
-  const solidStrokeWidth = isHovered ? T.piece.strokeWidthHover
-    : isSelected ? T.piece.strokeWidthSelected
-    : T.piece.strokeWidth
+  const solidStroke = isDialogHighlightActive ? T.piece.strokeDialogHover
+    : isHovered ? T.piece.strokeHover
+      : isSelected ? T.piece.strokeSelected
+        : T.piece.stroke
+  const solidStrokeWidth = isDialogHighlightActive ? T.piece.strokeWidthDialogHover
+    : isHovered ? T.piece.strokeWidthHover
+      : isSelected ? T.piece.strokeWidthSelected
+        : T.piece.strokeWidth
 
   return (
     <g
@@ -1098,10 +1120,11 @@ const PieceGroup = memo(function PieceGroup({
         }
         const isHovered = hoveredNotchId === n.id
         const stroke = isHovered ? T.notch.strokeHover : NOTCH_STROKE
+        const roleFill = n.role ? (isHovered ? T.notch.roleFillHover : T.notch.roleFill) : T.notch.fill
         const strokeW = isHovered ? 0.7 : 0.4
         return (
           <g key={n.id} pointerEvents="none">
-            {cutFillD ? <path d={cutFillD} fill={T.notch.fill} stroke="none" /> : null}
+            {cutFillD ? <path d={cutFillD} fill={roleFill} stroke="none" /> : null}
             <path
               d={cutEdgesD}
               fill="none"
@@ -1110,7 +1133,7 @@ const PieceGroup = memo(function PieceGroup({
               strokeLinejoin="round"
               strokeLinecap={cutIsLine ? 'round' : 'butt'}
             />
-            {seamFillD ? <path d={seamFillD} fill={T.notch.fill} stroke="none" /> : null}
+            {seamFillD ? <path d={seamFillD} fill={roleFill} stroke="none" /> : null}
             {seamEdgesD ? (
               <path
                 d={seamEdgesD}
@@ -1373,7 +1396,13 @@ const PieceGroup = memo(function PieceGroup({
       )}
       {isSelected && cutLine.length >= 3 && (() => {
         const pivot = getPiecePivotLocal(piece)
-        const handleY = pivot.y - 25
+        const bounds = curvesBounds(cutLine)
+        if (!bounds) return null
+        const rotationRadius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
+        const handleY = pivot.y - rotationRadius
+        const ringInteractive = !!isRotationRingHovered || !!isRotationHandleHovered || !!isRotationActive
+        const handleScale = isRotationHandleHovered ? 1.1 : 1
+        const handleRadius = ROTATION_HANDLE_BASE_RADIUS * ptPs * handleScale
         return (
           <>
             <g style={{ cursor: 'grab' }} pointerEvents="all">
@@ -1407,12 +1436,49 @@ const PieceGroup = memo(function PieceGroup({
                 pointerEvents="none"
               />
             </g>
-            <g style={{ cursor: 'grab' }}>
-              <title>Drehgriff: Ziehen zum Drehen des Teils</title>
+            {showRotationRing && (
+              <circle
+                cx={pivot.x}
+                cy={pivot.y}
+                r={rotationRadius}
+                fill="none"
+                stroke={ringInteractive ? T.selection.rotationHandleAccent : '#7f7f7f'}
+                strokeWidth={ROTATION_RING_STROKE_BASE * ptPs}
+                opacity={ringInteractive ? ROTATION_RING_ALPHA_HOVER : ROTATION_RING_ALPHA_IDLE}
+                pointerEvents="none"
+              />
+            )}
+            {showRotationRing && (
+              <g style={{ cursor: isRotationActive ? 'grabbing' : 'grab' }}>
+                <title>Drehgriff: Ziehen zum Drehen des Teils</title>
+                <circle
+                  cx={pivot.x}
+                  cy={handleY}
+                  r={handleRadius}
+                  fill={T.selection.rotationHandleFill}
+                  stroke={T.selection.rotationHandleStroke}
+                  strokeWidth={1.2 * ptPs}
+                />
+                <path
+                  d={`M ${pivot.x + 5 * ptPs * handleScale} ${handleY} A ${5 * ptPs * handleScale} ${5 * ptPs * handleScale} 0 0 1 ${pivot.x - 5 * ptPs * handleScale} ${handleY}`}
+                  fill="none"
+                  stroke={T.selection.rotationHandleStroke}
+                  strokeWidth={1.1 * ptPs}
+                  strokeLinecap="round"
+                />
+                <path
+                  d={`M ${pivot.x - 5 * ptPs * handleScale} ${handleY} L ${pivot.x - 6 * ptPs * handleScale} ${handleY + 1.2 * ptPs * handleScale} L ${pivot.x - 4.2 * ptPs * handleScale} ${handleY + 0.4 * ptPs * handleScale} Z`}
+                  fill={T.selection.rotationHandleAccent}
+                />
+              </g>
+            )}
+            {!showRotationRing && (
+              <g style={{ cursor: 'grab' }}>
+                <title>Drehgriff: Ziehen zum Drehen des Teils</title>
               <circle
                 cx={pivot.x}
                 cy={handleY}
-                r={10 * ptPs}
+                r={ROTATION_HANDLE_BASE_RADIUS * ptPs}
                 fill={T.selection.rotationHandleFill}
                 stroke={T.selection.rotationHandleStroke}
                 strokeWidth={1.2 * ptPs}
@@ -1428,7 +1494,8 @@ const PieceGroup = memo(function PieceGroup({
                 d={`M ${pivot.x - 5 * ptPs} ${handleY} L ${pivot.x - 6 * ptPs} ${handleY + 1.2 * ptPs} L ${pivot.x - 4.2 * ptPs} ${handleY + 0.4 * ptPs} Z`}
                 fill={T.selection.rotationHandleAccent}
               />
-            </g>
+              </g>
+            )}
           </>
         )
       })()}
@@ -1565,6 +1632,7 @@ export function WorkspaceCanvas() {
     addProfileAssignment,
     setProfileDialogAssignmentId,
     canvasThemeMode,
+    seamAdjustmentHoverPieceId,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -1685,6 +1753,7 @@ export function WorkspaceCanvas() {
       addProfileAssignment: s.addProfileAssignment,
       setProfileDialogAssignmentId: s.setProfileDialogAssignmentId,
       canvasThemeMode: s.canvasThemeMode,
+      seamAdjustmentHoverPieceId: s.seamAdjustmentHoverPieceId,
     })),
   )
   T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
@@ -1788,6 +1857,9 @@ export function WorkspaceCanvas() {
     | null
   >(null)
   const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
+  const [hoveredPivotForRotationPieceId, setHoveredPivotForRotationPieceId] = useState<string | null>(null)
+  const [hoveredRotationRingPieceId, setHoveredRotationRingPieceId] = useState<string | null>(null)
+  const [hoveredRotationHandlePieceId, setHoveredRotationHandlePieceId] = useState<string | null>(null)
   const [rotateAroundPivotPieceId, setRotateAroundPivotPieceId] = useState<string | null>(null)
   /** Kerbe bearbeiten (Typ/Breite/Tiefe); unabhängig vom Hover, damit das Panel bedienbar bleibt. */
   const [notchEditTarget, setNotchEditTarget] = useState<{ pieceId: string; notchId: string } | null>(null)
@@ -2581,6 +2653,11 @@ export function WorkspaceCanvas() {
         if (existing) {
           setProfileDialogAssignmentId(existing.id)
         } else {
+          const profilePiece = pieces.find((p) => p.id === hoveredProfileEdge.pieceId)
+          const roleRange =
+            profilePiece != null
+              ? deriveNotchRoleRangeOnEdge(profilePiece, hoveredProfileEdge.curveIndices)
+              : null
           const usedKeys = new Set(profileAssignments.map((pa) => pa.profileKey))
           let nextKey = 'A'
           for (let c = 65; c <= 90; c++) {
@@ -2589,6 +2666,8 @@ export function WorkspaceCanvas() {
           const newId = addProfileAssignment({
             pieceId: hoveredProfileEdge.pieceId,
             edgeIndex: hoveredProfileEdge.edgeIndex,
+            startNotchId: roleRange?.startNotchId,
+            endNotchId: roleRange?.endNotchId,
             profileName: '',
             profileKey: nextKey,
           })
@@ -2931,17 +3010,23 @@ export function WorkspaceCanvas() {
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
-        const ROTATION_HANDLE_OFFSET = 25
-        const ROTATION_HANDLE_HIT = 18
+        const rotationHitMm = containerRef.current
+          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(ROTATION_RING_HOVER_RADIUS_PX, view, svgRef.current, containerRef.current))
+          : 10
         const PIVOT_HIT = 20
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+          const bounds = curvesBounds(p.cutLine)
+          if (!bounds) continue
           const pivot = getPiecePivotLocal(p)
-          const handleLocal = { x: pivot.x, y: pivot.y - ROTATION_HANDLE_OFFSET }
+          const radius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
+          const handleLocal = { x: pivot.x, y: pivot.y - radius }
           const handleWorld = pieceLocalToWorld(handleLocal, p)
-          const dist = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
-          if (dist < ROTATION_HANDLE_HIT) {
+          const distHandle = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
+          const pivotWorld = pieceLocalToWorld(pivot, p)
+          const distRing = Math.abs(Math.hypot(world.x - pivotWorld.x, world.y - pivotWorld.y) - radius)
+          if (distHandle < rotationHitMm || distRing < rotationHitMm) {
             const worldCenter = pieceLocalToWorld(pivot, p)
             const startWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
             setDragging({
@@ -3465,6 +3550,11 @@ export function WorkspaceCanvas() {
   /** Hover/Klick auf Notch – bei Überlappung mit Eckpunkt gewinnt der nähere. */
   const NOTCH_HOVER_HIT = 6
   const NOTCH_CLICK_HIT = 6
+const ROTATION_RING_HOVER_RADIUS_PX = 26
+const ROTATION_RING_STROKE_BASE = 1.2
+const ROTATION_RING_ALPHA_IDLE = 0.5
+const ROTATION_RING_ALPHA_HOVER = 0.68
+const ROTATION_HANDLE_BASE_RADIUS = 10
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -3591,6 +3681,44 @@ export function WorkspaceCanvas() {
           : POINT_INSERT_HIT_FALLBACK_MM
         const worldImg = toWorld(e.clientX, e.clientY)
         lastPointerClientRef.current = { x: e.clientX, y: e.clientY }
+        if (tool === 'select') {
+          const rotationHoverHitMm = ctnM
+            ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(ROTATION_RING_HOVER_RADIUS_PX, view, svgM, ctnM))
+            : 10
+          let pivotHit: { pieceId: string; dist: number } | null = null
+          let ringHit: { pieceId: string; dist: number } | null = null
+          let handleHit: { pieceId: string; dist: number } | null = null
+          for (let i = pieces.length - 1; i >= 0; i--) {
+            const p = pieces[i]
+            if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+            const bounds = curvesBounds(p.cutLine)
+            if (!bounds) continue
+            const pivot = getPiecePivotLocal(p)
+            const radius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
+            if (radius <= 0) continue
+            const worldPivot = pieceLocalToWorld(pivot, p)
+            const dPivot = Math.hypot(worldImg.x - worldPivot.x, worldImg.y - worldPivot.y)
+            if (dPivot <= rotationHoverHitMm && (!pivotHit || dPivot < pivotHit.dist)) {
+              pivotHit = { pieceId: p.id, dist: dPivot }
+            }
+            const dRing = Math.abs(dPivot - radius)
+            if (dRing <= rotationHoverHitMm && (!ringHit || dRing < ringHit.dist)) {
+              ringHit = { pieceId: p.id, dist: dRing }
+            }
+            const handleWorld = pieceLocalToWorld({ x: pivot.x, y: pivot.y - radius }, p)
+            const dHandle = Math.hypot(worldImg.x - handleWorld.x, worldImg.y - handleWorld.y)
+            if (dHandle <= rotationHoverHitMm && (!handleHit || dHandle < handleHit.dist)) {
+              handleHit = { pieceId: p.id, dist: dHandle }
+            }
+          }
+          setHoveredPivotForRotationPieceId(pivotHit?.pieceId ?? null)
+          setHoveredRotationRingPieceId(ringHit?.pieceId ?? null)
+          setHoveredRotationHandlePieceId(handleHit?.pieceId ?? null)
+        } else {
+          setHoveredPivotForRotationPieceId(null)
+          setHoveredRotationRingPieceId(null)
+          setHoveredRotationHandlePieceId(null)
+        }
         let imgHover = false
         if (imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
           if (isWorldInsideWorkspaceImage(worldImg, imageDigitizeSession)) {
@@ -4199,7 +4327,11 @@ export function WorkspaceCanvas() {
         const worldCenter = pieceLocalToWorld(pivot, piece)
         const world = toWorld(e.clientX, e.clientY)
         const currentWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
-        const deltaAngle = currentWorldAngle - dragging.startWorldAngle
+        let deltaAngle = currentWorldAngle - dragging.startWorldAngle
+        if (e.shiftKey) {
+          const snapStepDeg = 15
+          deltaAngle = Math.round(deltaAngle / snapStepDeg) * snapStepDeg
+        }
         setPieceRotation(dragging.pieceId, dragging.startRotation + deltaAngle)
       } else if (dragging.kind === 'pivot') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -5498,6 +5630,9 @@ export function WorkspaceCanvas() {
         setHoveredSeamAssignmentId(null)
         setHoveredInternalLine(null)
         setHoveredInternalCircle(null)
+        setHoveredPivotForRotationPieceId(null)
+        setHoveredRotationRingPieceId(null)
+        setHoveredRotationHandlePieceId(null)
       }}
       onWheel={handleWheel}
       style={{
@@ -5506,6 +5641,10 @@ export function WorkspaceCanvas() {
         cursor:
           rulerMode
             ? 'crosshair'
+            : dragging?.kind === 'rotate'
+              ? 'grabbing'
+              : (hoveredRotationRingPieceId != null || hoveredRotationHandlePieceId != null) && tool === 'select'
+                ? 'grab'
             : tool === 'pan'
               ? 'grab'
               : tool === 'rectangle' ||
@@ -5609,6 +5748,22 @@ export function WorkspaceCanvas() {
                       </option>
                     )
                   })}
+                </select>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ whiteSpace: 'nowrap' }}>Naht-Rolle</span>
+                <select
+                  value={editNotch.role ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    updateNotch(editPiece.id, editNotch.id, { role: v === '' ? undefined : (v as NotchRole) })
+                  }}
+                  style={{ fontSize: 13, minWidth: 180 }}
+                >
+                  <option value="">Keine</option>
+                  <option value="nahtanfang">{NOTCH_ROLE_LABELS.nahtanfang}</option>
+                  <option value="nahtende">{NOTCH_ROLE_LABELS.nahtende}</option>
+                  <option value="beides">{NOTCH_ROLE_LABELS.beides}</option>
                 </select>
               </label>
               {matchedPreset === null && (
@@ -6309,6 +6464,7 @@ export function WorkspaceCanvas() {
               piece={piece}
               viewZoom={view.zoom}
               isSelected={selectedPieceIds.includes(piece.id)}
+              isDialogHovered={seamAdjustmentHoverPieceId === piece.id}
               isHovered={hoveredPieceId === piece.id}
               hoveredSegmentCurveIndex={effectiveSegmentForHighlight?.pieceId === piece.id ? effectiveSegmentForHighlight.curveIndex : null}
               hoveredSegmentOnSeam={
@@ -6334,6 +6490,15 @@ export function WorkspaceCanvas() {
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
               showContourMeasurements={showContourMeasurements}
+              showRotationRing={
+                selectedPieceIds.includes(piece.id) &&
+                (hoveredPivotForRotationPieceId === piece.id ||
+                  rotateAroundPivotPieceId === piece.id ||
+                  (dragging != null && dragging.kind === 'rotate'))
+              }
+              isRotationRingHovered={hoveredRotationRingPieceId === piece.id}
+              isRotationHandleHovered={hoveredRotationHandlePieceId === piece.id}
+              isRotationActive={dragging != null && dragging.kind === 'rotate' && dragging.pieceId === piece.id}
               notchIdBeingDragged={
                 dragging?.kind === 'notchMove' &&
                 dragging.pieceId === piece.id &&
@@ -7431,7 +7596,13 @@ export function WorkspaceCanvas() {
             const endW = pieceLocalToWorld(endL, piece)
             const angleDeg = (Math.atan2(endW.y - startW.y, endW.x - startW.x) * 180) / Math.PI
 
-            const lengthMm = edgeTotalLength(piece, edge.curveIndices)
+            const lengthMm = edgeLengthInNotchRange(
+              piece,
+              edge.curveIndices,
+              pa.startNotchId && pa.endNotchId
+                ? { startNotchId: pa.startNotchId, endNotchId: pa.endNotchId }
+                : null
+            )
             const labelParts: string[] = []
             if (pa.supplierNumber) labelParts.push(pa.supplierNumber)
             if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)

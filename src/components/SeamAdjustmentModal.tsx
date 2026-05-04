@@ -10,6 +10,7 @@ import {
 export function SeamAdjustmentModal() {
   const seamAdjustmentDialog = useStore((s) => s.seamAdjustmentDialog)
   const setSeamAdjustmentDialog = useStore((s) => s.setSeamAdjustmentDialog)
+  const setSeamAdjustmentHoverPieceId = useStore((s) => s.setSeamAdjustmentHoverPieceId)
   const adjustSeamNotches = useStore((s) => s.adjustSeamNotches)
   const workspace = useStore((s) => s.workspace)
 
@@ -48,7 +49,13 @@ export function SeamAdjustmentModal() {
   const canAdjust = !notchMismatch && ncA >= 1 && diffs.length > 0
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={() => setSeamAdjustmentDialog(null)} role="dialog" aria-modal="true" aria-label="Nahtanpassung">
+    <div
+      className="nahtzugabe-dialog-overlay"
+      onClick={() => setSeamAdjustmentDialog(null)}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Nahtanpassung"
+    >
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 320 }}>
         <h3 className="nahtzugabe-dialog-title">Nahtanpassung</h3>
 
@@ -91,6 +98,8 @@ export function SeamAdjustmentModal() {
               color: canAdjust ? '#fff' : '#999',
               cursor: canAdjust ? 'pointer' : 'default',
             }}
+            onMouseEnter={() => setSeamAdjustmentHoverPieceId(pieceB.id)}
+            onMouseLeave={() => setSeamAdjustmentHoverPieceId(null)}
             onClick={() => adjustSeamNotches(seamAdjustmentDialog, 'A')}
           >
             „{nameB}" anpassen ({nameA} bleibt)
@@ -106,6 +115,8 @@ export function SeamAdjustmentModal() {
               color: canAdjust ? '#fff' : '#999',
               cursor: canAdjust ? 'pointer' : 'default',
             }}
+            onMouseEnter={() => setSeamAdjustmentHoverPieceId(pieceA.id)}
+            onMouseLeave={() => setSeamAdjustmentHoverPieceId(null)}
             onClick={() => adjustSeamNotches(seamAdjustmentDialog, 'B')}
           >
             „{nameA}" anpassen ({nameB} bleibt)
@@ -120,6 +131,8 @@ export function SeamAdjustmentModal() {
               color: '#333',
               cursor: 'pointer',
             }}
+            onMouseEnter={() => setSeamAdjustmentHoverPieceId(null)}
+            onMouseLeave={() => setSeamAdjustmentHoverPieceId(null)}
             onClick={() => setSeamAdjustmentDialog(null)}
           >
             Nicht anpassen

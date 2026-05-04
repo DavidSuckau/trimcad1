@@ -905,7 +905,14 @@ export function offsetClosedPolygonVariable(
 
     const inter = lineLineIntersection(segA.s, segA.e, segB.s, segB.e)
     if (!inter) {
-      appendDedup({ x: (segA.e.x + segB.s.x) / 2, y: (segA.e.y + segB.s.y) / 2 })
+      /**
+       * Parallel / fast-kollinear:
+       * Kein künstlicher Mittelwertpunkt (würde den Parallelverlauf verfälschen),
+       * sondern explizites Trimmen/Verbinden über die beiden Segmentgrenzen.
+       * Dadurch bleibt die Topologie stabil (kein "zufälliger" Eckpunkt).
+       */
+      appendDedup({ ...segA.e })
+      appendDedup({ ...segB.s })
       continue
     }
 

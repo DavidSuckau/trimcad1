@@ -124,6 +124,18 @@ function cross2(a: Point, b: Point): number {
   return a.x * b.y - a.y * b.x
 }
 
+function dot2(a: Point, b: Point): number {
+  return a.x * b.x + a.y * b.y
+}
+
+function unitVector(from: Point, to: Point): Point | null {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-9) return null
+  return { x: dx / len, y: dy / len }
+}
+
 function intersectLines(p1: Point, d1: Point, p2: Point, d2: Point): Point | null {
   const cr = cross2(d1, d2)
   if (Math.abs(cr) < EPS) return null
@@ -296,9 +308,8 @@ function partnerTrimLongerMiterToShorterAtSeamEnd(
   const Mt = analyticTrim.miter
   const cornerR = analyticRef.corner
   const Mr = analyticRef.miter
-  const LtrimAnalytic = Math.hypot(Mt.x - cornerT.x, Mt.y - cornerT.y)
   const Lref = Math.hypot(Mr.x - cornerR.x, Mr.y - cornerR.y)
-  if (LtrimAnalytic < 1e-6 || Lref < 1e-6) return null
+  if (Lref < 1e-6) return null
 
   const viCut =
     cutVertexIndexForAnalyticMiterCap(trimPiece.cutLine, cornerT, Mt, dTrim) ??
@@ -312,6 +323,15 @@ function partnerTrimLongerMiterToShorterAtSeamEnd(
   const pTip = vertexAt(trimPiece.cutLine, viCut)
   /** Länge der aktuellen CutLine-Spitze (wichtig für idempotentes reapply nach erstem Trim). */
   const Ltip = Math.hypot(pTip.x - cornerT.x, pTip.y - cornerT.y)
+  const dirCurrent = unitVector(cornerT, pTip)
+  const dirAnalytic = unitVector(cornerT, Mt)
+  if (!dirCurrent || !dirAnalytic) return null
+  /**
+   * Nur trimmen, wenn aktuelle Spitze plausibel auf derselben Ecke liegt:
+   * schützt gegen seitliche "falsche" Kandidaten bei komplexer Polygonisierung.
+   */
+  const cosDir = dot2(dirCurrent, dirAnalytic)
+  if (cosDir < 0.82) return null
 
   const E = PARTNER_TRIM_LENGTH_EPS_MM
   if (Ltip < Lref - 0.25) return null
@@ -326,10 +346,15 @@ function partnerTrimLongerMiterToShorterAtSeamEnd(
   }
   if (Ltip <= targetLen + E) return null
 
-  const inv = 1 / LtrimAnalytic
+  /**
+   * WICHTIG:
+   * Der neue Tip liegt auf der *bestehenden* Tip-Strahlrichtung (corner -> aktueller Tip),
+   * nicht auf einer neu erzwungenen analytischen Richtung. So wird nur gekürzt
+   * (Segment-Trimmen), aber keine zusätzliche Eckrotation eingeführt.
+   */
   const newTip: Point = {
-    x: cornerT.x + (Mt.x - cornerT.x) * inv * targetLen,
-    y: cornerT.y + (Mt.y - cornerT.y) * inv * targetLen,
+    x: cornerT.x + dirCurrent.x * targetLen,
+    y: cornerT.y + dirCurrent.y * targetLen,
   }
 
   const newCut = replaceVertexInClosedLineCurves(trimPiece.cutLine, viCut, newTip)

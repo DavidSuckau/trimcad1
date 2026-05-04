@@ -29,6 +29,7 @@ export type InternalCircle = {
 }
 
 export type NotchType = 'single' | 'double' | 'v'
+export type NotchRole = 'nahtanfang' | 'nahtende' | 'beides'
 
 export type Notch = {
   id: string
@@ -51,6 +52,8 @@ export type Notch = {
   sNormalized?: number
   /** Bogenlänge in mm vom selben Startpunkt; Denormalisierung zu `sNormalized` über `totalPathLength(cutLine)`. */
   arcLengthMm?: number
+  /** Semantische Rolle für Naht-/Profil-Grenzen. */
+  role?: NotchRole
 }
 
 export type Drill = {
@@ -168,6 +171,10 @@ export type SeamAssignment = {
   /** Wie curveIndicesA: Master-Kontur des anderen Teils */
   curveIndicesB: number[]
   clickedCurveB: number
+  /** Optional: explizites Segment auf Kante A zwischen Notches (inkl. Rolle `beides`). */
+  notchRangeA?: { startNotchId: string; endNotchId: string }
+  /** Optional: explizites Segment auf Kante B zwischen Notches (inkl. Rolle `beides`). */
+  notchRangeB?: { startNotchId: string; endNotchId: string }
   /** Reihenfolge beim Nähen; jede Nummer höchstens einmal pro Arbeitsfläche. */
   orderNumber?: number | null
   /** Art der Naht (optional). */
@@ -180,6 +187,10 @@ export type ProfileAssignment = {
   pieceId: string
   /** 0-basierte Kantennummer (Ecke-zu-Ecke auf Master-Kontur, analog EdgeSeamAllowance). */
   edgeIndex: number
+  /** Optionaler Start-Notch für Teilsegment auf der Kante. */
+  startNotchId?: string
+  /** Optionales Ende-Notch für Teilsegment auf der Kante. */
+  endNotchId?: string
   /** Nahtzugabe in mm entlang dieser Kante (optional, visuell dargestellt). */
   seamAllowanceMm?: number
   /** Lieferantennummer. */

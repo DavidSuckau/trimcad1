@@ -18,6 +18,7 @@ import type {
   BatchSelectionTarget,
   ProfileAssignment,
   InternalCircle,
+  NotchRole,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { offsetCurvesInwardForSeam, offsetSegmentPoints, validateContourAfterVertexMove } from '../geometry/offset'
@@ -32,12 +33,13 @@ import {
 } from '../geometry/curveToPath'
 import {
   getSubSegments,
-  countNotchesOnEdge,
-  getNotchesOnEdge,
+  getNotchesOnEdgeInRange,
   edgeTotalLength,
+  edgeLengthInNotchRange,
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
   bestSeamSubSegmentPairing,
+  deriveNotchRoleRangeOnEdge,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
   mapMasterVertexIndexToCutVertexIndex,
@@ -70,10 +72,15 @@ import { trimPieceCutLineByOtherPieceOverlap } from '../geometry/seamTrimByOverl
 export type { PieceSymmetryPhase, PieceSymmetryUiState } from '../symmetry/types'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
+const NOTCH_ROLES: readonly NotchRole[] = ['nahtanfang', 'nahtende', 'beides'] as const
 
 /** Nahtlinie geändert → Außenkontur wieder aus Nahtzugabe; manuelles „Naht trimmen“ geht verloren. */
 const TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL =
   'warn:Nahtlinie geändert: Manuelles Naht-Trimmen an der Außenkontur wurde zurückgesetzt. Schnittkontur wird wieder parallel zur Nahtlinie (Nahtzugabe) berechnet.'
+
+function isValidNotchRole(value: unknown): value is NotchRole {
+  return typeof value === 'string' && (NOTCH_ROLES as readonly string[]).includes(value)
+}
 
 /** Passt seamAssignment-Indices an, nachdem eine Kurve bei splitCurveIndex geteilt wurde. */
 function adjustSeamAfterInsert(assignments: SeamAssignment[], pieceId: string, splitCurveIndex: number): SeamAssignment[] {
@@ -360,6 +367,8 @@ type Store = {
   toastMessage: string | null
   /** ID der SeamAssignment für die das Anpassungs-Modal angezeigt wird */
   seamAdjustmentDialog: string | null
+  /** Temporäres Hover-Highlight im Nahtanpassungsdialog (rein visuell, nicht persistent). */
+  seamAdjustmentHoverPieceId: string | null
   /** Nahtzuordnung: Eigenschaften (Nummer, Nahtart), Leertaste bei Hover */
   seamAssignmentMetaDialogId: string | null
   /** Maßstab: Referenzkante gewählt, Ziel-Länge eingeben. */
@@ -428,6 +437,7 @@ type Store = {
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
   removeSeamAssignment: (id: string) => void
   setSeamAdjustmentDialog: (v: string | null) => void
+  setSeamAdjustmentHoverPieceId: (v: string | null) => void
   setSeamAssignmentMetaDialogId: (v: string | null) => void
   updateSeamAssignmentMeta: (
     assignmentId: string,
@@ -474,7 +484,7 @@ type Store = {
   updateNotch: (
     pieceId: string,
     notchId: string,
-    upd: Partial<Pick<Notch, 'position' | 'angle' | 'type' | 'depth' | 'width' | 'sNormalized' | 'arcLengthMm'>>
+    upd: Partial<Pick<Notch, 'position' | 'angle' | 'type' | 'depth' | 'width' | 'sNormalized' | 'arcLengthMm' | 'role'>>
   ) => void
   addDrill: (pieceId: string, drill: Drill) => void
   movePiece: (pieceId: string, dx: number, dy: number) => void
@@ -782,6 +792,7 @@ export const useStore = create<Store>()(
   dxfImportSeamAllowanceMm: 8,
   toastMessage: null,
   seamAdjustmentDialog: null,
+  seamAdjustmentHoverPieceId: null,
   seamAssignmentMetaDialogId: null,
   massstabDialog: null,
   digitizeState: null,
@@ -1250,6 +1261,8 @@ export const useStore = create<Store>()(
       pieceA0 != null ? resolvedSeamAssignmentCurveIndices(pieceA0, curveIndicesA) : curveIndicesA
     const normB =
       pieceB0 != null ? resolvedSeamAssignmentCurveIndices(pieceB0, curveIndicesB) : curveIndicesB
+    const notchRangeA = pieceA0 != null ? deriveNotchRoleRangeOnEdge(pieceA0, normA) ?? undefined : undefined
+    const notchRangeB = pieceB0 != null ? deriveNotchRoleRangeOnEdge(pieceB0, normB) ?? undefined : undefined
     set((s) => ({
       workspace: {
         ...s.workspace,
@@ -1263,6 +1276,8 @@ export const useStore = create<Store>()(
             pieceIdB,
             curveIndicesB: normB,
             clickedCurveB,
+            notchRangeA,
+            notchRangeB,
           },
         ],
       },
@@ -1328,7 +1343,8 @@ export const useStore = create<Store>()(
     })),
   setProfileDialogAssignmentId: (v) => set({ profileDialogAssignmentId: v }),
 
-  setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v }),
+  setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v, seamAdjustmentHoverPieceId: null }),
+  setSeamAdjustmentHoverPieceId: (v) => set({ seamAdjustmentHoverPieceId: v }),
   setSeamAssignmentMetaDialogId: (v) => set({ seamAssignmentMetaDialogId: v }),
   updateSeamAssignmentMeta: (assignmentId, patch) => {
     const s = get()
@@ -1428,40 +1444,42 @@ export const useStore = create<Store>()(
 
     const refIndices = resolvedSeamAssignmentCurveIndices(refPiece, rawRefIndices)
     const tgtIndices = resolvedSeamAssignmentCurveIndices(tgtPiece, rawTgtIndices)
+    const refRange = keepSide === 'A' ? a.notchRangeA : a.notchRangeB
+    const tgtRange = keepSide === 'A' ? a.notchRangeB : a.notchRangeA
 
-    const refNotchCount = countNotchesOnEdge(refPiece, refIndices)
-    const tgtNotchCount = countNotchesOnEdge(tgtPiece, tgtIndices)
+    const refNotchCount = getNotchesOnEdgeInRange(refPiece, refIndices, refRange).length
+    const tgtNotchCount = getNotchesOnEdgeInRange(tgtPiece, tgtIndices, tgtRange).length
     if (refNotchCount !== tgtNotchCount || refNotchCount === 0) {
-      set({ seamAdjustmentDialog: null })
+      set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
 
-    const refSubs = getSubSegments(refPiece, refIndices)
-    const tgtSubs = getSubSegments(tgtPiece, tgtIndices)
+    const refSubs = getSubSegments(refPiece, refIndices, undefined, refRange)
+    const tgtSubs = getSubSegments(tgtPiece, tgtIndices, undefined, tgtRange)
     const pairing = bestSeamSubSegmentPairing(refSubs, tgtSubs)
     if (!pairing) {
-      set({ seamAdjustmentDialog: null })
+      set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
 
-    const refTotalLen = edgeTotalLength(refPiece, refIndices)
-    const tgtTotalLen = edgeTotalLength(tgtPiece, tgtIndices)
+    const refTotalLen = edgeLengthInNotchRange(refPiece, refIndices, refRange)
+    const tgtTotalLen = edgeLengthInNotchRange(tgtPiece, tgtIndices, tgtRange)
 
     const refMasterCurves = getCurvesForSeamEdge(refPiece)
     const tgtMasterCurves = getCurvesForSeamEdge(tgtPiece)
     const refSubCurves = refIndices.map((ci) => refMasterCurves[ci]).filter(Boolean)
     const tgtSubCurves = tgtIndices.map((ci) => tgtMasterCurves[ci]).filter(Boolean)
-    if (tgtSubCurves.length === 0 || refSubCurves.length === 0) { set({ seamAdjustmentDialog: null }); return }
+    if (tgtSubCurves.length === 0 || refSubCurves.length === 0) { set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null }); return }
 
     const reverseOrientation = detectEdgeReverseOrientation(
       refSubCurves, refPiece.transform,
       tgtSubCurves, tgtPiece.transform
     )
 
-    const refNotches = getNotchesOnEdge(refPiece, refIndices)
-    const tgtNotches = getNotchesOnEdge(tgtPiece, tgtIndices)
+    const refNotches = getNotchesOnEdgeInRange(refPiece, refIndices, refRange)
+    const tgtNotches = getNotchesOnEdgeInRange(tgtPiece, tgtIndices, tgtRange)
     if (refNotches.length === 0 || tgtNotches.length !== refNotches.length) {
-      set({ seamAdjustmentDialog: null })
+      set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
     const targetArcPositions = buildNotchTargetArcPositions(
@@ -1472,7 +1490,7 @@ export const useStore = create<Store>()(
       reverseOrientation
     )
     if (!targetArcPositions || targetArcPositions.length !== tgtNotches.length) {
-      set({ seamAdjustmentDialog: null })
+      set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
 
@@ -1498,13 +1516,13 @@ export const useStore = create<Store>()(
       if (!materialized) continue
       targetNotches.push({ notchId, notch: materialized })
     }
-    if (targetNotches.length === 0) { set({ seamAdjustmentDialog: null }); return }
+    if (targetNotches.length === 0) { set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null }); return }
 
     const targetMap = new Map(targetNotches.map((tp) => [tp.notchId, tp.notch]))
 
     set((st) => {
       const piece = st.workspace.pieces.find((p) => p.id === tgtPieceId)
-      if (!piece) return { seamAdjustmentDialog: null }
+      if (!piece) return { seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null }
       const notches = piece.notches.map((n) => {
         const tp = targetMap.get(n.id)
         if (!tp) return n
@@ -1512,6 +1530,7 @@ export const useStore = create<Store>()(
       })
       return {
         seamAdjustmentDialog: null,
+        seamAdjustmentHoverPieceId: null,
         workspace: {
           ...st.workspace,
           pieces: st.workspace.pieces.map((p) =>
@@ -1531,14 +1550,14 @@ export const useStore = create<Store>()(
       if (!pieceA || !pieceB) continue
       const idxA = resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA)
       const idxB = resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)
-      const lenA = edgeTotalLength(pieceA, idxA)
-      const lenB = edgeTotalLength(pieceB, idxB)
+      const lenA = edgeLengthInNotchRange(pieceA, idxA, a.notchRangeA)
+      const lenB = edgeLengthInNotchRange(pieceB, idxB, a.notchRangeB)
       if (Math.abs(lenA - lenB) >= 0.1) continue
-      const ncA = countNotchesOnEdge(pieceA, idxA)
-      const ncB = countNotchesOnEdge(pieceB, idxB)
+      const ncA = getNotchesOnEdgeInRange(pieceA, idxA, a.notchRangeA).length
+      const ncB = getNotchesOnEdgeInRange(pieceB, idxB, a.notchRangeB).length
       if (ncA !== ncB || ncA < 1) continue
-      const subsA = getSubSegments(pieceA, idxA)
-      const subsB = getSubSegments(pieceB, idxB)
+      const subsA = getSubSegments(pieceA, idxA, undefined, a.notchRangeA)
+      const subsB = getSubSegments(pieceB, idxB, undefined, a.notchRangeB)
       const pairing = bestSeamSubSegmentPairing(subsA, subsB)
       if (!pairing || subsA.length < 2) continue
       if (pairing.maxSegmentMismatchMm >= 0.1) {
@@ -1800,6 +1819,12 @@ export const useStore = create<Store>()(
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       const notch = piece?.notches.find((n) => n.id === notchId)
+      if (Object.prototype.hasOwnProperty.call(upd, 'role') && upd.role !== undefined && !isValidNotchRole(upd.role)) {
+        return {
+          ...s,
+          toastMessage: 'error: Ungültige Kerben-Rolle (erlaubt: nahtanfang, nahtende, beides).',
+        }
+      }
       const isGeomUpdate =
         upd.type !== undefined || upd.depth !== undefined || upd.width !== undefined
       if (piece && notch && isGeomUpdate) {
@@ -3114,6 +3139,7 @@ export const useStore = create<Store>()(
       rulerMode: false,
       rulerLine: null,
       seamAdjustmentDialog: null,
+      seamAdjustmentHoverPieceId: null,
       seamAssignmentMetaDialogId: null,
       massstabDialog: null,
       showHelpModal: false,
@@ -3281,6 +3307,7 @@ export const useStore = create<Store>()(
       rulerMode: false,
       rulerLine: null,
       seamAdjustmentDialog: null,
+      seamAdjustmentHoverPieceId: null,
       seamAssignmentMetaDialogId: null,
       profileDialogAssignmentId: null,
       massstabDialog: null,

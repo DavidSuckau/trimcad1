@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
-import { edgeTotalLength } from '../geometry/seamUtils'
+import { edgeLengthInNotchRange } from '../geometry/seamUtils'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
 export function ProfileAssignmentDialog() {
@@ -54,7 +54,13 @@ export function ProfileAssignmentDialog() {
     const edges = enumerateEdges(piece)
     const edge = edges.find((e) => e.edgeIndex === assignment.edgeIndex)
     if (!edge) return 0
-    return edgeTotalLength(piece, edge.curveIndices)
+    return edgeLengthInNotchRange(
+      piece,
+      edge.curveIndices,
+      assignment.startNotchId && assignment.endNotchId
+        ? { startNotchId: assignment.startNotchId, endNotchId: assignment.endNotchId }
+        : null
+    )
   }, [piece, assignment])
 
   useEffect(() => {

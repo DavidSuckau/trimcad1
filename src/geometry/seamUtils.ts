@@ -335,7 +335,12 @@ export function bestSeamSubSegmentPairing(
  * Teilt eine Eckpunkt→Eckpunkt-Kante an den Notch-Positionen in Teilstrecken auf.
  * Rückgabe: je Teilstrecke die Länge (mm) und den Mittelpunkt (piece-local).
  */
-export function getSubSegments(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): SubSegInfo[] {
+export function getSubSegments(
+  piece: PatternPiece,
+  curveIndices: number[],
+  curves?: Curve[],
+  range?: NotchRoleRange | null
+): SubSegInfo[] {
   if (curveIndices.length === 0) return []
 
   const curvs = curves ?? getCurvesForSeamEdge(piece)
@@ -354,18 +359,15 @@ export function getSubSegments(piece: PatternPiece, curveIndices: number[], curv
   const ciToIdx = new Map<number, number>()
   for (let i = 0; i < curveIndices.length; i++) ciToIdx.set(curveIndices[i], i)
 
-  const ciSet = new Set(curveIndices)
-  const notchPositions: number[] = []
-
-  for (const n of piece.notches) {
-    const ct = resolveNotchOnMasterCurves(n, piece, curvs)
-    if (ct && ciSet.has(ct.curveIndex)) {
-      const idx = ciToIdx.get(ct.curveIndex)
-      if (idx != null) {
-        notchPositions.push(cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t))
-      }
-    }
-  }
+  const notchesOnEdge = getNotchesOnEdge(piece, curveIndices, curvs)
+  const startArc = range ? notchesOnEdge.find((n) => n.notchId === range.startNotchId)?.arcLength : undefined
+  const endArc = range ? notchesOnEdge.find((n) => n.notchId === range.endNotchId)?.arcLength : undefined
+  const notchPositions = notchesOnEdge
+    .map((n) => n.arcLength)
+    .filter((L) => {
+      if (startArc == null || endArc == null || endArc <= startArc) return true
+      return L > startArc && L < endArc
+    })
 
   notchPositions.sort((a, b) => a - b)
   const positions = [0, ...notchPositions, totalLen]
@@ -437,6 +439,64 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
 
   result.sort((a, b) => a.arcLength - b.arcLength)
   return result
+}
+
+export type NotchRoleRange = { startNotchId: string; endNotchId: string }
+
+/**
+ * Leitet auf einer Kante ein eindeutiges Segment aus Rollen-Notches ab.
+ * `beides` zählt als Start und Ende.
+ */
+export function deriveNotchRoleRangeOnEdge(
+  piece: PatternPiece,
+  curveIndices: number[],
+  curves?: Curve[]
+): NotchRoleRange | null {
+  if (curveIndices.length === 0) return null
+  const notches = getNotchesOnEdge(piece, curveIndices, curves)
+  if (notches.length < 2) return null
+  const roleById = new Map(piece.notches.map((n) => [n.id, n.role]))
+  const starts = notches.filter((n) => {
+    const r = roleById.get(n.notchId)
+    return r === 'nahtanfang' || r === 'beides'
+  })
+  const ends = notches.filter((n) => {
+    const r = roleById.get(n.notchId)
+    return r === 'nahtende' || r === 'beides'
+  })
+  if (starts.length !== 1 || ends.length !== 1) return null
+  if (starts[0].notchId === ends[0].notchId) return null
+  return { startNotchId: starts[0].notchId, endNotchId: ends[0].notchId }
+}
+
+export function getNotchesOnEdgeInRange(
+  piece: PatternPiece,
+  curveIndices: number[],
+  range?: NotchRoleRange | null,
+  curves?: Curve[]
+): { notchId: string; arcLength: number }[] {
+  const all = getNotchesOnEdge(piece, curveIndices, curves)
+  if (!range) return all
+  const iStart = all.findIndex((n) => n.notchId === range.startNotchId)
+  const iEnd = all.findIndex((n) => n.notchId === range.endNotchId)
+  if (iStart < 0 || iEnd < 0 || iStart >= iEnd) return all
+  return all.filter((_, i) => i > iStart && i < iEnd)
+}
+
+/** Länge eines Teilsegments zwischen zwei Notches auf derselben Kante (Master-Kontur). */
+export function edgeLengthInNotchRange(
+  piece: PatternPiece,
+  curveIndices: number[],
+  range?: NotchRoleRange | null,
+  curves?: Curve[]
+): number {
+  const total = edgeTotalLength(piece, curveIndices, curves)
+  if (!range || total <= 0) return total
+  const all = getNotchesOnEdge(piece, curveIndices, curves)
+  const start = all.find((n) => n.notchId === range.startNotchId)
+  const end = all.find((n) => n.notchId === range.endNotchId)
+  if (!start || !end || end.arcLength <= start.arcLength) return total
+  return end.arcLength - start.arcLength
 }
 
 /**

@@ -221,6 +221,34 @@ describe('offsetClosedPolygonVariable', () => {
     expect(Math.abs(first.x - last.x)).toBeLessThan(0.01)
     expect(Math.abs(first.y - last.y)).toBeLessThan(0.01)
   })
+
+  it('paralleler Sonderfall: trimmt an Segmentgrenzen statt Mittelpunkt', () => {
+    const poly: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 50, y: 0 } },
+      { type: 'line', start: { x: 50, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 0, y: 0 } },
+    ]
+    const allowance = new Map<number, number>()
+    allowance.set(0, 0)
+    allowance.set(1, 20)
+    allowance.set(2, 10)
+    allowance.set(3, 10)
+    allowance.set(4, 10)
+
+    const result = offsetClosedPolygonVariable(poly, allowance, { simplifyTolerance: 0 })
+    expect(result.success).toBe(true)
+
+    const pts = result.lineCurves.map((c) => c.start)
+    const hasY0AtSplit = pts.some((p) => Math.abs(p.x - 50) < 0.2 && Math.abs(p.y - 0) < 0.2)
+    const hasYMinus20AtSplit = pts.some((p) => Math.abs(p.x - 50) < 0.2 && Math.abs(p.y + 20) < 0.2)
+    const hasArtificialMid = pts.some((p) => Math.abs(p.x - 50) < 0.2 && Math.abs(p.y + 10) < 0.2)
+
+    expect(hasY0AtSplit).toBe(true)
+    expect(hasYMinus20AtSplit).toBe(true)
+    expect(hasArtificialMid).toBe(false)
+  })
 })
 
 describe('deriveCutLineFromSeamWithVariableAllowance', () => {
