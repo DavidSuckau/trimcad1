@@ -44,14 +44,17 @@ import {
   getSeamEdgeCurves,
   getCurvesForSeamEdge,
   deriveNotchRoleRangeOnEdge,
+  deriveNotchRoleRangeAtArcLength,
   edgeLengthInNotchRange,
+  getEdgeCurvesInNotchRange,
   mapMasterVertexIndexToCutVertexIndex,
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
   bestSeamSubSegmentPairing,
   masterSoftVertexIndexSet,
 } from '../geometry/seamUtils'
-import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
+import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing, getDisplayedMasterCurves } from '../geometry/vertexMaster'
+import { vertexPositionOnClosedMaster, validateCornerRound, ROUND_CORNER_MIN_RADIUS_MM, ROUND_CORNER_MAX_RADIUS_MM, applyCornerRoundings } from '../geometry/cornerRounding'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
 import { masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
@@ -78,6 +81,11 @@ let T: CanvasTheme = canvasTheme
 const GRID_SIZE = 10
 /** Kerben Kantenmitte: max. gleichzeitig verteilte Kerben pro Kante. */
 const NOTCH_EDGE_LINE_MAX = 30
+const ROTATION_RING_HOVER_RADIUS_PX = 26
+const ROTATION_RING_STROKE_BASE = 1.2
+const ROTATION_RING_ALPHA_IDLE = 0.5
+const ROTATION_RING_ALPHA_HOVER = 0.68
+const ROTATION_HANDLE_BASE_RADIUS = 10
 const NOTCH_ROLE_LABELS: Record<NotchRole, string> = {
   nahtanfang: 'Nahtanfang',
   nahtende: 'Nahtende',
@@ -1578,6 +1586,7 @@ export function WorkspaceCanvas() {
     replaceSegmentWithBezier,
     movePointOnCurve,
     removeVertex,
+    roundCorner,
     convertBezierSegmentToLine,
     setVertexSoft,
     flipPieceAlongGrain,
@@ -1699,6 +1708,7 @@ export function WorkspaceCanvas() {
       replaceSegmentWithBezier: s.replaceSegmentWithBezier,
       movePointOnCurve: s.movePointOnCurve,
       removeVertex: s.removeVertex,
+      roundCorner: s.roundCorner,
       convertBezierSegmentToLine: s.convertBezierSegmentToLine,
       setVertexSoft: s.setVertexSoft,
       flipPieceAlongGrain: s.flipPieceAlongGrain,
@@ -1837,6 +1847,13 @@ export function WorkspaceCanvas() {
       }
     | { kind: 'digitizeDrag' }
     | { kind: 'workspaceNote'; noteId: string; pieceId: string }
+    | {
+        kind: 'roundCorner'
+        pieceId: string
+        masterVertexIndex: number
+        cornerLocal: Point
+        currentLocal: Point
+      }
     | null
   >(null)
   const [workspaceNoteEditor, setWorkspaceNoteEditor] = useState<{
@@ -1903,6 +1920,8 @@ export function WorkspaceCanvas() {
     pieceId: string
     edgeIndex: number
     curveIndices: number[]
+    startNotchId?: string
+    endNotchId?: string
   } | null>(null)
   const [hoveredEdgePicking, setHoveredEdgePicking] = useState<{
     pieceId: string
@@ -1954,9 +1973,19 @@ export function WorkspaceCanvas() {
     widthStr: string
     heightStr: string
   } | null>(null)
+  /** Eckenrundung: Leertaste → Radius in mm per Tastatur eingeben. */
+  const [cornerRoundEditor, setCornerRoundEditor] = useState<{
+    pieceId: string
+    masterVertexIndex: number
+    cornerLocal: Point
+    radiusStr: string
+    /** Falls eine bestehende Rundung editiert wird – sonst undefined. */
+    existing?: boolean
+  } | null>(null)
   const lineLengthInputRef = useRef<HTMLInputElement | null>(null)
   const internalCircleRadiusInputRef = useRef<HTMLInputElement | null>(null)
   const rectangleWidthInputRef = useRef<HTMLInputElement | null>(null)
+  const cornerRoundInputRef = useRef<HTMLInputElement | null>(null)
   const lastPointerClientRef = useRef({ x: 0, y: 0 })
   const [hoveredWorkspaceImage, setHoveredWorkspaceImage] = useState(false)
   const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
@@ -2044,6 +2073,38 @@ export function WorkspaceCanvas() {
       return { ...d, center, current: nextCurrent }
     })
   }, [internalCircleRadiusEditor])
+
+  const cornerRoundEditorActiveRef = useRef(false)
+  useEffect(() => {
+    if (cornerRoundEditor) {
+      if (!cornerRoundEditorActiveRef.current) {
+        cornerRoundEditorActiveRef.current = true
+        cornerRoundInputRef.current?.focus()
+        cornerRoundInputRef.current?.select()
+      }
+    } else {
+      cornerRoundEditorActiveRef.current = false
+    }
+  }, [cornerRoundEditor])
+
+  // Wenn der Nutzer im Eingabefeld einen Radius eintippt, Vorschau-Drag entsprechend skalieren.
+  useEffect(() => {
+    if (!cornerRoundEditor) return
+    const r = Number.parseFloat(cornerRoundEditor.radiusStr.replace(',', '.'))
+    if (!Number.isFinite(r) || r < 0.5) return
+    setDragging((d) => {
+      if (!d || d.kind !== 'roundCorner' || d.pieceId !== cornerRoundEditor.pieceId) return d
+      if (d.masterVertexIndex !== cornerRoundEditor.masterVertexIndex) return d
+      const dx = d.currentLocal.x - d.cornerLocal.x
+      const dy = d.currentLocal.y - d.cornerLocal.y
+      const L = Math.hypot(dx, dy)
+      const ux = L > 1e-6 ? dx / L : 1
+      const uy = L > 1e-6 ? dy / L : 0
+      const next = { x: d.cornerLocal.x + ux * r, y: d.cornerLocal.y + uy * r }
+      if (d.currentLocal.x === next.x && d.currentLocal.y === next.y) return d
+      return { ...d, currentLocal: next }
+    })
+  }, [cornerRoundEditor])
 
   const STORE_MODIFYING_DRAGS = useMemo(() => new Set([
     'vertex', 'piece', 'rotate', 'pointOnCurve', 'notchMove',
@@ -2647,17 +2708,21 @@ export function WorkspaceCanvas() {
         return
       }
       if (!layoutOnly && tool === 'profil' && hoveredProfileEdge) {
+        const sameProfileRange = (
+          pa: { startNotchId?: string; endNotchId?: string },
+          edge: { startNotchId?: string; endNotchId?: string }
+        ) =>
+          (pa.startNotchId ?? null) === (edge.startNotchId ?? null) &&
+          (pa.endNotchId ?? null) === (edge.endNotchId ?? null)
         const existing = profileAssignments.find(
-          (pa) => pa.pieceId === hoveredProfileEdge.pieceId && pa.edgeIndex === hoveredProfileEdge.edgeIndex
+          (pa) =>
+            pa.pieceId === hoveredProfileEdge.pieceId &&
+            pa.edgeIndex === hoveredProfileEdge.edgeIndex &&
+            sameProfileRange(pa, hoveredProfileEdge)
         )
         if (existing) {
           setProfileDialogAssignmentId(existing.id)
         } else {
-          const profilePiece = pieces.find((p) => p.id === hoveredProfileEdge.pieceId)
-          const roleRange =
-            profilePiece != null
-              ? deriveNotchRoleRangeOnEdge(profilePiece, hoveredProfileEdge.curveIndices)
-              : null
           const usedKeys = new Set(profileAssignments.map((pa) => pa.profileKey))
           let nextKey = 'A'
           for (let c = 65; c <= 90; c++) {
@@ -2666,8 +2731,8 @@ export function WorkspaceCanvas() {
           const newId = addProfileAssignment({
             pieceId: hoveredProfileEdge.pieceId,
             edgeIndex: hoveredProfileEdge.edgeIndex,
-            startNotchId: roleRange?.startNotchId,
-            endNotchId: roleRange?.endNotchId,
+            startNotchId: hoveredProfileEdge.startNotchId,
+            endNotchId: hoveredProfileEdge.endNotchId,
             profileName: '',
             profileKey: nextKey,
           })
@@ -2840,11 +2905,29 @@ export function WorkspaceCanvas() {
         const minVertexDist = bestVertex?.dist ?? Infinity
         const minPointOnCurveDist = bestPointOnCurve?.dist ?? Infinity
         const minNotchDist = bestNotchClick?.dist ?? Infinity
+        // Modifier-Klick soll die Kerben-Bearbeitung robust öffnen, auch wenn Vertex/Kurvenpunkt ähnlich nah liegt.
+        if (tool === 'select' && contourEditEnabled && (e.altKey || e.metaKey) && bestNotchClick) {
+          e.preventDefault()
+          setNotchEditTarget({
+            pieceId: bestNotchClick.pieceId,
+            notchId: bestNotchClick.notchId,
+          })
+          return
+        }
         const useNotch =
           bestNotchClick &&
           minNotchDist < minVertexDist &&
           minNotchDist < minPointOnCurveDist
         if (useNotch && bestNotchClick && tool === 'select') {
+          // Vor dem Ziehen: gleicher Treffer wie hover — ⌥/⌘+Klick öffnet Bearbeiten (sonst blockiert dieser Block den späteren Handler).
+          if (contourEditEnabled && (e.altKey || e.metaKey)) {
+            e.preventDefault()
+            setNotchEditTarget({
+              pieceId: bestNotchClick.pieceId,
+              notchId: bestNotchClick.notchId,
+            })
+            return
+          }
           setDragging({
             kind: 'notchMove',
             pieceId: bestNotchClick.pieceId,
@@ -2944,6 +3027,74 @@ export function WorkspaceCanvas() {
         }
         return
       }
+      if (!layoutOnly && tool === 'roundcorner' && selectedPieceIds.length === 1) {
+        const pieceId = selectedPieceIds[0]
+        const piece = pieces.find((x) => x.id === pieceId)
+        if (!piece) {
+          selectPiece(null)
+          setTool('select')
+          return
+        }
+        const useSeamMaster = useSeamLineForVertexEditing(piece)
+        const master = useSeamMaster ? piece.seamLine : piece.cutLine
+        if (master.length < 3) {
+          setToastMessage('warn:Kontur unvollständig – Eckenrundung nicht möglich.')
+          return
+        }
+        const softSet = new Set(useSeamMaster ? piece.softVerticesMaster ?? [] : piece.softVertices ?? [])
+        const local = worldToPieceLocal(world, piece)
+        // Hit-Test: nächster harter Eckpunkt innerhalb Snap-Radius (12 px in Welt-mm).
+        const SNAP_PX = 12
+        const snapMm = SNAP_PX / Math.max(view.zoom, 1e-6)
+        let bestVi = -1
+        let bestDist = Infinity
+        for (let vi = 0; vi < master.length; vi++) {
+          if (softSet.has(vi)) continue
+          const v = vi === 0 ? master[0].start : master[vi - 1].end
+          const d = Math.hypot(v.x - local.x, v.y - local.y)
+          if (d < bestDist) {
+            bestDist = d
+            bestVi = vi
+          }
+        }
+        if (bestVi < 0 || bestDist > snapMm) {
+          // Wenn ein bestehender Bogen angeklickt wurde → zugehörige gerundete Ecke editieren.
+          const display = getDisplayedMasterCurves(piece)
+          if (display.applied.length > 0) {
+            const nearest = nearestCurveIndexAndPoint(local, display.curves)
+            if (nearest && nearest.distance <= snapMm) {
+              const found = display.applied.find((a) => a.arcCurveIndices.includes(nearest.curveIndex))
+              if (found) {
+                const cornerPos = vertexPositionOnClosedMaster(master, found.masterVertexIndex)
+                if (cornerPos) {
+                  setDragging({
+                    kind: 'roundCorner',
+                    pieceId,
+                    masterVertexIndex: found.masterVertexIndex,
+                    cornerLocal: cornerPos,
+                    currentLocal: local,
+                  })
+                  ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+                  return
+                }
+              }
+            }
+          }
+          setToastMessage('warn:Auf einen roten Eckpunkt klicken (oder einen bestehenden Bogen).')
+          return
+        }
+        const cornerPos = vertexPositionOnClosedMaster(master, bestVi)
+        if (!cornerPos) return
+        setDragging({
+          kind: 'roundCorner',
+          pieceId,
+          masterVertexIndex: bestVi,
+          cornerLocal: cornerPos,
+          currentLocal: cornerPos,
+        })
+        ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+        return
+      }
       if (!layoutOnly && tool === 'point' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
@@ -2993,7 +3144,8 @@ export function WorkspaceCanvas() {
           containerRef.current?.setPointerCapture?.(e.pointerId)
           return
         }
-        if (contourEditEnabled && hoveredDeletableNotch && e.altKey) {
+        // Mac: ⌥ (Option) = altKey; viele Nutzer erwarten ⌘ (meta) wie bei anderen Shortcuts.
+        if (contourEditEnabled && hoveredDeletableNotch && (e.altKey || e.metaKey)) {
           e.preventDefault()
           setNotchEditTarget({
             pieceId: hoveredDeletableNotch.pieceId,
@@ -3550,11 +3702,6 @@ export function WorkspaceCanvas() {
   /** Hover/Klick auf Notch – bei Überlappung mit Eckpunkt gewinnt der nähere. */
   const NOTCH_HOVER_HIT = 6
   const NOTCH_CLICK_HIT = 6
-const ROTATION_RING_HOVER_RADIUS_PX = 26
-const ROTATION_RING_STROKE_BASE = 1.2
-const ROTATION_RING_ALPHA_IDLE = 0.5
-const ROTATION_RING_ALPHA_HOVER = 0.68
-const ROTATION_HANDLE_BASE_RADIUS = 10
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -3792,7 +3939,14 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
         }
         if (tool === 'profil') {
           const world = toWorld(e.clientX, e.clientY)
-          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+          let bestEdge: {
+            pieceId: string
+            edgeIndex: number
+            curveIndices: number[]
+            distance: number
+            startNotchId?: string
+            endNotchId?: string
+          } | null = null
           for (const p of pieces) {
             const masterK = getCurvesForSeamEdge(p)
             if (masterK.length < 3) continue
@@ -3803,7 +3957,30 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
             for (const edge of edges) {
               if (edge.curveIndices.includes(nearest.curveIndex)) {
                 if (!bestEdge || nearest.distance < bestEdge.distance) {
-                  bestEdge = { pieceId: p.id, edgeIndex: edge.edgeIndex, curveIndices: edge.curveIndices, distance: nearest.distance }
+                  let startNotchId: string | undefined
+                  let endNotchId: string | undefined
+                  const idxInEdge = edge.curveIndices.indexOf(nearest.curveIndex)
+                  if (idxInEdge >= 0) {
+                    const lengths = edge.curveIndices.map((ci) => {
+                      const seg = masterK[ci]
+                      return seg ? curveSegmentArcLength(seg, 0, 1) : 0
+                    })
+                    const prefix = lengths.slice(0, idxInEdge).reduce((a, b) => a + b, 0)
+                    const segArc = curveSegmentArcLength(masterK[nearest.curveIndex], 0, nearest.t ?? 0)
+                    const arcOnEdge = prefix + segArc
+                    const rangeAtClick = deriveNotchRoleRangeAtArcLength(p, edge.curveIndices, arcOnEdge, masterK)
+                      ?? deriveNotchRoleRangeOnEdge(p, edge.curveIndices, masterK)
+                    startNotchId = rangeAtClick?.startNotchId
+                    endNotchId = rangeAtClick?.endNotchId
+                  }
+                  bestEdge = {
+                    pieceId: p.id,
+                    edgeIndex: edge.edgeIndex,
+                    curveIndices: edge.curveIndices,
+                    distance: nearest.distance,
+                    startNotchId,
+                    endNotchId,
+                  }
                 }
                 break
               }
@@ -4440,6 +4617,13 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
         const world = toWorld(e.clientX, e.clientY)
         const current = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'notch' ? { ...d, current } : d))
+      } else if (dragging.kind === 'roundCorner') {
+        if (cornerRoundEditor) return
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece) return
+        const world = toWorld(e.clientX, e.clientY)
+        const local = worldToPieceLocal(world, piece)
+        setDragging((d) => (d && d.kind === 'roundCorner' ? { ...d, currentLocal: local } : d))
       } else if (dragging.kind === 'notchMove') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length === 0) return
@@ -4555,6 +4739,7 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
       rectangleSizeEditor,
       lineLengthEditor,
       internalCircleRadiusEditor,
+      cornerRoundEditor,
     ]
   )
 
@@ -4746,6 +4931,12 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
         setTool('select')
         return
       }
+      if (!inInput && cornerRoundEditor && e.key === 'Escape') {
+        e.preventDefault()
+        setCornerRoundEditor(null)
+        setDragging(null)
+        return
+      }
       if (!inInput && rectangleSizeEditor && e.key === 'Escape') {
         e.preventDefault()
         setRectangleSizeEditor(null)
@@ -4758,8 +4949,32 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
         setNotchEdgeLineCountEditor(null)
         return
       }
-      if (!inInput && (rectangleSizeEditor || internalCircleRadiusEditor || notchEdgeLineCountEditor) && e.key === ' ') {
+      if (!inInput && (rectangleSizeEditor || internalCircleRadiusEditor || notchEdgeLineCountEditor || cornerRoundEditor) && e.key === ' ') {
         e.preventDefault()
+        return
+      }
+      // Eckenrundung: Spacebar während Drag → Eingabefenster für exakten Radius öffnen.
+      if (
+        !inInput &&
+        dragging?.kind === 'roundCorner' &&
+        tool === 'roundcorner' &&
+        e.key === ' ' &&
+        !cornerRoundEditor
+      ) {
+        e.preventDefault()
+        const dx = dragging.currentLocal.x - dragging.cornerLocal.x
+        const dy = dragging.currentLocal.y - dragging.cornerLocal.y
+        const r = Math.hypot(dx, dy)
+        const initial = r >= ROUND_CORNER_MIN_RADIUS_MM ? r : 5
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const existing = piece?.roundedCorners?.find((rc) => rc.masterVertexIndex === dragging.masterVertexIndex)
+        setCornerRoundEditor({
+          pieceId: dragging.pieceId,
+          masterVertexIndex: dragging.masterVertexIndex,
+          cornerLocal: dragging.cornerLocal,
+          radiusStr: existing != null ? existing.radiusMm.toFixed(1).replace('.', ',') : initial.toFixed(1).replace('.', ','),
+          existing: existing != null,
+        })
         return
       }
       if (
@@ -4953,6 +5168,15 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
           }
           if (notchEdgeMidMode) {
             setNotchEdgeMidMode(false)
+            return
+          }
+          setTool('select')
+          return
+        }
+        if (tool === 'roundcorner') {
+          e.preventDefault()
+          if (dragging?.kind === 'roundCorner') {
+            setDragging(null)
             return
           }
           setTool('select')
@@ -5518,6 +5742,13 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
         }
         setTool('select')
       }
+    } else if (dragging?.kind === 'roundCorner') {
+      if (cornerRoundEditor) return
+      const { pieceId, masterVertexIndex, cornerLocal, currentLocal } = dragging
+      const r = Math.hypot(currentLocal.x - cornerLocal.x, currentLocal.y - cornerLocal.y)
+      if (r >= ROUND_CORNER_MIN_RADIUS_MM) {
+        roundCorner(pieceId, masterVertexIndex, Math.min(ROUND_CORNER_MAX_RADIUS_MM, r))
+      }
     } else if (dragging?.kind === 'vertex') {
       if (_e && (_e.altKey || _e.metaKey || _e.ctrlKey)) {
         snapSeamEdgeToMatch(
@@ -5577,6 +5808,8 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
     lineLengthEditor,
     rectangleSizeEditor,
     internalCircleRadiusEditor,
+    cornerRoundEditor,
+    roundCorner,
     toWorld,
     setGrainLine,
     selectPiece,
@@ -5698,7 +5931,9 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
               onWheel={(e) => e.stopPropagation()}
             >
               <span style={{ fontWeight: 600, color: '#1565c0' }}>Kerbe bearbeiten</span>
-              <span style={{ fontSize: 11, color: '#666' }}>Alt+Klick oder E (über Kerbe)</span>
+              <span style={{ fontSize: 11, color: '#666' }}>
+                ⌥/Alt+Klick oder ⌘+Klick (Mac), sonst E mit Cursor auf Kerbe
+              </span>
               <span
                 style={{
                   fontSize: 11,
@@ -5750,22 +5985,45 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
                   })}
                 </select>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                role="group"
+                aria-label="Naht-Rolle"
+              >
                 <span style={{ whiteSpace: 'nowrap' }}>Naht-Rolle</span>
-                <select
-                  value={editNotch.role ?? ''}
-                  onChange={(e) => {
-                    const v = e.target.value
-                    updateNotch(editPiece.id, editNotch.id, { role: v === '' ? undefined : (v as NotchRole) })
-                  }}
-                  style={{ fontSize: 13, minWidth: 180 }}
-                >
-                  <option value="">Keine</option>
-                  <option value="nahtanfang">{NOTCH_ROLE_LABELS.nahtanfang}</option>
-                  <option value="nahtende">{NOTCH_ROLE_LABELS.nahtende}</option>
-                  <option value="beides">{NOTCH_ROLE_LABELS.beides}</option>
-                </select>
-              </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {(
+                    [
+                      { key: null as const, label: 'Keine' },
+                      { key: 'nahtanfang' as const, label: NOTCH_ROLE_LABELS.nahtanfang },
+                      { key: 'nahtende' as const, label: NOTCH_ROLE_LABELS.nahtende },
+                      { key: 'beides' as const, label: NOTCH_ROLE_LABELS.beides },
+                    ] as const
+                  ).map(({ key, label }) => {
+                    const selected = key == null ? editNotch.role == null : editNotch.role === key
+                    return (
+                      <button
+                        key={key ?? 'none'}
+                        type="button"
+                        className="sidebar-btn"
+                        style={{
+                          fontSize: 12,
+                          padding: '4px 10px',
+                          border: selected ? '2px solid #1565c0' : '1px solid #bdbdbd',
+                          background: selected ? 'rgba(21,101,192,0.08)' : '#fff',
+                        }}
+                        onClick={() => {
+                          updateNotch(editPiece.id, editNotch.id, {
+                            role: key == null ? undefined : key,
+                          })
+                        }}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
               {matchedPreset === null && (
                 <span style={{ fontSize: 11, color: '#c62828', maxWidth: 280 }}>
                   Kein exakter Treffer zu den 10 Einstellungen (z. B. Doppel-Kerbe). Bitte Preset wählen.
@@ -6715,14 +6973,22 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
-                const curvesForVertices = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
+                const displayedMaster = piece ? getDisplayedMasterCurves(piece) : null
+                const curvesForVertices = displayedMaster?.curves ?? (useSeamMaster ? piece!.seamLine : piece?.cutLine ?? [])
                 if (!piece || curvesForVertices.length === 0) return []
                 const n = curvesForVertices.length
                 const softOnMaster = masterSoftVertexIndexSet(piece)
+                const tangentSoftVertices = new Set<number>()
+                for (const ar of displayedMaster?.applied ?? []) {
+                  tangentSoftVertices.add(ar.t1VertexIndex)
+                  tangentSoftVertices.add(ar.t2VertexIndex)
+                }
                 return Array.from({ length: n }, (_, vi) => {
                   const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
                   const w = pieceLocalToWorld(vertexPos, piece)
-                  const isSoft = useSeamMaster ? softOnMaster.has(vi) : (piece.softVertices ?? []).includes(vi)
+                  const isSoft =
+                    tangentSoftVertices.has(vi) ||
+                    (useSeamMaster ? softOnMaster.has(vi) : (piece.softVertices ?? []).includes(vi))
                   const isHoveredPt = hoveredDeletablePoint?.pieceId === pieceId && hoveredDeletablePoint.kind === 'vertex' && hoveredDeletablePoint.vertexIndex === vi
                   const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
                   const scale = isHoveredPt ? HOVER_SCALE : 1
@@ -6767,7 +7033,7 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
                 if (!piece) return []
-                const curvesDraw = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+                const curvesDraw = getDisplayedMasterCurves(piece).curves
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
                 return curvesDraw.flatMap((c, ci) => {
                   if (c.type !== 'bezier') return []
@@ -6897,6 +7163,73 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
               pointerEvents="none"
             />
           )}
+          {dragging?.kind === 'roundCorner' && (() => {
+            const piece = pieces.find((p) => p.id === dragging.pieceId)
+            if (!piece) return null
+            const useSeamMaster = useSeamLineForVertexEditing(piece)
+            const master = useSeamMaster ? piece.seamLine : piece.cutLine
+            if (master.length < 3) return null
+            const dx = dragging.currentLocal.x - dragging.cornerLocal.x
+            const dy = dragging.currentLocal.y - dragging.cornerLocal.y
+            const r = Math.hypot(dx, dy)
+            if (r < ROUND_CORNER_MIN_RADIUS_MM) {
+              const cw = pieceLocalToWorld(dragging.cornerLocal, piece)
+              return (
+                <circle
+                  cx={cw.x}
+                  cy={cw.y}
+                  r={3 / Math.max(view.zoom, 1e-6)}
+                  fill="rgba(21,101,192,0.6)"
+                  stroke="#1565c0"
+                  strokeWidth={1 / Math.max(view.zoom, 1e-6)}
+                  pointerEvents="none"
+                />
+              )
+            }
+            const validation = validateCornerRound(master, dragging.masterVertexIndex, r)
+            if (!validation.ok) return null
+            // Bestehende Rundungen + diese Vorschau-Rundung kombinieren.
+            const existing = (piece.roundedCorners ?? []).filter(
+              (rc) => rc.masterVertexIndex !== dragging.masterVertexIndex
+            )
+            const previewMaster = applyCornerRoundings(master, [
+              ...existing,
+              { masterVertexIndex: dragging.masterVertexIndex, radiusMm: r },
+            ]).curves
+            // In Welt-Koordinaten konvertieren
+            const worldCurves = previewMaster.map((c) => {
+              const start = pieceLocalToWorld(c.start, piece)
+              const end = pieceLocalToWorld(c.end, piece)
+              if (c.type === 'line') return { type: 'line' as const, start, end }
+              return {
+                type: 'bezier' as const,
+                start,
+                end,
+                cp1: pieceLocalToWorld(c.cp1, piece),
+                cp2: pieceLocalToWorld(c.cp2, piece),
+              }
+            })
+            const cornerWorld = pieceLocalToWorld(dragging.cornerLocal, piece)
+            return (
+              <g pointerEvents="none">
+                <path
+                  d={curveToPathD(worldCurves, { closed: true })}
+                  fill="none"
+                  stroke="#1565c0"
+                  strokeWidth={2 / Math.max(view.zoom, 1e-6)}
+                  strokeDasharray={`${4 / Math.max(view.zoom, 1e-6)} ${3 / Math.max(view.zoom, 1e-6)}`}
+                />
+                <circle
+                  cx={cornerWorld.x}
+                  cy={cornerWorld.y}
+                  r={3 / Math.max(view.zoom, 1e-6)}
+                  fill="#ef5350"
+                  stroke="#b71c1c"
+                  strokeWidth={1 / Math.max(view.zoom, 1e-6)}
+                />
+              </g>
+            )
+          })()}
           {dragging?.kind === 'selectionMarquee' && (
             <rect
               x={Math.min(dragging.start.x, dragging.current.x)}
@@ -7283,7 +7616,14 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
             const piece = pieces.find((p) => p.id === hoveredProfileEdge.pieceId)
             if (!piece) return null
             const masterK = getCurvesForSeamEdge(piece)
-            const curves = hoveredProfileEdge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+            const hoverRange =
+              hoveredProfileEdge.startNotchId || hoveredProfileEdge.endNotchId
+                ? {
+                    startNotchId: hoveredProfileEdge.startNotchId,
+                    endNotchId: hoveredProfileEdge.endNotchId,
+                  }
+                : null
+            const curves = getEdgeCurvesInNotchRange(piece, hoveredProfileEdge.curveIndices, hoverRange, masterK)
             let d = ''
             for (const seg of curves) {
               if (!seg) continue
@@ -7304,7 +7644,7 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
                 d={d}
                 fill="none"
                 stroke={T.accent.profile}
-                strokeWidth={3.5}
+                strokeWidth={2.2}
                 strokeOpacity={0.9}
                 pointerEvents="none"
               />
@@ -7534,7 +7874,11 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
             const edges = enumerateEdges(piece)
             const edge = edges.find((e) => e.edgeIndex === pa.edgeIndex)
             if (!edge) return null
-            const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+            const profileRange =
+              pa.startNotchId || pa.endNotchId
+                ? { startNotchId: pa.startNotchId, endNotchId: pa.endNotchId }
+                : null
+            const curves = getEdgeCurvesInNotchRange(piece, edge.curveIndices, profileRange, masterK)
             if (curves.length === 0) return null
 
             const PROFILE_LINE_OFFSET = 20
@@ -7599,7 +7943,7 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
             const lengthMm = edgeLengthInNotchRange(
               piece,
               edge.curveIndices,
-              pa.startNotchId && pa.endNotchId
+              pa.startNotchId || pa.endNotchId
                 ? { startNotchId: pa.startNotchId, endNotchId: pa.endNotchId }
                 : null
             )
@@ -7616,9 +7960,9 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
                   d={d}
                   fill="none"
                   stroke={profileStroke}
-                  strokeWidth={2}
+                  strokeWidth={1.2}
                   strokeOpacity={0.7}
-                  strokeDasharray="6 3"
+                  strokeDasharray="4 3"
                 />
                 <text
                   x={keyW.x}
@@ -7626,7 +7970,7 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={profileStroke}
-                  fontSize={5}
+                  fontSize={4.2}
                   fontFamily="sans-serif"
                   fontWeight={700}
                   transform={`rotate(${angleDeg},${keyW.x},${keyW.y})`}
@@ -7639,7 +7983,7 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={profileStroke}
-                  fontSize={3.2}
+                  fontSize={2.7}
                   fontFamily="sans-serif"
                   fontWeight={400}
                   opacity={0.8}
@@ -7869,6 +8213,25 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
         </div>
       )}
       {(dragging?.kind === 'internalCircle' && tool === 'internalCircle' && !internalCircleRadiusEditor) && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            background: 'rgba(21,101,192,0.92)',
+            color: '#fff',
+            padding: '6px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 9998,
+            pointerEvents: 'none',
+          }}
+        >
+          Leertaste: Radius eingeben
+        </div>
+      )}
+      {(dragging?.kind === 'roundCorner' && tool === 'roundcorner' && !cornerRoundEditor) && (
         <div
           style={{
             position: 'absolute',
@@ -8393,6 +8756,78 @@ const ROTATION_HANDLE_BASE_RADIUS = 10
               setRectangleSizeEditor(null)
               setDragging(null)
               setTool('select')
+            }}
+            style={{ padding: '5px 9px', fontSize: 12 }}
+          >
+            Abbrechen
+          </button>
+        </form>
+      )}
+      {cornerRoundEditor && dragging?.kind === 'roundCorner' && (
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            const r = Number.parseFloat(cornerRoundEditor.radiusStr.replace(',', '.'))
+            if (!Number.isFinite(r) || r < ROUND_CORNER_MIN_RADIUS_MM) {
+              setToastMessage(`error: Bitte einen gueltigen Radius in mm eingeben (min. ${ROUND_CORNER_MIN_RADIUS_MM}).`)
+              return
+            }
+            const rClamped = Math.min(ROUND_CORNER_MAX_RADIUS_MM, r)
+            const ok = roundCorner(cornerRoundEditor.pieceId, cornerRoundEditor.masterVertexIndex, rClamped)
+            if (!ok) return
+            setCornerRoundEditor(null)
+            setDragging(null)
+          }}
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '10px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            zIndex: 10000,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Radius (mm)</span>
+          <input
+            ref={cornerRoundInputRef}
+            type="text"
+            inputMode="decimal"
+            value={cornerRoundEditor.radiusStr}
+            onChange={(ev) =>
+              setCornerRoundEditor((s) => (s ? { ...s, radiusStr: ev.target.value } : s))
+            }
+            onKeyDown={(ev) => {
+              if (ev.key === 'Escape') {
+                ev.preventDefault()
+                setCornerRoundEditor(null)
+                setDragging(null)
+              }
+              ev.stopPropagation()
+            }}
+            style={{
+              width: 90,
+              padding: '4px 6px',
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+          />
+          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+            OK
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCornerRoundEditor(null)
+              setDragging(null)
             }}
             style={{ padding: '5px 9px', fontSize: 12 }}
           >

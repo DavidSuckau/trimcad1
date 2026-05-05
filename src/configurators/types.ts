@@ -1,9 +1,12 @@
 import type { Curve } from '../types/model'
 
-export type ConfiguratorKindId = 'tshirt' | 'rock'
+export type ConfiguratorKindId = 'tshirt' | 'rock' | 'laserBox'
 
 /** Identifiziert einen einzelnen Teil, den ein Konfigurator erzeugt. */
-export type ConfiguratorPartId = 'front' | 'back'
+export type ConfiguratorPartId = 'front' | 'back' | 'left' | 'right' | 'bottom'
+
+export type LaserBoxLidType = 'none' | 'removable' | 'sliding'
+export type LaserBoxMaterialType = 'wood' | 'acrylic' | 'cardboard' | 'custom'
 
 export type ConfiguratorPartParams = {
   /**
@@ -35,6 +38,24 @@ export type ConfiguratorPartParams = {
   /** Abnäher-Positionen relativ zur Taillenbreite (0..1, links/rechts). */
   dartPosLeftRatio?: number
   dartPosRightRatio?: number
+
+  /**
+   * Laser-Box Parameter:
+   * - boxWidthMm: X-Breite (Front/Back)
+   * - boxLengthMm: Y-Länge (Left/Right)
+   * - boxHeightMm: Z-Höhe
+   */
+  boxWidthMm?: number
+  boxLengthMm?: number
+  boxHeightMm?: number
+  materialThicknessMm?: number
+  fingerCount?: number
+  kerfMm?: number
+  fitToleranceMm?: number
+  lidType?: LaserBoxLidType
+  materialType?: LaserBoxMaterialType
+  openTop?: boolean
+  openBottom?: boolean
 }
 
 export type ConfiguratorPart = {

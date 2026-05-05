@@ -1,4 +1,6 @@
-import type { PatternPiece } from '../types/model'
+import type { Curve, PatternPiece } from '../types/model'
+import type { AppliedRounding } from './cornerRounding'
+import { applyCornerRoundings } from './cornerRounding'
 
 /**
  * Ob Eckpunkte (Vertex-Indizes, Ziehen, Löschen) sich auf die **Nahtlinie** beziehen.
@@ -26,4 +28,49 @@ export function useSeamLineForVertexEditing(piece: PatternPiece): boolean {
  */
 export function useSeamLineForPointCurveEditing(piece: PatternPiece): boolean {
   return useSeamLineForVertexEditing(piece)
+}
+
+/** Scharfe Master-Kurven (ohne Rundungen). seamLine bei Naht, sonst cutLine. */
+export function getSharpMasterCurves(piece: PatternPiece): Curve[] {
+  return useSeamLineForVertexEditing(piece) ? piece.seamLine : piece.cutLine
+}
+
+/**
+ * Master-Kontur (seamLine bei Naht, sonst cutLine) **mit angewandten Rundungen** – fürs Rendering
+ * und Hit-Testing der gerundeten Bögen. Vertex-/Soft-/Edge-Editing arbeitet weiter gegen die scharfe Master.
+ */
+export function getDisplayedMasterCurves(piece: PatternPiece): {
+  curves: Curve[]
+  applied: AppliedRounding[]
+} {
+  const sharp = getSharpMasterCurves(piece)
+  const rounded = piece.roundedCorners ?? []
+  if (rounded.length === 0) return { curves: sharp, applied: [] }
+  const r = applyCornerRoundings(sharp, rounded)
+  return { curves: r.curves, applied: r.applied }
+}
+
+/** seamLine fürs Display – mit Rundungen, falls Naht-Master. Sonst unverändert. */
+export function getDisplayedSeamLine(piece: PatternPiece): {
+  curves: Curve[]
+  applied: AppliedRounding[]
+} {
+  if (!useSeamLineForVertexEditing(piece)) {
+    return { curves: piece.seamLine, applied: [] }
+  }
+  return getDisplayedMasterCurves(piece)
+}
+
+/**
+ * cutLine fürs Display. Bei Naht-Master ist `piece.cutLine` bereits aus der gerundeten Naht abgeleitet,
+ * also unverändert zurückgegeben. Bei Cut-Master werden Rundungen direkt auf cutLine angewandt.
+ */
+export function getDisplayedCutLine(piece: PatternPiece): {
+  curves: Curve[]
+  applied: AppliedRounding[]
+} {
+  if (useSeamLineForVertexEditing(piece)) {
+    return { curves: piece.cutLine, applied: [] }
+  }
+  return getDisplayedMasterCurves(piece)
 }

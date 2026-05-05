@@ -11,7 +11,7 @@ type Props = {
   onApplyProposal: (proposal: ConfiguratorPatchProposal) => void
 }
 
-const STRUCTURED_KEYS: Array<keyof ConfiguratorPartParams> = [
+const STRUCTURED_KEYS = [
   'widthMm',
   'heightMm',
   'hipWidthMm',
@@ -19,7 +19,8 @@ const STRUCTURED_KEYS: Array<keyof ConfiguratorPartParams> = [
   'waistToHipMm',
   'dartLengthMm',
   'dartOpeningMm',
-]
+] as const satisfies ReadonlyArray<keyof ConfiguratorPartParams>
+type StructuredKey = (typeof STRUCTURED_KEYS)[number]
 
 function toOptionalNumber(v: string): number | undefined {
   const t = v.trim()
@@ -31,13 +32,13 @@ function toOptionalNumber(v: string): number | undefined {
 
 export function ConfiguratorAiChatPanel({ kindId, partLabel, currentParams, onApplyProposal }: Props) {
   const [freeText, setFreeText] = useState('')
-  const [structuredInput, setStructuredInput] = useState<Record<string, string>>({})
+  const [structuredInput, setStructuredInput] = useState<Partial<Record<StructuredKey, string>>>({})
   const [proposal, setProposal] = useState<ConfiguratorPatchProposal | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const structuredMeasures = useMemo(() => {
-    const values: Partial<ConfiguratorPartParams> = {}
+    const values: Partial<Pick<ConfiguratorPartParams, StructuredKey>> = {}
     for (const key of STRUCTURED_KEYS) {
       const n = toOptionalNumber(structuredInput[key] ?? '')
       if (n == null) continue

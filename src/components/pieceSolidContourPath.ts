@@ -1,5 +1,6 @@
 import { closedPathD, curveToPathD, cutLineFormsClosedLoop } from '../geometry/curveToPath'
 import { cutLineWithNotchCutouts, seamLineWithNotchCutouts } from '../geometry/notchOnCurve'
+import { getDisplayedCutLine, getDisplayedSeamLine } from '../geometry/vertexMaster'
 import type { PatternPiece } from '../types/model'
 
 export type PieceContourDisplayPaths = {
@@ -20,10 +21,12 @@ export function getPieceContourDisplayPaths(
   cutSeamSwapped: boolean,
   excludeNotchId?: string | null,
 ): PieceContourDisplayPaths {
-  const { cutLine, seamLine, notches } = piece
+  const { notches } = piece
+  const displayedCutLine = getDisplayedCutLine(piece).curves
+  const displayedSeamLine = getDisplayedSeamLine(piece).curves
   const notchesForCutouts = excludeNotchId ? notches.filter((n) => n.id !== excludeNotchId) : notches
-  const mergedCutLine = cutLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
-  const mergedSeamLine = seamLineWithNotchCutouts(cutLine, notchesForCutouts, seamLine)
+  const mergedCutLine = cutLineWithNotchCutouts(displayedCutLine, notchesForCutouts, displayedSeamLine)
+  const mergedSeamLine = seamLineWithNotchCutouts(displayedCutLine, notchesForCutouts, displayedSeamLine)
 
   const cutClosed = mergedCutLine.length > 0 && cutLineFormsClosedLoop(mergedCutLine)
   const seamClosed =
@@ -37,7 +40,7 @@ export function getPieceContourDisplayPaths(
         ? closedPathD(mergedSeamLine)
         : curveToPathD(mergedSeamLine, { closed: false })
 
-  const hasSeam = !!(seamPathRaw && String(seamPathRaw).trim() && seamLine.length >= 3)
+  const hasSeam = !!(seamPathRaw && String(seamPathRaw).trim() && displayedSeamLine.length >= 3)
   const solidIsCut = !hasSeam || cutSeamSwapped
   const solidPath = solidIsCut ? cutPathRaw : seamPathRaw
   const dashedPath = solidIsCut ? seamPathRaw : cutPathRaw

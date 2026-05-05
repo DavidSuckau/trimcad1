@@ -30,6 +30,14 @@ function segmentsShareEndpoint(a: Curve, b: Curve): boolean {
   )
 }
 
+/** Gleiche logische Kante: Start- und Endpunkt passen (z. B. Linie → degenerierte Bezier beim Kurvenpunkt-Tool). */
+function segmentsSameEndpoints(a: Curve, b: Curve): boolean {
+  return (
+    Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) < ENDPOINT_EPS_MM &&
+    Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y) < ENDPOINT_EPS_MM
+  )
+}
+
 /**
  * Projiziert einen Punkt nur auf ein einzelnes Segment (nicht auf die gesamte Kontur).
  * Gibt (curveIndex, t, point) zurück – curveIndex ist der übergebene `ci`.
@@ -134,6 +142,9 @@ export function resyncNotchesAfterCutLineRebuilt(
  *
  * So kann eine Kerbe nie auf ein anderes logisches Segment springen,
  * obwohl die Clipper-cutLine sich strukturell ändert.
+ *
+ * `seamStable` gilt auch, wenn sich nur der **Kurventyp** auf derselben Kante ändert
+ * (z. B. `line` → `bezier` mit gleichen Endpunkten beim Kurvenpunkt auf einer Linie).
  */
 export function resyncNotchesViaSeamAnchor(
   notches: Notch[],
@@ -147,7 +158,12 @@ export function resyncNotchesViaSeamAnchor(
   const seamStable =
     oldSeamLine.length > 0 &&
     oldSeamLine.length === newSeamLine.length &&
-    oldSeamLine.every((c, i) => c.type === newSeamLine[i].type)
+    oldSeamLine.every((c, i) => {
+      const d = newSeamLine[i]
+      if (!d) return false
+      if (c.type === d.type) return true
+      return segmentsSameEndpoints(c, d)
+    })
 
   if (!seamStable) {
     return resyncNotchesAfterCutLineRebuilt(notches, oldCutLine, newCutLine)

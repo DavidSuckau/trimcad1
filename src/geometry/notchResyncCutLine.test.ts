@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Curve, Notch } from '../types/model'
-import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
+import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor } from './notchResyncCutLine'
 import { getNotchCutLineParameter, getNotchPositionAndAngle } from './notchOnCurve'
 
 function square(size: number): Curve[] {
@@ -160,6 +160,45 @@ describe('resyncNotchesAfterCutLineRebuilt: position-first', () => {
     // Projektion von (95,0) auf (0,0)→(140,35): bleibt nahe (95,0) auf der neuen Kante
     expect(pos.x).toBeCloseTo(89.42, 1)
     expect(pos.y).toBeCloseTo(22.36, 1)
+  })
+})
+
+describe('resyncNotchesViaSeamAnchor: Naht Linie→Bezier (Kurvenpunkt auf Linie)', () => {
+  it('haelt Kerben auf der Schnittkontur, wenn nur die Nahtkante line→degenerierte bezier wechselt', () => {
+    const s = 100
+    const seamLine: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: s, y: 0 } },
+      { type: 'line', start: { x: s, y: 0 }, end: { x: s, y: s } },
+      { type: 'line', start: { x: s, y: s }, end: { x: 0, y: s } },
+      { type: 'line', start: { x: 0, y: s }, end: { x: 0, y: 0 } },
+    ]
+    const seamAfterReplace: Curve[] = [
+      {
+        type: 'bezier',
+        start: { x: 0, y: 0 },
+        end: { x: s, y: 0 },
+        cp1: { x: s / 3, y: 0 },
+        cp2: { x: (2 * s) / 3, y: 0 },
+      },
+      ...seamLine.slice(1),
+    ]
+    const cutLine = seamLine
+    const cutAfter = seamAfterReplace
+
+    const notch: Notch = {
+      id: 'n1',
+      position: { x: 35, y: 0 },
+      angle: 90,
+      type: 'single',
+      depth: 4,
+      width: 6,
+    }
+
+    const [out] = resyncNotchesViaSeamAnchor([notch], cutLine, cutAfter, seamLine, seamAfterReplace)
+    const posBefore = getNotchPositionAndAngle(notch, cutLine).position
+    const posAfter = getNotchPositionAndAngle(out, cutAfter).position
+    // Bezier-Parametrisierung: winzige numerische Abweichung (≪ Nahtzugabe / sichtbarer Sprung)
+    expect(Math.hypot(posAfter.x - posBefore.x, posAfter.y - posBefore.y)).toBeLessThan(0.5)
   })
 })
 

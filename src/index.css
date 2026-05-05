@@ -1509,6 +1509,27 @@ body {
   border-bottom: 1px solid #e0e0e0;
 }
 
+.help-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.help-print {
+  border: 1px solid #cfcfcf;
+  border-radius: 4px;
+  background: #f7f7f7;
+  color: #222;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+.help-print:hover {
+  background: #efefef;
+}
+
 .help-title {
   margin: 0;
   font-size: 1.05rem;
@@ -1588,6 +1609,27 @@ body {
   line-height: 1.35;
 }
 
+.help-entry-screenshot {
+  margin: 0.25rem 0 0.5rem;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #fcfcfc;
+  padding: 0.4rem;
+}
+
+.help-entry-screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.help-entry-screenshot figcaption {
+  margin-top: 0.3rem;
+  color: #555;
+  font-size: 0.75rem;
+}
+
 .help-entry-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1610,6 +1652,115 @@ body {
   border: 1px solid #ccc;
   border-radius: 3px;
   color: #333;
+}
+
+.help-print-footer {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 15mm 14mm 18mm;
+  }
+
+  html,
+  body,
+  #root,
+  .app,
+  .app-body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .help-overlay,
+  .help-overlay * {
+    visibility: visible;
+  }
+
+  .help-overlay {
+    position: static;
+    inset: auto;
+    background: #fff;
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .help-modal {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding-bottom: 12mm;
+  }
+
+  .help-header {
+    padding: 0 0 3mm;
+    border-bottom: 1px solid #d8d8d8;
+  }
+
+  .help-header-actions,
+  .help-close,
+  .help-print {
+    display: none !important;
+  }
+
+  .help-body {
+    overflow: visible;
+    padding: 4mm 0 0;
+    font-size: 10.5pt;
+  }
+
+  .help-entry-screenshot {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+
+  .help-category {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .help-entry {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .help-entry-list {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .help-category-title {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  .help-print-footer {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    text-align: center;
+    font-size: 9pt;
+    color: #666;
+    background: #fff;
+    padding: 2mm 0 0;
+    border-top: 1px solid #e3e3e3;
+  }
+
+  .help-print-footer::after {
+    content: "Seite " counter(page) " von " counter(pages);
+  }
 }
 
 /* Kompakte Shortcut-Liste (Hilfe → Tastenkürzel) */

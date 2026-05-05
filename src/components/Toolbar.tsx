@@ -47,6 +47,7 @@ const TOOL_DISPLAY: Record<string, { label: string; shortcut?: string }> = {
   point: { label: 'Punkt', shortcut: 'P' },
   curvepoint: { label: 'Kurvenpunkt', shortcut: 'C' },
   notch: { label: 'Notch', shortcut: 'N' },
+  roundcorner: { label: 'Ecke runden' },
   kante: { label: 'Kante', shortcut: 'K' },
   massstab: { label: 'Maßstab', shortcut: 'M' },
   profil: { label: 'Profil' },
@@ -721,6 +722,20 @@ export function Toolbar() {
                         }}
                       >
                         T-Shirt
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        type="button"
+                        className="menubar-dropdown-btn"
+                        onClick={() => {
+                          createConfiguratorInstance('laserBox')
+                          setShowConfiguratorModal(true)
+                          closeMenu()
+                          setErzeugenSubmenu(null)
+                        }}
+                      >
+                        Laser-Cut Box
                       </button>
                     </li>
                     <li>

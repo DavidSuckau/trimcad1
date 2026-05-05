@@ -304,6 +304,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
 
   // —— Ansicht & Toolbar ——
   {
+    category: 'Profil',
+    name: 'Profil zuordnen',
+    description: 'Kante eines Teils anklicken und ein Profil zuordnen.',
+    access: 'Menü Profil → Profil zuordnen',
+    shortcut: undefined,
+  },
+  {
     category: 'Ansicht',
     name: 'Punkte ein-/ausblenden',
     description: 'Eckpunkte und weiche Punkte (blau) auf der Kontur ein- oder ausblenden.',
@@ -431,6 +438,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
   // —— Sonstiges ——
   {
     category: 'Sonstiges',
+    name: 'Anleitung öffnen',
+    description: 'Die komplette Anleitung mit Funktionen, Zugriffen und Tastenkürzeln öffnen.',
+    access: 'Menü Hilfe → Anleitung',
+    shortcut: 'F1 oder ?',
+  },
+  {
+    category: 'Sonstiges',
     name: 'Stückliste',
     description: 'Stücklisten-Funktion (Menüeintrag).',
     access: 'Menü Stückliste → Stückliste',
@@ -465,6 +479,7 @@ export const HELP_CATEGORIES_ORDER = [
   'Datei',
   'Erzeugen',
   'Naht',
+  'Profil',
   'Ansicht',
   'Teile',
   'Prüfen',
@@ -475,9 +490,7 @@ export const HELP_CATEGORIES_ORDER = [
 export type ShortcutListRow = { category: string; name: string; shortcut: string }
 
 /** Kürzel, die nicht als `shortcut` in HELP_ENTRIES stehen. */
-const SHORTCUT_LIST_EXTRA: ShortcutListRow[] = [
-  { category: 'Allgemein', name: 'Anleitung öffnen', shortcut: 'F1 oder ?' },
-]
+const SHORTCUT_LIST_EXTRA: ShortcutListRow[] = []
 
 /**
  * Alle Tastenkürzel gruppiert nach Kategorie (für die Übersichtsliste).

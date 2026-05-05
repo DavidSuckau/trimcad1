@@ -70,6 +70,18 @@ export type EdgeSeamAllowance = {
   allowanceMm: number
 }
 
+/**
+ * Persistierte Eckenrundung an einem roten Eckpunkt der Master-Kontur.
+ * Die Master-Kontur (`seamLine` bei Naht, sonst `cutLine`) bleibt **scharf** gespeichert;
+ * die Rundung wird beim Rendern und beim Ableiten der parallelen `cutLine` als Derivation angewendet.
+ */
+export type RoundedCorner = {
+  /** Vertex-Index auf der Master-Kontur (seamLine bei Naht, sonst cutLine). Identifiziert den roten Eckpunkt. */
+  masterVertexIndex: number
+  /** Radius in mm (>= 0.5). */
+  radiusMm: number
+}
+
 export type PatternPieceTransform = {
   x: number
   y: number
@@ -119,6 +131,12 @@ export type PatternPiece = {
    * `softVertices` bleiben Schnittkontur-Indizes (z. B. nach Punkt einfügen / Offset).
    */
   softVerticesMaster?: number[]
+  /**
+   * Persistierte Eckenrundungen (Fillets) auf der Master-Kontur. Sparse: nur tatsächlich gerundete Ecken.
+   * Indizes referenzieren die scharfe Master-Kontur (seamLine bei Naht, sonst cutLine).
+   * Werden bei Topologie-Änderungen mit-remapped (analog zu softVerticesMaster).
+   */
+  roundedCorners?: RoundedCorner[]
   /**
    * Flächenfüllung im Editor (hellgelb). false = nur Kontur, Füllung transparent.
    * Fehlt bei alten Daten → wie true behandeln.

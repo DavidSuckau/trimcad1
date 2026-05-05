@@ -3,6 +3,8 @@ import { useStore } from '../store/useStore'
 import type { ConfiguratorPartParams } from '../configurators/types'
 import type { ConfiguratorPatchProposal } from '../configurators/chatPatch'
 import { ConfiguratorAiChatPanel } from './ConfiguratorAiChatPanel'
+import { validateLaserBoxParams } from '../configurators/boxValidation'
+import { mergeLaserBoxParamsForPart } from '../configurators/laserBoxSync'
 
 function clampFiniteNumber(v: string, fallback: number, min: number, max: number): number {
   const n = Number(v)
@@ -41,6 +43,10 @@ export function ConfiguratorModal() {
     [configuratorInstances, selectedInstanceId],
   )
   const isRock = selectedInstance?.kindId === 'rock'
+  const isLaserBox = selectedInstance?.kindId === 'laserBox'
+  const isAiEditable = selectedInstance?.kindId === 'tshirt'
+
+  const instanceLabel = selectedInstance?.kindId === 'tshirt' ? 'T-Shirt' : selectedInstance?.kindId === 'rock' ? 'Rock' : 'Laser-Cut Box'
 
   useEffect(() => {
     if (!configuratorModalOpen) return
@@ -67,6 +73,19 @@ export function ConfiguratorModal() {
 
   const onRegenerate = () => {
     if (!selectedInstance || !selectedPart || !draft) return
+    if (isLaserBox) {
+      for (const part of selectedInstance.parts) {
+        const nextParams = mergeLaserBoxParamsForPart(part.partId, draft, {
+          offsetX: part.params.offsetX,
+          offsetY: part.params.offsetY,
+        })
+        updateConfiguratorPartParams(selectedInstance.id, part.id, nextParams)
+      }
+      for (const part of selectedInstance.parts) {
+        regenerateConfiguratorPart(selectedInstance.id, part.id)
+      }
+      return
+    }
     updateConfiguratorPartParams(selectedInstance.id, selectedPart.id, draft)
     regenerateConfiguratorPart(selectedInstance.id, selectedPart.id)
   }
@@ -99,6 +118,30 @@ export function ConfiguratorModal() {
         const baseOk = Number.isFinite(widthMm) && Number.isFinite(heightMm) && widthMm >= 1 && heightMm >= 1
         const offsetsOk = Number.isFinite(draft.offsetX) && Number.isFinite(draft.offsetY)
         if (!baseOk || !offsetsOk) return false
+        if (isLaserBox) {
+          const boxWidthMm = draft.boxWidthMm ?? widthMm
+          const boxLengthMm = draft.boxLengthMm ?? widthMm
+          const boxHeightMm = draft.boxHeightMm ?? heightMm
+          const materialThicknessMm = draft.materialThicknessMm ?? 3
+          const fingerCount = draft.fingerCount ?? 7
+          const kerfMm = draft.kerfMm ?? 0.15
+          const fitToleranceMm = draft.fitToleranceMm ?? 0
+          return (
+            Number.isFinite(boxWidthMm) &&
+            Number.isFinite(boxLengthMm) &&
+            Number.isFinite(boxHeightMm) &&
+            Number.isFinite(materialThicknessMm) &&
+            Number.isFinite(fingerCount) &&
+            Number.isFinite(kerfMm) &&
+            Number.isFinite(fitToleranceMm) &&
+            boxWidthMm >= 1 &&
+            boxLengthMm >= 1 &&
+            boxHeightMm >= 1 &&
+            materialThicknessMm >= 0.5 &&
+            fingerCount >= 3 &&
+            kerfMm >= 0
+          )
+        }
         if (!isRock) return true
 
         return (
@@ -121,6 +164,7 @@ export function ConfiguratorModal() {
         )
       })()
     : false
+  const boxValidation = isLaserBox && draft ? validateLaserBoxParams(draft) : null
 
   return (
     <div className="nahtzugabe-dialog-overlay" onClick={close} role="dialog" aria-modal="true" aria-label="Konfigurator bearbeiten">
@@ -149,7 +193,7 @@ export function ConfiguratorModal() {
                         : { background: '#fff' }),
                     }}
                   >
-                    {inst.kindId === 'tshirt' ? 'T-Shirt' : 'Rock'} ({inst.parts.length} Teile)
+                    {inst.kindId === 'tshirt' ? 'T-Shirt' : inst.kindId === 'rock' ? 'Rock' : 'Laser-Cut Box'} ({inst.parts.length} Teile)
                   </button>
                 ))}
               </div>
@@ -159,9 +203,19 @@ export function ConfiguratorModal() {
               {selectedInstance && selectedPart ? (
                 <>
                   <p className="nahtzugabe-dialog-hint" style={{ marginTop: 0 }}>
-                    {selectedInstance.kindId === 'tshirt' ? 'T-Shirt' : 'Rock'}: {selectedPart.label}
+                    {instanceLabel}: {selectedPart.label}
                     <span style={{ display: 'block', marginTop: 4 }}>
-                      Hinweis: „Neu erzeugen“ überschreibt Cut-Kontur und leert aktuelle Notches/Bohrungen für dieses Teil.
+                      {isLaserBox ? (
+                        <>
+                          Hinweis: „Neu erzeugen“ wendet die Box-Maße auf alle Laser-Box-Teile an und überschreibt jeweils
+                          die Cut-Kontur (Notches/Bohrungen gehen verloren).
+                        </>
+                      ) : (
+                        <>
+                          Hinweis: „Neu erzeugen“ überschreibt Cut-Kontur und leert aktuelle Notches/Bohrungen für dieses
+                          Teil.
+                        </>
+                      )}
                     </span>
                   </p>
 
@@ -315,7 +369,127 @@ export function ConfiguratorModal() {
                         </label>
                       </>
                     )}
+                    {isLaserBox && (
+                      <>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Box Breite (mm)</span>
+                          <input
+                            type="number"
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.boxWidthMm ?? draft?.widthMm ?? 0}
+                            onChange={(e) => {
+                              const boxWidthMm = clampFiniteNumber(e.target.value, draft?.boxWidthMm ?? draft?.widthMm ?? 0, 1, 10000)
+                              setDraft((d) => (d ? { ...d, boxWidthMm, widthMm: boxWidthMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Box Länge (mm)</span>
+                          <input
+                            type="number"
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.boxLengthMm ?? draft?.widthMm ?? 0}
+                            onChange={(e) => {
+                              const boxLengthMm = clampFiniteNumber(e.target.value, draft?.boxLengthMm ?? draft?.widthMm ?? 0, 1, 10000)
+                              setDraft((d) => (d ? { ...d, boxLengthMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Box Höhe (mm)</span>
+                          <input
+                            type="number"
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.boxHeightMm ?? draft?.heightMm ?? 0}
+                            onChange={(e) => {
+                              const boxHeightMm = clampFiniteNumber(e.target.value, draft?.boxHeightMm ?? draft?.heightMm ?? 0, 1, 10000)
+                              setDraft((d) => (d ? { ...d, boxHeightMm, heightMm: boxHeightMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Materialstärke (mm)</span>
+                          <input
+                            type="number"
+                            step={0.1}
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.materialThicknessMm ?? 3}
+                            onChange={(e) => {
+                              const materialThicknessMm = clampFiniteNumber(e.target.value, draft?.materialThicknessMm ?? 3, 0.5, 20)
+                              setDraft((d) => (d ? { ...d, materialThicknessMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Fingeranzahl</span>
+                          <input
+                            type="number"
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.fingerCount ?? 7}
+                            onChange={(e) => {
+                              const fingerCount = clampFiniteNumber(e.target.value, draft?.fingerCount ?? 7, 3, 99)
+                              setDraft((d) => (d ? { ...d, fingerCount: Math.round(fingerCount) } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Kerf (mm)</span>
+                          <input
+                            type="number"
+                            step={0.01}
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.kerfMm ?? 0.15}
+                            onChange={(e) => {
+                              const kerfMm = clampFiniteNumber(e.target.value, draft?.kerfMm ?? 0.15, 0, 2)
+                              setDraft((d) => (d ? { ...d, kerfMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Passung (mm)</span>
+                          <input
+                            type="number"
+                            step={0.01}
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.fitToleranceMm ?? 0}
+                            onChange={(e) => {
+                              const fitToleranceMm = clampFiniteNumber(e.target.value, draft?.fitToleranceMm ?? 0, -1, 1)
+                              setDraft((d) => (d ? { ...d, fitToleranceMm } : d))
+                            }}
+                          />
+                        </label>
+                        <label className="nahtzugabe-dialog-label" style={{ minWidth: 150 }}>
+                          <span>Deckel</span>
+                          <select
+                            className="nahtzugabe-dialog-input"
+                            value={draft?.lidType ?? 'removable'}
+                            onChange={(e) => {
+                              const lidType = e.target.value as 'none' | 'removable' | 'sliding'
+                              setDraft((d) => (d ? { ...d, lidType, openTop: lidType === 'none' } : d))
+                            }}
+                          >
+                            <option value="none">Keiner (offen)</option>
+                            <option value="removable">Abnehmbar</option>
+                            <option value="sliding">Schiebedeckel (MVP: wie abnehmbar)</option>
+                          </select>
+                        </label>
+                      </>
+                    )}
                   </div>
+                  {boxValidation && (boxValidation.warnings.length > 0 || boxValidation.suggestions.length > 0) && (
+                    <div style={{ marginTop: 10, fontSize: 12 }}>
+                      {boxValidation.warnings.map((w, i) => (
+                        <p key={`w-${i}`} style={{ margin: '2px 0', color: '#b26a00' }}>
+                          Warnung: {w}
+                        </p>
+                      ))}
+                      {boxValidation.suggestions.map((s, i) => (
+                        <p key={`s-${i}`} style={{ margin: '2px 0', color: '#2e7d32' }}>
+                          Hinweis: {s}
+                        </p>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="nahtzugabe-dialog-actions" style={{ marginTop: 16 }}>
                     <button type="button" className="sidebar-btn" onClick={close}>
@@ -326,7 +500,7 @@ export function ConfiguratorModal() {
                     </button>
                   </div>
 
-                  {!isRock && (
+                  {isAiEditable && (
                     <ConfiguratorAiChatPanel
                       kindId={selectedInstance.kindId}
                       partLabel={selectedPart.label}

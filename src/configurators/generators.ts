@@ -1,5 +1,6 @@
 import type { Curve } from '../types/model'
 import type { ConfiguratorKindId, ConfiguratorPartId, ConfiguratorPartParams, GeneratedPartGeometry } from './types'
+import { generateFingerJointPanelPolyline, type BoxPanelKind } from '../geometry/laserBox/fingerJoints'
 
 function generateRectCutLine(widthMm: number, heightMm: number): Curve[] {
   const w = Math.max(0.1, widthMm)
@@ -105,14 +106,57 @@ function generateRockInternalLines(params: ConfiguratorPartParams): Curve[] {
   ]
 }
 
+function polylineToClosedCutLine(points: Array<{ x: number; y: number }>): Curve[] {
+  const curves: Curve[] = []
+  if (points.length < 2) return curves
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    curves.push({ type: 'line', start: { x: a.x, y: a.y }, end: { x: b.x, y: b.y } })
+  }
+  return curves
+}
+
+function resolveLaserBoxPanelSize(partId: ConfiguratorPartId, params: ConfiguratorPartParams): { w: number; h: number } {
+  const boxW = Math.max(1, params.boxWidthMm ?? params.widthMm)
+  const boxL = Math.max(1, params.boxLengthMm ?? params.widthMm)
+  const boxH = Math.max(1, params.boxHeightMm ?? params.heightMm)
+  if (partId === 'front' || partId === 'back') return { w: boxW, h: boxH }
+  if (partId === 'left' || partId === 'right') return { w: boxL, h: boxH }
+  return { w: boxW, h: boxL }
+}
+
+function generateLaserBoxCutLine(partId: ConfiguratorPartId, params: ConfiguratorPartParams): Curve[] {
+  const panel = (partId === 'front' || partId === 'back' || partId === 'left' || partId === 'right' || partId === 'bottom'
+    ? partId
+    : 'front') as BoxPanelKind
+  const size = resolveLaserBoxPanelSize(panel, params)
+  const polyline = generateFingerJointPanelPolyline({
+    panel,
+    widthMm: size.w,
+    heightMm: size.h,
+    materialThicknessMm: Math.max(0.5, params.materialThicknessMm ?? 3),
+    fingerCount: Math.max(3, params.fingerCount ?? 7),
+    kerfMm: Math.max(0, params.kerfMm ?? 0.15),
+    fitToleranceMm: params.fitToleranceMm ?? 0,
+    openTop: Boolean(params.openTop),
+    openBottom: Boolean(params.openBottom),
+  })
+  return polylineToClosedCutLine(polyline)
+}
+
 const KIND_LABELS: Record<ConfiguratorKindId, string> = {
   tshirt: 'T-Shirt',
   rock: 'Rock',
+  laserBox: 'Laser-Box',
 }
 
 const PART_LABELS: Record<ConfiguratorPartId, string> = {
   front: 'Vorderteil',
   back: 'Rückenteil',
+  left: 'Seite links',
+  right: 'Seite rechts',
+  bottom: 'Boden',
 }
 
 export function generateConfiguratorPartGeometry(
@@ -121,7 +165,12 @@ export function generateConfiguratorPartGeometry(
   params: ConfiguratorPartParams,
 ): GeneratedPartGeometry {
   const pieceName = `${KIND_LABELS[kindId]} ${PART_LABELS[partId]}`
-  const cutLine = kindId === 'rock' ? generateRockCutLine(params) : generateRectCutLine(params.widthMm, params.heightMm)
+  const cutLine =
+    kindId === 'rock'
+      ? generateRockCutLine(params)
+      : kindId === 'laserBox'
+        ? generateLaserBoxCutLine(partId, params)
+        : generateRectCutLine(params.widthMm, params.heightMm)
   const internalLines = kindId === 'rock' ? generateRockInternalLines(params) : []
 
   return {

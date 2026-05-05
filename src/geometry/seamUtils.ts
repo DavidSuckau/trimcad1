@@ -442,6 +442,7 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
 }
 
 export type NotchRoleRange = { startNotchId: string; endNotchId: string }
+export type NotchBoundaryRange = { startNotchId?: string; endNotchId?: string }
 
 /**
  * Leitet auf einer Kante ein eindeutiges Segment aus Rollen-Notches ab.
@@ -469,6 +470,39 @@ export function deriveNotchRoleRangeOnEdge(
   return { startNotchId: starts[0].notchId, endNotchId: ends[0].notchId }
 }
 
+/**
+ * Bestimmt das Rollen-Intervall (Start/Ende) relativ zu einer Klickposition auf der Kante.
+ * Nimmt den letzten Start-Notch (nahtanfang|beides) vor dem Klick und den ersten End-Notch
+ * (nahtende|beides) nach dem Klick.
+ */
+export function deriveNotchRoleRangeAtArcLength(
+  piece: PatternPiece,
+  curveIndices: number[],
+  arcLengthOnEdge: number,
+  curves?: Curve[]
+): NotchBoundaryRange | null {
+  const notches = getNotchesOnEdge(piece, curveIndices, curves)
+  if (notches.length === 0) return null
+  const roleById = new Map(piece.notches.map((n) => [n.id, n.role]))
+  const starts = notches.filter((n) => {
+    const r = roleById.get(n.notchId)
+    return (r === 'nahtanfang' || r === 'beides') && n.arcLength <= arcLengthOnEdge
+  })
+  const ends = notches.filter((n) => {
+    const r = roleById.get(n.notchId)
+    return (r === 'nahtende' || r === 'beides') && n.arcLength >= arcLengthOnEdge
+  })
+  if (starts.length === 0 && ends.length === 0) return null
+  if (starts.length === 0) return { endNotchId: ends[0].notchId }
+  if (ends.length === 0) return { startNotchId: starts[starts.length - 1].notchId }
+  const start = starts[starts.length - 1]
+  const end = ends[0]
+  if (start.notchId === end.notchId || start.arcLength >= end.arcLength) {
+    return null
+  }
+  return { startNotchId: start.notchId, endNotchId: end.notchId }
+}
+
 export function getNotchesOnEdgeInRange(
   piece: PatternPiece,
   curveIndices: number[],
@@ -487,16 +521,70 @@ export function getNotchesOnEdgeInRange(
 export function edgeLengthInNotchRange(
   piece: PatternPiece,
   curveIndices: number[],
-  range?: NotchRoleRange | null,
+  range?: NotchBoundaryRange | null,
   curves?: Curve[]
 ): number {
   const total = edgeTotalLength(piece, curveIndices, curves)
   if (!range || total <= 0) return total
   const all = getNotchesOnEdge(piece, curveIndices, curves)
-  const start = all.find((n) => n.notchId === range.startNotchId)
-  const end = all.find((n) => n.notchId === range.endNotchId)
-  if (!start || !end || end.arcLength <= start.arcLength) return total
-  return end.arcLength - start.arcLength
+  const start = range.startNotchId ? all.find((n) => n.notchId === range.startNotchId) : null
+  const end = range.endNotchId ? all.find((n) => n.notchId === range.endNotchId) : null
+  if (start && end && end.arcLength > start.arcLength) return end.arcLength - start.arcLength
+  if (start && !end) return Math.max(0, total - start.arcLength)
+  if (!start && end) return Math.max(0, end.arcLength)
+  if (start && end && end.arcLength <= start.arcLength) return total
+  return total
+}
+
+/**
+ * Liefert den geometrischen Teil einer Kante zwischen zwei Rollen-Notches.
+ * Ohne/ungültige Range: gesamte Kante.
+ */
+export function getEdgeCurvesInNotchRange(
+  piece: PatternPiece,
+  curveIndices: number[],
+  range?: NotchBoundaryRange | null,
+  curves?: Curve[]
+): Curve[] {
+  if (curveIndices.length === 0) return []
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
+  if (!range) return curveIndices.map((ci) => curvs[ci]).filter(Boolean)
+
+  const all = getNotchesOnEdge(piece, curveIndices, curvs)
+  const totalLen = edgeTotalLength(piece, curveIndices, curvs)
+  const start = range.startNotchId ? all.find((n) => n.notchId === range.startNotchId) : null
+  const end = range.endNotchId ? all.find((n) => n.notchId === range.endNotchId) : null
+  const startArc = start ? start.arcLength : 0
+  const endArc = end ? end.arcLength : totalLen
+  if (endArc <= startArc) {
+    return curveIndices.map((ci) => curvs[ci]).filter(Boolean)
+  }
+
+  const cumulative: number[] = [0]
+  for (const ci of curveIndices) {
+    const seg = curvs[ci]
+    cumulative.push(cumulative[cumulative.length - 1] + (seg ? curveSegmentArcLength(seg, 0, 1) : 0))
+  }
+
+  const locate = (arc: number): { ci: number; t: number } | null => {
+    for (let i = 0; i < curveIndices.length; i++) {
+      const segStart = cumulative[i]
+      const segEnd = cumulative[i + 1]
+      if (arc <= segEnd + 1e-9) {
+        const ci = curveIndices[i]
+        const segLen = Math.max(1e-9, segEnd - segStart)
+        const t = Math.max(0, Math.min(1, (arc - segStart) / segLen))
+        return { ci, t }
+      }
+    }
+    const ci = curveIndices[curveIndices.length - 1]
+    return ci != null ? { ci, t: 1 } : null
+  }
+
+  const from = locate(startArc)
+  const to = locate(endArc)
+  if (!from || !to) return curveIndices.map((ci) => curvs[ci]).filter(Boolean)
+  return extractCurvePortion(curvs, from.ci, from.t, to.ci, to.t)
 }
 
 /**

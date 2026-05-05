@@ -282,6 +282,27 @@ export const CanvasToolbar: React.FC = () => {
           <path d="M10 5.5l-2.2 7h4.4l-2.2-7" />
         </svg>
       </button>
+      <button
+        type="button"
+        className={`canvas-tool-btn${isActive('roundcorner') ? ' active' : ''}${dim}`}
+        title="Ecke runden"
+        onClick={() => {
+          if (!guardContourEdit()) return
+          setTool('roundcorner')
+          setRulerMode(false)
+          setPendingNahtzugabeClick(false)
+          setEdgeSeamPickingActive(false)
+          setHorizontalLevelPickingActive(false)
+          setPieceSymmetryState(null)
+        }}
+      >
+        <svg {...iconProps}>
+          {/* L-förmige Ecke mit abgerundetem Übergang oben rechts */}
+          <path d="M4 16 L4 8 A4 4 0 0 1 8 4 L16 4" />
+          <circle cx="4" cy="16" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="16" cy="4" r="1.4" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
 
       <div className="canvas-tool-separator" />
 

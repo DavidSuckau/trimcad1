@@ -19,7 +19,13 @@ import type {
   ProfileAssignment,
   InternalCircle,
   NotchRole,
+  RoundedCorner,
 } from '../types/model'
+import {
+  ROUND_CORNER_MIN_RADIUS_MM,
+  ROUND_CORNER_MAX_RADIUS_MM,
+  validateCornerRound,
+} from '../geometry/cornerRounding'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { offsetCurvesInwardForSeam, offsetSegmentPoints, validateContourAfterVertexMove } from '../geometry/offset'
 import { remapEdgeSeamAllowances, remapProfileAssignmentsForPiece, enumerateEdges } from '../geometry/edgeEnumeration'
@@ -217,6 +223,39 @@ function forceCutVertexSoftAfterInsert(piece: PatternPiece, cutVertexIndex: numb
 }
 
 /**
+ * Verschiebt Indizes in `roundedCorners` nach einem Vertex-Insert auf der Master-Kontur.
+ * Wenn der eingefügte Vertex genau auf einer gerundeten Ecke landet, bleibt diese Rundung erhalten,
+ * der Index wird +1 verschoben (der eingefügte Vertex schiebt nachfolgende Indizes nach hinten).
+ */
+function remapRoundedCornersOnVertexInsert(
+  rc: RoundedCorner[] | undefined,
+  insertedAtVertexIndex: number
+): RoundedCorner[] | undefined {
+  if (!rc || rc.length === 0) return rc
+  return rc.map((r) =>
+    r.masterVertexIndex >= insertedAtVertexIndex ? { ...r, masterVertexIndex: r.masterVertexIndex + 1 } : r
+  )
+}
+
+/**
+ * Verschiebt Indizes in `roundedCorners` nach einem Vertex-Remove. Eintrag mit
+ * removedVertexIndex wird gelöscht (gerundete Ecke verschwindet zusammen mit der Ecke).
+ */
+function remapRoundedCornersOnVertexRemove(
+  rc: RoundedCorner[] | undefined,
+  removedVertexIndex: number
+): RoundedCorner[] | undefined {
+  if (!rc || rc.length === 0) return rc
+  const out: RoundedCorner[] = []
+  for (const r of rc) {
+    if (r.masterVertexIndex === removedVertexIndex) continue
+    if (r.masterVertexIndex > removedVertexIndex) out.push({ ...r, masterVertexIndex: r.masterVertexIndex - 1 })
+    else out.push(r)
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
  * softVertices von alter auf neue Schnittkontur (gleiche Weltposition → nächster Eckpunkt).
  * Mit Distanzschwelle: verhindert, dass weit entfernte Vertices fälschlich zugeordnet werden
  * (z. B. wenn Clipper die Topologie ändert und ein Vertex keinen nahen Nachbarn hat).
@@ -274,6 +313,7 @@ type Tool =
   | 'digitize'
   | 'note'
   | 'profil'
+  | 'roundcorner'
 
 /** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
 type ImageDigitizeSession = {
@@ -510,6 +550,12 @@ type Store = {
   replaceSegmentWithBezier: (pieceId: string, curveIndex: number, cp1: Point, cp2?: Point) => void
   movePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point, skipSeamRecalc?: boolean, notchOpts?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }) => void
   removeVertex: (pieceId: string, vertexIndex: number) => void
+  /**
+   * Rundet einen roten Eckpunkt der Master-Kontur (seamLine bei Naht, sonst cutLine) mit dem
+   * angegebenen Radius. radiusMm <= 0 entfernt eine bestehende Rundung am Vertex.
+   * Liefert true bei Erfolg, false bei Validierungsfehler (Toast wird gesetzt).
+   */
+  roundCorner: (pieceId: string, masterVertexIndex: number, radiusMm: number) => boolean
   convertBezierSegmentToLine: (pieceId: string, curveIndex: number) => void
   /** Eckpunkt weich (blau) / fest (rot); gleiche Index-Basis wie updateVertex/removeVertex. */
   setVertexSoft: (pieceId: string, vertexIndex: number, soft: boolean) => void
@@ -2176,6 +2222,7 @@ export const useStore = create<Store>()(
                 ...(p.softVerticesMaster ?? []).map((vi) => (vi >= newMasterVi ? vi + 1 : vi)),
                 newMasterVi,
               ].sort((a, b) => a - b)
+              const roundedCorners = remapRoundedCornersOnVertexInsert(p.roundedCorners, newMasterVi)
               if (p.cutLineDeviatesFromSeamAllowanceOffset === true) {
                 manualSeamTrimReset = true
               }
@@ -2183,6 +2230,7 @@ export const useStore = create<Store>()(
                 ...p,
                 seamLine,
                 softVerticesMaster,
+                roundedCorners,
                 cutLineDeviatesFromSeamAllowanceOffset: false as const,
               }
               const derived = deriveCutLineForPiece(tempPiece, seamLine, p.seamAllowanceMm)
@@ -2207,6 +2255,7 @@ export const useStore = create<Store>()(
                   notches,
                   softVertices,
                   softVerticesMaster,
+                  roundedCorners,
                   cutLineDeviatesFromSeamAllowanceOffset: false,
                 }
               }
@@ -2218,6 +2267,7 @@ export const useStore = create<Store>()(
                   notches,
                   softVertices,
                   softVerticesMaster,
+                  roundedCorners,
                   cutLineDeviatesFromSeamAllowanceOffset: false,
                 },
                 insertedCutVi
@@ -2233,8 +2283,9 @@ export const useStore = create<Store>()(
             ]
             const seamLine =
               p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
+            const roundedCorners = remapRoundedCornersOnVertexInsert(p.roundedCorners, newVertexIdx)
             inserted = true
-            return forceCutVertexSoftAfterInsert({ ...p, cutLine, seamLine, notches, softVertices }, newVertexIdx)
+            return forceCutVertexSoftAfterInsert({ ...p, cutLine, seamLine, notches, softVertices, roundedCorners }, newVertexIdx)
           }),
         },
       }
@@ -2405,7 +2456,7 @@ export const useStore = create<Store>()(
             return p
           }
           const cutLine = derived.cutLine
-          const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+          const notches = resyncNotchesViaSeamAnchor(p.notches, p.cutLine, cutLine, p.seamLine, seamLine)
           const softVertices = remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices)
           return applySharpCornerPromotion({
             ...p,
@@ -2545,10 +2596,12 @@ export const useStore = create<Store>()(
           const tempSoftM = (piece.softVerticesMaster ?? [])
             .filter((vi: number) => vi !== vertexIndex)
             .map((vi: number) => (vi > vertexIndex ? vi - 1 : vi))
+          const tempRC = remapRoundedCornersOnVertexRemove(piece.roundedCorners, vertexIndex)
           const tempPiece = {
             ...piece,
             seamLine: merged,
             softVerticesMaster: tempSoftM,
+            roundedCorners: tempRC,
             cutLineDeviatesFromSeamAllowanceOffset: false,
           }
           tempPiece.edgeSeamAllowances = remapEdgeSeamAllowances(piece, tempPiece)
@@ -2569,12 +2622,13 @@ export const useStore = create<Store>()(
         const softVerticesMaster = (p.softVerticesMaster ?? [])
           .filter((vi) => vi !== vertexIndex)
           .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
+        const roundedCorners = remapRoundedCornersOnVertexRemove(p.roundedCorners, vertexIndex)
 
         let cutLine = p.cutLine
         let seamLine = p.seamLine
         if (seamMaster && seamAllowance != null) {
           seamLine = merged
-          const tempPiece = { ...p, seamLine, softVerticesMaster }
+          const tempPiece = { ...p, seamLine, softVerticesMaster, roundedCorners }
           const edgeSeamAllowances = remapEdgeSeamAllowances(p, tempPiece)
           const derived = deriveCutLineForPiece({ ...tempPiece, edgeSeamAllowances }, seamLine, seamAllowance)
           if (!derived.ok) return p
@@ -2602,7 +2656,7 @@ export const useStore = create<Store>()(
         const oldCut = p.cutLine
         const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, p.softVertices)
 
-        const newPiece = { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster }
+        const newPiece = { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster, roundedCorners }
         newPiece.edgeSeamAllowances = remapEdgeSeamAllowances(p, newPiece)
         return applySharpCornerPromotion(newPiece)
       })
@@ -2629,6 +2683,131 @@ export const useStore = create<Store>()(
         ...(mergedToast ? { toastMessage: mergedToast } : {}),
       }
     }),
+
+  roundCorner: (pieceId, masterVertexIndex, radiusMm) => {
+    let success = false
+    set((s) => {
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      if (!piece) return s
+      const useSeamMaster = useSeamLineForVertexEditing(piece)
+      const master = useSeamMaster ? piece.seamLine : piece.cutLine
+      if (master.length < 3) {
+        return { ...s, toastMessage: 'warn:Kontur unvollständig.' }
+      }
+      if (masterVertexIndex < 0 || masterVertexIndex >= master.length) {
+        return { ...s, toastMessage: 'warn:Ungültiger Eckpunkt.' }
+      }
+      // Soft-Vertices (blau) sind keine roten Eckpunkte – Rundung nicht erlaubt.
+      const softSet = useSeamMaster
+        ? new Set(piece.softVerticesMaster ?? [])
+        : new Set(piece.softVertices ?? [])
+      if (softSet.has(masterVertexIndex)) {
+        return { ...s, toastMessage: 'warn:Rundung nur auf roten Eckpunkten möglich.' }
+      }
+
+      // Negativer/zu kleiner Radius → bestehende Rundung entfernen.
+      if (!Number.isFinite(radiusMm) || radiusMm < ROUND_CORNER_MIN_RADIUS_MM) {
+        const existing = piece.roundedCorners ?? []
+        const filtered = existing.filter((rc) => rc.masterVertexIndex !== masterVertexIndex)
+        if (filtered.length === existing.length) {
+          // Keine Änderung – kein Update notwendig.
+          return s
+        }
+        const next: PatternPiece = {
+          ...piece,
+          roundedCorners: filtered.length > 0 ? filtered : undefined,
+        }
+        if (useSeamMaster && piece.seamAllowanceMm != null) {
+          const derived = deriveCutLineForPiece(next, piece.seamLine, piece.seamAllowanceMm)
+          if (!derived.ok) {
+            return { ...s, toastMessage: `warn:${derived.message}` }
+          }
+          const oldCut = piece.cutLine
+          const cutLine = derived.cutLine
+          const notches = resyncNotchesViaSeamAnchor(piece.notches, oldCut, cutLine, piece.seamLine, piece.seamLine)
+          const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, piece.softVertices)
+          next.cutLine = cutLine
+          next.notches = notches
+          next.softVertices = softVertices
+          next.cutLineDeviatesFromSeamAllowanceOffset = false
+        }
+        success = true
+        return {
+          workspace: {
+            ...s.workspace,
+            pieces: s.workspace.pieces.map((p) => (p.id === pieceId ? next : p)),
+          },
+        }
+      }
+
+      const clampedRadius = Math.min(ROUND_CORNER_MAX_RADIUS_MM, Math.max(ROUND_CORNER_MIN_RADIUS_MM, radiusMm))
+      // Validation gegen die SCHARFE Master (mit der bereits ggf. anderen Rundungen, die wir
+      // aber gerade nicht stören wollen → reine Punkt-Validation).
+      const validation = validateCornerRound(master, masterVertexIndex, clampedRadius)
+      if (!validation.ok) {
+        let msg = 'warn:Rundung nicht möglich.'
+        switch (validation.reason) {
+          case 'NON_LINE_NEIGHBOR':
+            msg = 'warn:Rundung nur an Ecken zwischen geraden Linien möglich.'
+            break
+          case 'PHI_OUT_OF_RANGE':
+            msg = 'warn:Eckenwinkel zu spitz oder zu flach für eine Rundung.'
+            break
+          case 'RADIUS_TOO_LARGE': {
+            const max = validation.maxRadiusMm
+            msg = max != null
+              ? `warn:Radius zu groß. Maximal möglich: ${max.toFixed(1)} mm.`
+              : 'warn:Radius zu groß für diese Ecke.'
+            break
+          }
+          case 'RADIUS_TOO_SMALL':
+            msg = 'warn:Radius zu klein.'
+            break
+          case 'DEGENERATE_EDGE':
+            msg = 'warn:Kantenlänge zu klein.'
+            break
+        }
+        return { ...s, toastMessage: msg }
+      }
+
+      const existing = piece.roundedCorners ?? []
+      const without = existing.filter((rc) => rc.masterVertexIndex !== masterVertexIndex)
+      const nextRC: RoundedCorner[] = [
+        ...without,
+        { masterVertexIndex, radiusMm: clampedRadius },
+      ].sort((a, b) => a.masterVertexIndex - b.masterVertexIndex)
+
+      const next: PatternPiece = { ...piece, roundedCorners: nextRC }
+
+      let toastMessage: string | null = null
+      if (useSeamMaster && piece.seamAllowanceMm != null) {
+        const derived = deriveCutLineForPiece(next, piece.seamLine, piece.seamAllowanceMm)
+        if (!derived.ok) {
+          return { ...s, toastMessage: `warn:${derived.message}` }
+        }
+        const oldCut = piece.cutLine
+        const cutLine = derived.cutLine
+        const notches = resyncNotchesViaSeamAnchor(piece.notches, oldCut, cutLine, piece.seamLine, piece.seamLine)
+        if (piece.notches.length > 0 && notchPushedToCorner(piece.notches, oldCut, notches, cutLine)) {
+          toastMessage = 'warn:Rundung würde Kerbe an Ecke schieben – bitte Kerbe verschieben oder löschen.'
+          return { ...s, toastMessage }
+        }
+        const softVertices = remapSoftVerticesToNewCutLine(oldCut, cutLine, piece.softVertices)
+        next.cutLine = cutLine
+        next.notches = notches
+        next.softVertices = softVertices
+        next.cutLineDeviatesFromSeamAllowanceOffset = false
+      }
+      success = true
+      return {
+        workspace: {
+          ...s.workspace,
+          pieces: s.workspace.pieces.map((p) => (p.id === pieceId ? next : p)),
+        },
+      }
+    })
+    return success
+  },
 
   convertBezierSegmentToLine: (pieceId, curveIndex) =>
     set((s) => {
