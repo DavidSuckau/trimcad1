@@ -5994,11 +5994,11 @@ export function WorkspaceCanvas() {
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {(
                     [
-                      { key: null as const, label: 'Keine' },
-                      { key: 'nahtanfang' as const, label: NOTCH_ROLE_LABELS.nahtanfang },
-                      { key: 'nahtende' as const, label: NOTCH_ROLE_LABELS.nahtende },
-                      { key: 'beides' as const, label: NOTCH_ROLE_LABELS.beides },
-                    ] as const
+                      { key: null, label: 'Keine' },
+                      { key: 'nahtanfang', label: NOTCH_ROLE_LABELS.nahtanfang },
+                      { key: 'nahtende', label: NOTCH_ROLE_LABELS.nahtende },
+                      { key: 'beides', label: NOTCH_ROLE_LABELS.beides },
+                    ] satisfies ReadonlyArray<{ key: NotchRole | null; label: string }>
                   ).map(({ key, label }) => {
                     const selected = key == null ? editNotch.role == null : editNotch.role === key
                     return (
