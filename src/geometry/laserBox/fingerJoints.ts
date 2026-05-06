@@ -83,12 +83,18 @@ function pushFingerEdge(
 
   const orientedSign = edgeName === 'top' || edgeName === 'right' ? -1 : 1
   for (let i = 0; i < count; i++) {
+    const segStart = {
+      x: start.x + ux * (step * i),
+      y: start.y + uy * (step * i),
+    }
     const xB = start.x + ux * (step * (i + 1))
     const yB = start.y + uy * (step * (i + 1))
     const toothSign = i % 2 === 0 ? 1 : -1
     const offset = baseSign * toothSign * orientedSign * fingerDepth
-    pushIfChanged(points, { x: points[points.length - 1]!.x + nx * offset, y: points[points.length - 1]!.y + ny * offset })
-    pushIfChanged(points, { x: xB + nx * offset, y: yB + ny * offset })
+    const segStartOffset = { x: segStart.x + nx * offset, y: segStart.y + ny * offset }
+    const segEndOffset = { x: xB + nx * offset, y: yB + ny * offset }
+    pushIfChanged(points, segStartOffset)
+    pushIfChanged(points, segEndOffset)
     pushIfChanged(points, { x: xB, y: yB })
   }
 }
@@ -97,9 +103,8 @@ export function generateFingerJointPanelPolyline(input: LaserBoxPanelInput): Poi
   const widthMm = Math.max(1, input.widthMm)
   const heightMm = Math.max(1, input.heightMm)
   const thickness = clamp(input.materialThicknessMm, 0.5, 50)
-  const kerf = clamp(input.kerfMm, 0, 2)
-  const fit = clamp(input.fitToleranceMm, -1, 1)
-  const depth = Math.max(0.2, thickness + fit - kerf * 0.5)
+  // Anforderung: Finger-Tiefe entspricht immer exakt der Materialstärke.
+  const depth = thickness
   const normalizedCount = normalizeFingerCount(input.fingerCount, Math.min(widthMm, heightMm), thickness)
   const signs = edgeSignMap(input.panel)
   const topSign = input.openTop ? 0 : signs.top

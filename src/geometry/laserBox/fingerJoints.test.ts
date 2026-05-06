@@ -51,4 +51,29 @@ describe('generateFingerJointPanelPolyline', () => {
     expect(hasTopFingerOffset).toBe(false)
     expect(hasBottomFingerOffset).toBe(false)
   })
+
+  it('nutzt überall dieselbe Finger-Tiefe = Materialstärke', () => {
+    const thickness = 4
+    const pts = generateFingerJointPanelPolyline({
+      panel: 'front',
+      widthMm: 180,
+      heightMm: 120,
+      materialThicknessMm: thickness,
+      fingerCount: 7,
+      kerfMm: 0.2,
+      fitToleranceMm: 0.3,
+      openTop: false,
+      openBottom: false,
+    })
+
+    // Nur obere Kantenzone auswerten (nahe y=0 und y=-thickness).
+    const topBand = pts.filter((p) => p.y <= 0.0001 && p.y >= -(thickness + 0.0001))
+    const distinctY = [...new Set(topBand.map((p) => Number(p.y.toFixed(6))))]
+    const depthCandidates = distinctY.map((y) => Math.abs(y)).filter((v) => v > 0.0001)
+    const nearThickness = depthCandidates.filter((v) => Math.abs(v - thickness) < 1e-6)
+    expect(nearThickness.length).toBeGreaterThan(0)
+    // Keine zusätzlichen "Mini-Tiefen" neben exakt materialThickness.
+    const strayDepths = depthCandidates.filter((v) => Math.abs(v - thickness) >= 1e-6)
+    expect(strayDepths.length).toBe(0)
+  })
 })

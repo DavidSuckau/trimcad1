@@ -20,11 +20,6 @@ const HELP_SCREENSHOTS: Record<string, { file: string; alt: string; caption: str
     alt: 'Nahtzuordnung-Modus mit Hinweis zur Kantenauswahl',
     caption: 'Beispiel: Nahtzuordnung starten',
   },
-  'Werkzeuge::Nahtkante exakt auf Längengleichheit (0 mm Differenz)': {
-    file: 'nahtzuordnung.png',
-    alt: 'Nahtzuordnung-Kontext für den Längenabgleich an Nahtkanten',
-    caption: 'Kontext: Nahtkante auf Längengleichheit angleichen',
-  },
   'Profil::Profil zuordnen': {
     file: 'profil-zuordnung.png',
     alt: 'Profil-zuordnen-Modus mit Hinweis zur Kantenauswahl',
