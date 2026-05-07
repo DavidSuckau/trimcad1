@@ -27,7 +27,12 @@ import {
   validateCornerRound,
 } from '../geometry/cornerRounding'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
-import { offsetCurvesInwardForSeam, offsetSegmentPoints, validateContourAfterVertexMove } from '../geometry/offset'
+import {
+  offsetCurvesInwardForSeam,
+  offsetSegmentPoints,
+  validateContourAfterVertexMove,
+  closedPointsToLineCurves,
+} from '../geometry/offset'
 import { remapEdgeSeamAllowances, remapProfileAssignmentsForPiece, enumerateEdges } from '../geometry/edgeEnumeration'
 import { deltaMinimalDegToHorizontal, masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import {
@@ -315,6 +320,8 @@ type Tool =
   | 'profil'
   | 'roundcorner'
 
+type NahtTrimMode = 'full' | '45'
+
 /** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
 type ImageDigitizeSession = {
   imageDataUrl: string | null
@@ -383,6 +390,8 @@ type Store = {
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
   /** Manuell „Naht trimmen“: nach Menüwahl Ecke an der Schnittkontur anklicken. */
   nahtTrimPickCutVertexActive: boolean
+  /** Modus für manuellen Eck-Trim auf der Außenkontur. */
+  nahtTrimMode: NahtTrimMode
   /** Profil-Dialog: ID der aktuell bearbeiteten ProfileAssignment (null = geschlossen). */
   profileDialogAssignmentId: string | null
   showSettingsModal: boolean
@@ -531,7 +540,7 @@ type Store = {
   setSelectedPoint: (v: Store['selectedPoint']) => void
   applyOffset: (pieceId: string, deltaMm: number) => void
   /** Naht trimmen (manuell): Modus starten → Ecke an Schnittkontur klicken. */
-  startNahtTrimVertexPick: () => void
+  startNahtTrimVertexPick: (mode?: NahtTrimMode) => void
   cancelNahtTrimVertexPick: () => void
   /** Führt Trim aus (nur bei aktivem Pick-Modus); `cutVertexIndex` = Index auf cutLine. */
   completeNahtTrimAtCutVertex: (pieceId: string, cutVertexIndex: number) => void
@@ -825,6 +834,7 @@ export const useStore = create<Store>()(
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   nahtTrimPickCutVertexActive: false,
+  nahtTrimMode: 'full',
   profileDialogAssignmentId: null,
   showSettingsModal: false,
   showStuecklisteModal: false,
@@ -2005,7 +2015,7 @@ export const useStore = create<Store>()(
       }
     }),
 
-  startNahtTrimVertexPick: () =>
+  startNahtTrimVertexPick: (mode = 'full') =>
     set((s) => {
       if (s.selectedPieceIds.length === 0) {
         return { toastMessage: 'error:Bitte zuerst ein Zielteil auswählen.' }
@@ -2015,19 +2025,15 @@ export const useStore = create<Store>()(
       if (!target || target.cutLine.length < 3) {
         return { toastMessage: 'error:Zielteil hat keine gültige Schnittkontur.' }
       }
-      const explicitOtherId = s.selectedPieceIds.length >= 2 ? s.selectedPieceIds[1] : null
-      const candidates = explicitOtherId
-        ? s.workspace.pieces.filter((p) => p.id === explicitOtherId)
-        : s.workspace.pieces.filter((p) => p.id !== target.id)
-      if (candidates.length === 0) {
-        return { toastMessage: 'error:Kein zweites Teil verfügbar.' }
-      }
       const seamMasterHint =
         useSeamLineForVertexEditing(target) && target.seamLine.length >= 3
-          ? 'Eckpunkt auf der Nahtlinie anklicken (Außenkontur wird dort beschnitten)'
+          ? mode === '45'
+            ? 'Eckpunkt auf der Nahtlinie anklicken (Außenkontur wird dort als 45°-Fase beschnitten)'
+            : 'Eckpunkt auf der Nahtlinie anklicken (Außenkontur wird bis zur Nahtlinie beschnitten)'
           : 'Ecke an der Schnittkontur anklicken, die beschnitten werden soll'
       return {
         nahtTrimPickCutVertexActive: true,
+        nahtTrimMode: mode,
         toastMessage: `info:${seamMasterHint} (Zielteil). Abbrechen: Hinweis-Leiste oder Escape.`,
       }
     }),
@@ -2053,6 +2059,97 @@ export const useStore = create<Store>()(
           toastMessage: 'warn:Kerbe auf diesem Eckpunkt – bitte zuerst Kerbe löschen oder verschieben.',
         }
       }
+      const trimMode = s.nahtTrimMode
+      const seamMaster = target.seamAllowanceMm != null && target.seamLine.length >= 3
+      if (seamMaster) {
+        const cutVertices = target.cutLine.map((c) => ({ ...c.start }))
+        const n = cutVertices.length
+        if (cutVertexIndex < 0 || cutVertexIndex >= n) {
+          return { toastMessage: 'warn:Ungültige Ecke.' }
+        }
+        const corner = cutVertices[cutVertexIndex]
+        const seamVertices = target.seamLine.map((c) => c.start)
+        let seamCorner = seamVertices[0]
+        let best = Infinity
+        for (const p of seamVertices) {
+          const d = Math.hypot(p.x - corner.x, p.y - corner.y)
+          if (d < best) {
+            best = d
+            seamCorner = p
+          }
+        }
+        let nextVertices = cutVertices
+        if (trimMode === '45') {
+          const prevIdx = (cutVertexIndex - 1 + n) % n
+          const nextIdx = (cutVertexIndex + 1) % n
+          const prev = cutVertices[prevIdx]
+          const next = cutVertices[nextIdx]
+          const distToSeam = Math.hypot(seamCorner.x - corner.x, seamCorner.y - corner.y)
+          if (!Number.isFinite(distToSeam) || distToSeam <= 1e-6) {
+            return { toastMessage: 'warn:Für diese Ecke konnte keine 45°-Fase zur Nahtlinie abgeleitet werden.' }
+          }
+          const lenPrev = Math.hypot(prev.x - corner.x, prev.y - corner.y)
+          const lenNext = Math.hypot(next.x - corner.x, next.y - corner.y)
+          if (lenPrev <= 1e-6 || lenNext <= 1e-6) {
+            return { toastMessage: 'warn:Gewählte Ecke ist geometrisch zu kurz für eine 45°-Fase.' }
+          }
+          const tPrev = Math.max(0.02, Math.min(0.49, distToSeam / lenPrev))
+          const tNext = Math.max(0.02, Math.min(0.49, distToSeam / lenNext))
+          const pPrev = {
+            x: corner.x + (prev.x - corner.x) * tPrev,
+            y: corner.y + (prev.y - corner.y) * tPrev,
+          }
+          const pNext = {
+            x: corner.x + (next.x - corner.x) * tNext,
+            y: corner.y + (next.y - corner.y) * tNext,
+          }
+          const out: Point[] = []
+          for (let i = 0; i < n; i++) {
+            if (i === cutVertexIndex) continue
+            out.push(cutVertices[i])
+            if (i === prevIdx) {
+              out.push(pPrev, pNext)
+            }
+          }
+          nextVertices = out
+        } else {
+          nextVertices = cutVertices.map((p, i) => (i === cutVertexIndex ? { ...seamCorner } : p))
+        }
+
+        const nextCut = closedPointsToLineCurves(nextVertices, 0)
+        if (nextCut.length < 3) {
+          return { toastMessage: 'error:Getrimmte Kontur ist ungültig.' }
+        }
+        const valid = validateContourAfterVertexMove(nextCut)
+        if (!valid.ok) {
+          return { toastMessage: `error:${valid.message}` }
+        }
+        const oldCut = target.cutLine
+        const mappedSoft = remapSoftVerticesToNewCutLine(oldCut, nextCut, target.softVertices)
+        const notches = resyncNotchesAfterCutLineRebuilt(target.notches, oldCut, nextCut)
+        const updatedTarget = forceCutVerticesSoftAfterPromotion(
+          applySharpCornerPromotion({
+            ...target,
+            cutLine: nextCut,
+            notches,
+            softVertices: mappedSoft,
+            cutLineDeviatesFromSeamAllowanceOffset: true as const,
+          }),
+          mappedSoft
+        )
+        return {
+          nahtTrimPickCutVertexActive: false,
+          workspace: {
+            ...s.workspace,
+            pieces: s.workspace.pieces.map((p) => (p.id === targetId ? updatedTarget : p)),
+          },
+          toastMessage:
+            trimMode === '45'
+              ? 'success:45°-Eckfase ausgeführt: Nur die Außenkontur wurde angepasst, Nahtlinie blieb unverändert.'
+              : 'success:Eck-Trim bis Nahtlinie ausgeführt: Nur die Außenkontur wurde angepasst, Nahtlinie blieb unverändert.',
+        }
+      }
+
       const explicitOtherId = s.selectedPieceIds.length >= 2 ? s.selectedPieceIds[1] : null
       const candidates = explicitOtherId
         ? s.workspace.pieces.filter((p) => p.id === explicitOtherId)
@@ -3314,6 +3411,7 @@ export const useStore = create<Store>()(
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       nahtTrimPickCutVertexActive: false,
+      nahtTrimMode: 'full',
       profileDialogAssignmentId: null,
       rulerMode: false,
       rulerLine: null,
@@ -3483,6 +3581,7 @@ export const useStore = create<Store>()(
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       nahtTrimPickCutVertexActive: false,
+      nahtTrimMode: 'full',
       rulerMode: false,
       rulerLine: null,
       seamAdjustmentDialog: null,

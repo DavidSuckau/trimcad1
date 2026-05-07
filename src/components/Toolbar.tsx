@@ -75,6 +75,7 @@ export function Toolbar() {
     startNahtTrimVertexPick,
     cancelNahtTrimVertexPick,
     nahtTrimPickCutVertexActive,
+    nahtTrimMode,
     removeSeamAllowance,
     rotatePiece90,
     alignPieceToGrain,
@@ -128,6 +129,7 @@ export function Toolbar() {
       startNahtTrimVertexPick: s.startNahtTrimVertexPick,
       cancelNahtTrimVertexPick: s.cancelNahtTrimVertexPick,
       nahtTrimPickCutVertexActive: s.nahtTrimPickCutVertexActive,
+      nahtTrimMode: s.nahtTrimMode,
       removeSeamAllowance: s.removeSeamAllowance,
       rotatePiece90: s.rotatePiece90,
       alignPieceToGrain: s.alignPieceToGrain,
@@ -1015,14 +1017,28 @@ export function Toolbar() {
                 <button
                   type="button"
                   className="menubar-dropdown-btn"
-                  disabled={selectedPieceIds.length === 0 || workspace.pieces.length < 2}
+                  disabled={selectedPieceIds.length === 0}
                   onClick={() => {
-                    startNahtTrimVertexPick()
+                    startNahtTrimVertexPick('full')
                     closeMenu()
                   }}
-                  title="Zielteil wählen (erste Auswahl), optional zweites Teil als Referenz – danach Ecke an der Schnittkontur anklicken"
+                  title="Ecke anklicken: Außenkontur wird lokal bis zur Nahtlinie beschnitten (nur cutLine)."
                 >
-                  Naht trimmen (manuell)
+                  Ecke trimmen bis Nahtlinie
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  disabled={selectedPieceIds.length === 0}
+                  onClick={() => {
+                    startNahtTrimVertexPick('45')
+                    closeMenu()
+                  }}
+                  title="Ecke anklicken: Außenkontur wird lokal mit 45°-Fase beschnitten (nur cutLine)."
+                >
+                  45°-Fase an Ecke (Cut↔Seam)
                 </button>
               </li>
             </ul>
@@ -1225,7 +1241,9 @@ export function Toolbar() {
           return (
             <span className="nahtzuordnung-hint">
               {nahtTrimSeamMaster
-                ? 'Eckpunkt auf der Nahtlinie des Zielteils anklicken (Außenkontur wird dort beschnitten)'
+                ? nahtTrimMode === '45'
+                  ? 'Eckpunkt auf der Nahtlinie anklicken (45°-Fase nur auf Außenkontur)'
+                  : 'Eckpunkt auf der Nahtlinie anklicken (Außenkontur wird dort lokal beschnitten)'
                 : 'Ecke an der Schnittkontur des Zielteils anklicken (überstehende Ecke)'}
               <button type="button" className="nahtzuordnung-abbrechen" onClick={() => cancelNahtTrimVertexPick()}>
                 Abbrechen

@@ -841,6 +841,36 @@ function distanceToPrevVertexOrNotch(
   return curveSegmentArcLength(curve, Math.max(0, startT), Math.min(1, t))
 }
 
+function tAtArcDistanceFromStart(curve: Curve, startT: number, distanceMm: number): number {
+  if (!Number.isFinite(distanceMm) || distanceMm <= 0) return Math.max(0, Math.min(1, startT))
+  const maxLen = curveSegmentArcLength(curve, startT, 1)
+  if (distanceMm >= maxLen) return 1
+  let lo = Math.max(0, Math.min(1, startT))
+  let hi = 1
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    const len = curveSegmentArcLength(curve, startT, mid)
+    if (len < distanceMm) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
+function tAtArcDistanceFromEnd(curve: Curve, endT: number, distanceMm: number): number {
+  if (!Number.isFinite(distanceMm) || distanceMm <= 0) return Math.max(0, Math.min(1, endT))
+  const maxLen = curveSegmentArcLength(curve, 0, endT)
+  if (distanceMm >= maxLen) return 0
+  let lo = 0
+  let hi = Math.max(0, Math.min(1, endT))
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    const len = curveSegmentArcLength(curve, mid, endT)
+    if (len > distanceMm) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
 /** Client-Koordinaten → Weltkoordinaten (wie im transformierten <g>). */
 function getScreenPoint(
   clientX: number,
@@ -1899,6 +1929,17 @@ export function WorkspaceCanvas() {
     storePos: Point
     storeAngle: number
   } | null>(null)
+  const [notchMoveDistanceEditor, setNotchMoveDistanceEditor] = useState<{
+    pieceId: string
+    notchId: string
+    curveIndex: number
+    prevT: number
+    nextT: number
+    side: 'left' | 'right'
+    value: string
+    clientX: number
+    clientY: number
+  } | null>(null)
   const [pointPreview, setPointPreview] = useState<{ pieceId: string; point: Point } | null>(null)
   const [hoveredSegment, setHoveredSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [hoveredSegmentPos, setHoveredSegmentPos] = useState<{ clientX: number; clientY: number } | null>(null)
@@ -1986,6 +2027,7 @@ export function WorkspaceCanvas() {
   const internalCircleRadiusInputRef = useRef<HTMLInputElement | null>(null)
   const rectangleWidthInputRef = useRef<HTMLInputElement | null>(null)
   const cornerRoundInputRef = useRef<HTMLInputElement | null>(null)
+  const notchMoveDistanceInputRef = useRef<HTMLInputElement | null>(null)
   const lastPointerClientRef = useRef({ x: 0, y: 0 })
   const [hoveredWorkspaceImage, setHoveredWorkspaceImage] = useState(false)
   const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
@@ -2086,6 +2128,69 @@ export function WorkspaceCanvas() {
       cornerRoundEditorActiveRef.current = false
     }
   }, [cornerRoundEditor])
+
+  const notchMoveDistanceEditorActiveRef = useRef(false)
+  useEffect(() => {
+    if (notchMoveDistanceEditor) {
+      if (!notchMoveDistanceEditorActiveRef.current) {
+        notchMoveDistanceEditorActiveRef.current = true
+        notchMoveDistanceInputRef.current?.focus()
+        notchMoveDistanceInputRef.current?.select()
+      }
+    } else {
+      notchMoveDistanceEditorActiveRef.current = false
+    }
+  }, [notchMoveDistanceEditor])
+
+  useEffect(() => {
+    if (!notchMoveDistanceEditor) return
+    if (dragging?.kind !== 'notchMove') return
+    if (dragging.pieceId !== notchMoveDistanceEditor.pieceId || dragging.notchId !== notchMoveDistanceEditor.notchId) return
+    const piece = pieces.find((p) => p.id === notchMoveDistanceEditor.pieceId)
+    if (!piece || piece.cutLine.length === 0) return
+    const curve = piece.cutLine[notchMoveDistanceEditor.curveIndex]
+    if (!curve) return
+    const raw = Number.parseFloat(notchMoveDistanceEditor.value.replace(',', '.'))
+    if (!Number.isFinite(raw) || raw < 0) return
+    const segmentMax =
+      notchMoveDistanceEditor.side === 'left'
+        ? curveSegmentArcLength(curve, notchMoveDistanceEditor.prevT, notchMoveDistanceEditor.nextT)
+        : curveSegmentArcLength(curve, notchMoveDistanceEditor.prevT, notchMoveDistanceEditor.nextT)
+    const mm = Math.max(0, Math.min(segmentMax, raw))
+    const nextT =
+      notchMoveDistanceEditor.side === 'left'
+        ? tAtArcDistanceFromStart(curve, notchMoveDistanceEditor.prevT, mm)
+        : tAtArcDistanceFromEnd(curve, notchMoveDistanceEditor.nextT, mm)
+    const tClamped =
+      nextT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : nextT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : nextT
+    const storePos = pointOnCurveAt(piece.cutLine[notchMoveDistanceEditor.curveIndex], tClamped)
+    const storeAngle = outwardNormalAngleAt(piece.cutLine, notchMoveDistanceEditor.curveIndex, tClamped) + 180
+    const notchesOnSegment = piece.notches
+      .map((n) => {
+        if (n.id === dragging.notchId) return tClamped
+        const { position: notchPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
+        const nr = nearestCurveIndexAndPoint(notchPos, piece.cutLine)
+        return nr && nr.curveIndex === notchMoveDistanceEditor.curveIndex && nr.t != null ? nr.t : null
+      })
+      .filter((x): x is number => x != null)
+    const distanceMmLeft = distanceToPrevVertexOrNotch(curve, tClamped, notchesOnSegment)
+    const distanceMmRight = distanceToNextVertexOrNotch(curve, tClamped, notchesOnSegment)
+    setNotchPreview({
+      pieceId: piece.id,
+      position: storePos,
+      angle: storeAngle,
+      curveIndex: notchMoveDistanceEditor.curveIndex,
+      t: tClamped,
+      distanceMmLeft,
+      distanceMmRight,
+      storePos,
+      storeAngle,
+    })
+  }, [notchMoveDistanceEditor, dragging, pieces])
+
+  useEffect(() => {
+    if (dragging?.kind !== 'notchMove') setNotchMoveDistanceEditor(null)
+  }, [dragging])
 
   // Wenn der Nutzer im Eingabefeld einen Radius eintippt, Vorschau-Drag entsprechend skalieren.
   useEffect(() => {
@@ -4831,6 +4936,7 @@ export function WorkspaceCanvas() {
     setNotchEdgeMidMode(false)
     setNotchEdgeLineCountEditor(null)
     setNotchEdgeSpaceMenu(null)
+    setNotchMoveDistanceEditor(null)
   }, [closeSegmentMenu])
 
   useEffect(() => {
@@ -4949,7 +5055,16 @@ export function WorkspaceCanvas() {
         setNotchEdgeLineCountEditor(null)
         return
       }
+      if (!inInput && notchMoveDistanceEditor && e.key === 'Escape') {
+        e.preventDefault()
+        setNotchMoveDistanceEditor(null)
+        return
+      }
       if (!inInput && (rectangleSizeEditor || internalCircleRadiusEditor || notchEdgeLineCountEditor || cornerRoundEditor) && e.key === ' ') {
+        e.preventDefault()
+        return
+      }
+      if (!inInput && notchMoveDistanceEditor && e.key === ' ') {
         e.preventDefault()
         return
       }
@@ -5033,6 +5148,46 @@ export function WorkspaceCanvas() {
           heightStr: ah >= 1 ? ah.toFixed(1) : '100',
         })
         return
+      }
+      if (contourEditEnabled && !inInput && dragging?.kind === 'notchMove' && notchPreview && e.key === ' ') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const curve = piece?.cutLine[notchPreview.curveIndex]
+        if (piece && curve) {
+          e.preventDefault()
+          const otherNotchesOnCurve = piece.notches
+            .map((n) => {
+              if (n.id === dragging.notchId) return null
+              const { position } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
+              const nr = nearestCurveIndexAndPoint(position, piece.cutLine)
+              return nr && nr.curveIndex === notchPreview.curveIndex && nr.t != null ? nr.t : null
+            })
+            .filter((x): x is number => x != null)
+          const prevCandidates = otherNotchesOnCurve.filter((tN) => tN < notchPreview.t)
+          const nextCandidates = otherNotchesOnCurve.filter((tN) => tN > notchPreview.t)
+          const prevT = prevCandidates.length > 0 ? Math.max(...prevCandidates) : 0
+          const nextT = nextCandidates.length > 0 ? Math.min(...nextCandidates) : 1
+          const container = containerRef.current
+          if (!container) return
+          const notchWorld = pieceLocalToWorld(notchPreview.position, piece)
+          const notchClient = worldToClientPoint(notchWorld, container, view, svgRef.current)
+          const side: 'left' | 'right' = lastPointerClientRef.current.x < notchClient.x ? 'left' : 'right'
+          const value =
+            side === 'left'
+              ? notchPreview.distanceMmLeft.toFixed(1).replace('.', ',')
+              : notchPreview.distanceMmRight.toFixed(1).replace('.', ',')
+          setNotchMoveDistanceEditor({
+            pieceId: dragging.pieceId,
+            notchId: dragging.notchId,
+            curveIndex: notchPreview.curveIndex,
+            prevT,
+            nextT,
+            side,
+            value,
+            clientX: lastPointerClientRef.current.x,
+            clientY: lastPointerClientRef.current.y,
+          })
+          return
+        }
       }
       if (contourEditEnabled && !inInput && hoveredSeamAssignmentId && e.key === ' ') {
         e.preventDefault()
@@ -5630,6 +5785,7 @@ export function WorkspaceCanvas() {
           })
         }
       }
+      setNotchMoveDistanceEditor(null)
       setNotchPreview(null)
       setDragging(null)
     } else if (dragging?.kind === 'notch') {
@@ -8985,6 +9141,100 @@ export function WorkspaceCanvas() {
               }
               setLineLengthEditor(null)
             }}
+            style={{ padding: '5px 9px', fontSize: 12 }}
+          >
+            Abbrechen
+          </button>
+        </form>
+      )}
+      {notchMoveDistanceEditor && dragging?.kind === 'notchMove' && (
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault()
+            const mm = Number.parseFloat(notchMoveDistanceEditor.value.replace(',', '.'))
+            if (!Number.isFinite(mm) || mm < 0) {
+              setToastMessage('error: Bitte ein gueltiges Mass in mm eingeben.')
+              return
+            }
+            setNotchMoveDistanceEditor(null)
+          }}
+          style={{
+            position: 'fixed',
+            left: Math.min(
+              notchMoveDistanceEditor.clientX + 8,
+              (typeof window !== 'undefined' ? window.innerWidth : 800) - 330
+            ),
+            top: Math.min(
+              notchMoveDistanceEditor.clientY + 8,
+              (typeof window !== 'undefined' ? window.innerHeight : 600) - 120
+            ),
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            zIndex: 10002,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Kerbenabstand</span>
+          <button
+            type="button"
+            onClick={() => setNotchMoveDistanceEditor((s) => (s ? { ...s, side: 'left' } : s))}
+            style={{
+              padding: '3px 8px',
+              fontSize: 12,
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              background: notchMoveDistanceEditor.side === 'left' ? '#e3f2fd' : '#fff',
+            }}
+          >
+            links
+          </button>
+          <button
+            type="button"
+            onClick={() => setNotchMoveDistanceEditor((s) => (s ? { ...s, side: 'right' } : s))}
+            style={{
+              padding: '3px 8px',
+              fontSize: 12,
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              background: notchMoveDistanceEditor.side === 'right' ? '#e3f2fd' : '#fff',
+            }}
+          >
+            rechts
+          </button>
+          <input
+            ref={notchMoveDistanceInputRef}
+            type="text"
+            inputMode="decimal"
+            value={notchMoveDistanceEditor.value}
+            onChange={(ev) =>
+              setNotchMoveDistanceEditor((s) => (s ? { ...s, value: ev.target.value } : s))
+            }
+            onKeyDown={(ev) => {
+              if (ev.key === 'Escape') {
+                ev.preventDefault()
+                setNotchMoveDistanceEditor(null)
+              }
+              ev.stopPropagation()
+            }}
+            style={{
+              width: 84,
+              padding: '4px 6px',
+              border: '1px solid #90a4ae',
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+          />
+          <span style={{ fontSize: 12, color: '#455a64' }}>mm</span>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>OK</button>
+          <button
+            type="button"
+            onClick={() => setNotchMoveDistanceEditor(null)}
             style={{ padding: '5px 9px', fontSize: 12 }}
           >
             Abbrechen
