@@ -4,6 +4,7 @@ import { useStore } from '../store/useStore'
 import { enumerateEdges } from '../geometry/edgeEnumeration'
 import { edgeTotalLength } from '../geometry/seamUtils'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { loadMaterialCatalog } from '../material/materialCatalogStorage'
 
 export function PiecePropertiesModal() {
   const {
@@ -13,6 +14,8 @@ export function PiecePropertiesModal() {
     updatePiece,
     removeSeamAllowance,
     setEdgeSeamAllowance,
+    setShowMaterialCatalogModal,
+    showMaterialCatalogModal,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -21,8 +24,25 @@ export function PiecePropertiesModal() {
       updatePiece: s.updatePiece,
       removeSeamAllowance: s.removeSeamAllowance,
       setEdgeSeamAllowance: s.setEdgeSeamAllowance,
+      setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
+      showMaterialCatalogModal: s.showMaterialCatalogModal,
     })),
   )
+
+  const catalogMaterialSelectOptions = useMemo(() => {
+    if (piecePropertiesDialogPieceId == null) return [] as { num: string; label: string }[]
+    const rows = loadMaterialCatalog().rows
+    const byNum = new Map<string, string>()
+    for (const r of rows) {
+      const num = r.materialNumber.trim()
+      if (!num || byNum.has(num)) continue
+      const desc = r.description.trim()
+      byNum.set(num, desc ? `${num} — ${desc}` : num)
+    }
+    return [...byNum.entries()]
+      .map(([num, label]) => ({ num, label }))
+      .sort((a, b) => a.num.localeCompare(b.num, 'de'))
+  }, [piecePropertiesDialogPieceId, showMaterialCatalogModal])
 
   const piece =
     piecePropertiesDialogPieceId != null
@@ -89,18 +109,65 @@ export function PiecePropertiesModal() {
           />
         </label>
 
-        <label className="nahtzugabe-dialog-label">
+        <div className="nahtzugabe-dialog-label">
           <span>Material (Stückliste)</span>
+          {catalogMaterialSelectOptions.length > 0 ? (
+            <select
+              className="nahtzugabe-dialog-input"
+              style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8 }}
+              aria-label="Materialnummer aus Datenbank"
+              value={
+                catalogMaterialSelectOptions.some((o) => o.num === (piece.material ?? '').trim())
+                  ? (piece.material ?? '').trim()
+                  : ''
+              }
+              onChange={(e) => {
+                const v = e.target.value
+                updatePiece(piece.id, { material: v })
+              }}
+            >
+              <option value="">— Nicht aus Materialdatenbank —</option>
+              {catalogMaterialSelectOptions.map((o) => (
+                <option key={o.num} value={o.num}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--muted, #666)' }}>
+              Noch keine Materialnummern in der Datenbank.
+            </p>
+          )}
           <input
             type="text"
             className="nahtzugabe-dialog-input"
             style={{ width: '100%', boxSizing: 'border-box' }}
+            list={catalogMaterialSelectOptions.length > 0 ? 'trimtex-piece-material-datalist' : undefined}
             value={piece.material ?? ''}
             onChange={(e) => updatePiece(piece.id, { material: e.target.value })}
-            placeholder="z. B. Baumwolle"
+            placeholder={
+              catalogMaterialSelectOptions.length > 0
+                ? 'Materialnummer / Freitext (z. B. Baumwolle)'
+                : 'z. B. Baumwolle oder Materialnummer'
+            }
             autoComplete="off"
           />
-        </label>
+          {catalogMaterialSelectOptions.length > 0 ? (
+            <datalist id="trimtex-piece-material-datalist">
+              {catalogMaterialSelectOptions.map((o) => (
+                <option key={o.num} value={o.num} />
+              ))}
+            </datalist>
+          ) : null}
+          <button
+            type="button"
+            className="sidebar-btn"
+            style={{ marginTop: 8, padding: '4px 10px', fontSize: 12, alignSelf: 'flex-start' }}
+            onClick={() => setShowMaterialCatalogModal(true)}
+          >
+            Materialdatenbank öffnen…
+          </button>
+        </div>
 
         {piece.seamAllowanceMm != null && (
           <div

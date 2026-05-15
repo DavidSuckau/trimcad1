@@ -119,6 +119,7 @@ export function applyPieceSymmetryToPiece(
     internalLines,
     internalCircles,
     grainLine,
+    internalLineSoftJunctions: undefined,
   })
 
   return { ok: true, piece: pieceOut }

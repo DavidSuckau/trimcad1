@@ -23,6 +23,7 @@ import { MassstabModal } from './MassstabModal'
 import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { StuecklisteModal } from './StuecklisteModal'
+import { MaterialCatalogModal } from './MaterialCatalogModal'
 import { ProfileAssignmentDialog } from './ProfileAssignmentDialog'
 import logoTrimtexUrl from '../assets/logo-trimtex.png'
 
@@ -87,6 +88,7 @@ export function Toolbar() {
     setNahtzuordnungMode,
     setShowSettingsModal,
     setShowStuecklisteModal,
+    setShowMaterialCatalogModal,
     setShowHelpModal,
     setShowShortcutListModal,
     dxfExportScale,
@@ -95,6 +97,10 @@ export function Toolbar() {
     dxfImportDetectVNotches,
     dxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm,
+    canvasRotationUiScale,
+    canvasDigitizeUiScale,
+    canvasVertexPointUiScale,
+    showPivotRotationUi,
     notchSettings,
     activeNotchPresetIndex,
     setActiveNotchPresetIndex,
@@ -141,6 +147,7 @@ export function Toolbar() {
       setNahtzuordnungMode: s.setNahtzuordnungMode,
       setShowSettingsModal: s.setShowSettingsModal,
       setShowStuecklisteModal: s.setShowStuecklisteModal,
+      setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
       setShowHelpModal: s.setShowHelpModal,
       setShowShortcutListModal: s.setShowShortcutListModal,
       dxfExportScale: s.dxfExportScale,
@@ -149,6 +156,10 @@ export function Toolbar() {
       dxfImportDetectVNotches: s.dxfImportDetectVNotches,
       dxfImportCreateSeamLine: s.dxfImportCreateSeamLine,
       dxfImportSeamAllowanceMm: s.dxfImportSeamAllowanceMm,
+      canvasRotationUiScale: s.canvasRotationUiScale,
+      canvasDigitizeUiScale: s.canvasDigitizeUiScale,
+      canvasVertexPointUiScale: s.canvasVertexPointUiScale,
+      showPivotRotationUi: s.showPivotRotationUi,
       notchSettings: s.notchSettings,
       activeNotchPresetIndex: s.activeNotchPresetIndex,
       setActiveNotchPresetIndex: s.setActiveNotchPresetIndex,
@@ -244,6 +255,10 @@ export function Toolbar() {
       dxfImportDetectVNotches,
       dxfImportCreateSeamLine,
       dxfImportSeamAllowanceMm,
+      canvasRotationUiScale,
+      canvasDigitizeUiScale,
+      canvasVertexPointUiScale,
+      showPivotRotationUi,
       notchSettings,
       imageDigitizeSession,
     })
@@ -1081,7 +1096,16 @@ export function Toolbar() {
           {openMenu === 'material' && (
             <ul className="menubar-dropdown">
               <li>
-                <span className="menubar-dropdown-btn menubar-dropdown-btn-disabled">In Entwicklung</span>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setShowMaterialCatalogModal(true)
+                    closeMenu()
+                  }}
+                >
+                  Materialdatenbank
+                </button>
               </li>
             </ul>
           )}
@@ -1324,6 +1348,7 @@ export function Toolbar() {
       </div>
       <SettingsModal />
       <StuecklisteModal />
+      <MaterialCatalogModal />
       <ProfileAssignmentDialog />
       <SeamAdjustmentModal />
       <SeamAssignmentMetaModal />

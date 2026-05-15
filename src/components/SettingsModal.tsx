@@ -31,6 +31,14 @@ export function SettingsModal() {
     setDxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm,
     setDxfImportSeamAllowanceMm,
+    canvasRotationUiScale,
+    setCanvasRotationUiScale,
+    canvasDigitizeUiScale,
+    setCanvasDigitizeUiScale,
+    canvasVertexPointUiScale,
+    setCanvasVertexPointUiScale,
+    showPivotRotationUi,
+    setShowPivotRotationUi,
   } = useStore(
     useShallow((s) => ({
       showSettingsModal: s.showSettingsModal,
@@ -49,6 +57,14 @@ export function SettingsModal() {
       setDxfImportCreateSeamLine: s.setDxfImportCreateSeamLine,
       dxfImportSeamAllowanceMm: s.dxfImportSeamAllowanceMm,
       setDxfImportSeamAllowanceMm: s.setDxfImportSeamAllowanceMm,
+      canvasRotationUiScale: s.canvasRotationUiScale,
+      setCanvasRotationUiScale: s.setCanvasRotationUiScale,
+      canvasDigitizeUiScale: s.canvasDigitizeUiScale,
+      setCanvasDigitizeUiScale: s.setCanvasDigitizeUiScale,
+      canvasVertexPointUiScale: s.canvasVertexPointUiScale,
+      setCanvasVertexPointUiScale: s.setCanvasVertexPointUiScale,
+      showPivotRotationUi: s.showPivotRotationUi,
+      setShowPivotRotationUi: s.setShowPivotRotationUi,
     })),
   )
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
@@ -219,6 +235,92 @@ export function SettingsModal() {
                   Nahtlinie: Offset nach innen aus der Schnittkontur; die Schnittkontur wird für die Seam-as-Master-Logik
                   aus der Naht neu abgeleitet (Clipper kann geringfügig von der importierten Polylinie abweichen).
                 </p>
+              </div>
+
+              <h3 style={{ margin: '20px 0 12px', fontSize: '14px' }}>Arbeitsfläche</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <label style={{ fontSize: '13px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={showPivotRotationUi}
+                    onChange={(e) => setShowPivotRotationUi(e.target.checked)}
+                  />
+                  <span>
+                    Drehpunkt, Drehring und Drehgriff am Teil anzeigen
+                    <span style={{ display: 'block', fontSize: '11px', color: '#999', marginTop: '4px', fontWeight: 400 }}>
+                      Ausblenden räum die Bedienelemente weg; Drehen per Alt+D (Drehmodus) und Tastenkürzel bleiben möglich.
+                    </span>
+                  </span>
+                </label>
+                <div>
+                  <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>
+                    Drehring und Drehgriff (blau) — Größe
+                  </label>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={2.5}
+                      step={0.05}
+                      value={canvasRotationUiScale}
+                      onChange={(e) => setCanvasRotationUiScale(parseFloat(e.target.value))}
+                      style={{ width: 'min(100%, 280px)' }}
+                      aria-valuetext={`${canvasRotationUiScale.toFixed(2)}×`}
+                    />
+                    <span style={{ fontSize: '12px', color: '#888', minWidth: '52px' }}>
+                      {canvasRotationUiScale.toFixed(2)}×
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#999', margin: '6px 0 0' }}>
+                    Sichtbare Größe bleibt beim Zoomen gleich; nur hier änderbar (wird mit dem Projekt gespeichert).
+                  </p>
+                </div>
+                <div>
+                  <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>
+                    Digitalisieren — Punkte (inkl. grün zum Schließen)
+                  </label>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={2.5}
+                      step={0.05}
+                      value={canvasDigitizeUiScale}
+                      onChange={(e) => setCanvasDigitizeUiScale(parseFloat(e.target.value))}
+                      style={{ width: 'min(100%, 280px)' }}
+                      aria-valuetext={`${canvasDigitizeUiScale.toFixed(2)}×`}
+                    />
+                    <span style={{ fontSize: '12px', color: '#888', minWidth: '52px' }}>
+                      {canvasDigitizeUiScale.toFixed(2)}×
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#999', margin: '6px 0 0' }}>
+                    Ebenfalls unabhängig vom Zoom; der grüne „Schließen“-Kreis beim ersten Punkt skaliert mit.
+                  </p>
+                </div>
+                <div>
+                  <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>
+                    Eckpunkte (rot), weiche Punkte (blau), Kurvenpunkte (Bézier-Mitte)
+                  </label>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={2.5}
+                      step={0.05}
+                      value={canvasVertexPointUiScale}
+                      onChange={(e) => setCanvasVertexPointUiScale(parseFloat(e.target.value))}
+                      style={{ width: 'min(100%, 280px)' }}
+                      aria-valuetext={`${canvasVertexPointUiScale.toFixed(2)}×`}
+                    />
+                    <span style={{ fontSize: '12px', color: '#888', minWidth: '52px' }}>
+                      {canvasVertexPointUiScale.toFixed(2)}×
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#999', margin: '6px 0 0' }}>
+                    Gilt bei „Punkte anzeigen“ bzw. Punkt-Werkzeugen; Klick-/Hover-Toleranz skaliert mit.
+                  </p>
+                </div>
               </div>
             </div>
           )}

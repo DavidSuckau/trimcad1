@@ -6,8 +6,17 @@ import {
   aggregateBomByMaterial,
   getCutLineAreaMm2,
   getCutLinePerimeterMm,
+  materialKeyForBom,
   materialLabelForBom,
 } from '../bom/pieceBomStats'
+import {
+  findCatalogRowByMaterialKey,
+  catalogMaterialDescription,
+  materialCostSumByMaterialKey,
+  pieceMaterialCostEuro,
+  totalMaterialCostEuro,
+} from '../bom/materialCatalogCost'
+import { loadMaterialCatalog } from '../material/materialCatalogStorage'
 import { buildNaehplanRows } from '../bom/naehplan'
 import { computeMaterialAreaShares } from '../bom/materialAreaShare'
 import { aggregateProfileBom } from '../bom/profileBomStats'
@@ -28,6 +37,11 @@ function fmtTotalArea(m2: number): string {
 
 function fmtTotalPerimeter(m: number): string {
   return m.toLocaleString('de-DE', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+}
+
+function fmtEuro(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })
 }
 
 export function StuecklisteModal() {
@@ -72,6 +86,18 @@ export function StuecklisteModal() {
     }))
     return aggregateBomByMaterial(rows)
   }, [pieces])
+
+  const catalogRows = useMemo(() => loadMaterialCatalog().rows, [pieces, showStuecklisteModal])
+
+  const materialCostByKey = useMemo(
+    () => materialCostSumByMaterialKey(pieces, catalogRows),
+    [pieces, catalogRows],
+  )
+
+  const grandMaterialEuro = useMemo(
+    () => totalMaterialCostEuro(pieces, catalogRows),
+    [pieces, catalogRows],
+  )
 
   const naehplanRows = useMemo(() => buildNaehplanRows(workspace), [workspace])
 
@@ -162,7 +188,9 @@ export function StuecklisteModal() {
                   <th>Fläche (m²)</th>
                   <th>Umfang (m)</th>
                   <th>Kerben</th>
-                  <th>Material</th>
+                  <th>Materialnr.</th>
+                  <th>Materialbezeichnung</th>
+                  <th>Material (€)</th>
                 </tr>
               </thead>
               <tbody>
@@ -170,6 +198,10 @@ export function StuecklisteModal() {
                   const areaMm2 = getCutLineAreaMm2(p)
                   const perMm = getCutLinePerimeterMm(p)
                   const q = p.bomQuantity ?? 1
+                  const matKey = materialKeyForBom(p.material)
+                  const rowCatalog = findCatalogRowByMaterialKey(catalogRows, matKey)
+                  const lineEuro = pieceMaterialCostEuro(p, rowCatalog)
+                  const matDesc = catalogMaterialDescription(catalogRows, matKey)
                   return (
                     <tr key={p.id}>
                       <td className="notch-nr">{i + 1}</td>
@@ -211,9 +243,11 @@ export function StuecklisteModal() {
                           onChange={(e) => updatePiece(p.id, { material: e.target.value })}
                           placeholder="—"
                           autoComplete="off"
-                          aria-label={`Material ${p.name}`}
+                          aria-label={`Materialnummer ${p.name}`}
                         />
                       </td>
+                      <td style={{ fontSize: 12, color: 'var(--muted, #555)' }}>{matDesc}</td>
+                      <td style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtEuro(lineEuro)}</td>
                     </tr>
                   )
                 })}
@@ -233,19 +267,25 @@ export function StuecklisteModal() {
                   <table className="stueckliste-summary-table">
                     <thead>
                       <tr>
-                        <th>Material</th>
+                        <th>Materialnr.</th>
+                        <th>Bezeichnung</th>
                         <th>Σ Stückzahl</th>
                         <th>Σ Fläche (m²)</th>
                         <th>Σ Umfang (m)</th>
+                        <th>Σ Material (€)</th>
                       </tr>
                     </thead>
                     <tbody>
                       {aggregate.byMaterial.map((g) => (
                         <tr key={g.materialKey || '__empty__'}>
                           <td>{materialLabelForBom(g.materialKey)}</td>
+                          <td>{catalogMaterialDescription(catalogRows, g.materialKey)}</td>
                           <td>{g.quantitySum}</td>
                           <td>{fmtTotalArea(g.totalAreaM2)}</td>
                           <td>{fmtTotalPerimeter(g.totalPerimeterM)}</td>
+                          <td style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtEuro(materialCostByKey.get(g.materialKey))}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -262,7 +302,8 @@ export function StuecklisteModal() {
 
             <div className="stueckliste-grand">
               Gesamt: Fläche {fmtTotalArea(aggregate.grand.totalAreaM2)} m² · Umfang{' '}
-              {fmtTotalPerimeter(aggregate.grand.totalPerimeterM)} m
+              {fmtTotalPerimeter(aggregate.grand.totalPerimeterM)} m · Σ Material (Katalog){' '}
+              {fmtEuro(grandMaterialEuro)}
             </div>
 
             <div className="stueckliste-overview-section">

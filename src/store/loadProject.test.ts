@@ -49,6 +49,10 @@ const makeProject = (): TrimTexProjectFileV1 => ({
   dxfImportDetectVNotches: true,
   dxfImportCreateSeamLine: false,
   dxfImportSeamAllowanceMm: 10,
+  canvasRotationUiScale: 1,
+  canvasDigitizeUiScale: 1,
+  canvasVertexPointUiScale: 1,
+  showPivotRotationUi: true,
   notchSettings: [
     { type: 'kerbe', widthMm: 6, depthMm: 4 },
     { type: 'strich', widthMm: 2.5, depthMm: 2 },
@@ -77,6 +81,7 @@ describe('loadProjectFromFile', () => {
       showShortcutListModal: true,
       showSettingsModal: true,
       showStuecklisteModal: true,
+      showMaterialCatalogModal: true,
       toastMessage: 'warn:old toast',
     })
   })
@@ -118,6 +123,7 @@ describe('loadProjectFromFile', () => {
     expect(s.showShortcutListModal).toBe(false)
     expect(s.showSettingsModal).toBe(false)
     expect(s.showStuecklisteModal).toBe(false)
+    expect(s.showMaterialCatalogModal).toBe(false)
   })
 
   it('setzt toastMessage zurück', () => {

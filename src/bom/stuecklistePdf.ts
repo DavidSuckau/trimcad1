@@ -1,7 +1,15 @@
 import { jsPDF } from 'jspdf'
 import { autoTable } from 'jspdf-autotable'
 import type { Workspace } from '../types/model'
-import { aggregateBomByMaterial, getCutLineAreaMm2, getCutLinePerimeterMm, materialLabelForBom } from './pieceBomStats'
+import { aggregateBomByMaterial, getCutLineAreaMm2, getCutLinePerimeterMm, materialKeyForBom, materialLabelForBom } from './pieceBomStats'
+import {
+  findCatalogRowByMaterialKey,
+  catalogMaterialDescription,
+  materialCostSumByMaterialKey,
+  pieceMaterialCostEuro,
+  totalMaterialCostEuro,
+} from './materialCatalogCost'
+import { loadMaterialCatalog } from '../material/materialCatalogStorage'
 import { aggregateProfileBom } from './profileBomStats'
 import { buildMaterialPieSvgDocument } from './buildMaterialPieSvg'
 import { computeMaterialAreaShares } from './materialAreaShare'
@@ -23,6 +31,11 @@ function fmtTotalArea(m2: number): string {
 
 function fmtTotalPerimeter(m: number): string {
   return m.toLocaleString('de-DE', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+}
+
+function fmtEuroPdf(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })
 }
 
 function safeFilenamePart(name: string): string {
@@ -210,6 +223,7 @@ function drawWorkspacePreviewTechnicalPage(doc: jsPDF, p: TechnicalPreviewPagePa
 export async function downloadStuecklistePdf(params: StuecklistePdfParams): Promise<void> {
   const { workspace, docDateLabel, imageSession, imageDataUrl } = params
   const { pieces } = workspace
+  const catalogRows = loadMaterialCatalog().rows
   const aggregate = aggregateBomByMaterial(
     pieces.map((p) => ({
       materialKey: p.material ?? '',
@@ -250,11 +264,18 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
   }
   y += 3
 
+  const materialCostByKey = materialCostSumByMaterialKey(pieces, catalogRows)
+  const grandMaterialEuro = totalMaterialCostEuro(pieces, catalogRows)
+
   const bodyRows: (string | number)[][] = pieces.map((p, i) => {
     const areaMm2 = getCutLineAreaMm2(p)
     const perMm = getCutLinePerimeterMm(p)
     const q = p.bomQuantity ?? 1
     const desc = (p.description ?? '').trim()
+    const matKey = materialKeyForBom(p.material)
+    const rowCatalog = findCatalogRowByMaterialKey(catalogRows, matKey)
+    const lineEuro = pieceMaterialCostEuro(p, rowCatalog)
+    const matDesc = catalogMaterialDescription(catalogRows, matKey)
     return [
       i + 1,
       p.name,
@@ -264,13 +285,28 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
       fmtLenM(perMm),
       p.notches.length,
       p.material?.trim() ? p.material : '—',
+      matDesc,
+      fmtEuroPdf(lineEuro),
     ]
   })
 
   autoTable(doc, {
     startY: y,
-    head: [['Nr.', 'Name', 'Beschreibung', 'Stückzahl', 'Fläche (m²)', 'Umfang (m)', 'Kerben', 'Material']],
-    body: bodyRows.length ? bodyRows : [['—', 'Keine Teile', '—', '—', '—', '—', '—', '—']],
+    head: [
+      [
+        'Nr.',
+        'Name',
+        'Beschreibung',
+        'Stückzahl',
+        'Fläche (m²)',
+        'Umfang (m)',
+        'Kerben',
+        'Materialnr.',
+        'Materialbezeichnung',
+        'Material (€)',
+      ],
+    ],
+    body: bodyRows.length ? bodyRows : [['—', 'Keine Teile', '—', '—', '—', '—', '—', '—', '—', '—']],
     showHead: 'everyPage',
     styles: { fontSize: 8, cellPadding: 1.2, overflow: 'linebreak' },
     headStyles: { fillColor: [230, 230, 233], textColor: 20, fontStyle: 'bold', fontSize: 8 },
@@ -279,14 +315,16 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
     tableWidth: contentW,
     theme: 'grid',
     columnStyles: {
-      0: { cellWidth: 10 },
-      1: { cellWidth: 32 },
-      2: { cellWidth: 38 },
-      3: { cellWidth: 16 },
-      4: { cellWidth: 22 },
-      5: { cellWidth: 20 },
-      6: { cellWidth: 14 },
-      7: { cellWidth: 'auto' },
+      0: { cellWidth: 8 },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 26 },
+      3: { cellWidth: 12 },
+      4: { cellWidth: 18 },
+      5: { cellWidth: 16 },
+      6: { cellWidth: 11 },
+      7: { cellWidth: 22 },
+      8: { cellWidth: 32 },
+      9: { cellWidth: 20 },
     },
   })
 
@@ -300,19 +338,21 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
 
   const matBody = aggregate.byMaterial.map((g) => [
     materialLabelForBom(g.materialKey),
+    catalogMaterialDescription(catalogRows, g.materialKey),
     g.quantitySum,
     fmtTotalArea(g.totalAreaM2),
     fmtTotalPerimeter(g.totalPerimeterM),
+    fmtEuroPdf(materialCostByKey.get(g.materialKey)),
   ])
 
   autoTable(doc, {
     startY: y,
-    head: [['Material', 'Σ Stückzahl', 'Σ Fläche (m²)', 'Σ Umfang (m)']],
-    body: matBody.length ? matBody : [['—', '—', '—', '—']],
+    head: [['Materialnr.', 'Bezeichnung', 'Σ Stückzahl', 'Σ Fläche (m²)', 'Σ Umfang (m)', 'Σ Material (€)']],
+    body: matBody.length ? matBody : [['—', '—', '—', '—', '—', '—']],
     styles: { fontSize: 8, cellPadding: 1.2 },
     headStyles: { fillColor: [230, 230, 233], fontStyle: 'bold', fontSize: 8 },
     margin: { left: margin, right: margin },
-    tableWidth: Math.min(contentW, 160),
+    tableWidth: Math.min(contentW, 200),
     theme: 'grid',
   })
 
@@ -346,7 +386,7 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(10)
   doc.text(
-    `Gesamt: Fläche ${fmtTotalArea(aggregate.grand.totalAreaM2)} m² · Umfang ${fmtTotalPerimeter(aggregate.grand.totalPerimeterM)} m`,
+    `Gesamt: Fläche ${fmtTotalArea(aggregate.grand.totalAreaM2)} m² · Umfang ${fmtTotalPerimeter(aggregate.grand.totalPerimeterM)} m · Σ Material (Katalog) ${fmtEuroPdf(grandMaterialEuro)}`,
     margin,
     y,
   )

@@ -48,6 +48,14 @@ export type TrimTexProjectFileV1 = {
   dxfImportDetectVNotches: boolean
   dxfImportCreateSeamLine: boolean
   dxfImportSeamAllowanceMm: number
+  /** 0.5–2.5: Drehring/Drehgriff (Zoom-unabhängige Darstellung). */
+  canvasRotationUiScale: number
+  /** 0.5–2.5: Digitalisier-Punkte (Zoom-unabhängige Darstellung). */
+  canvasDigitizeUiScale: number
+  /** 0.5–2.5: rote Eckpunkte, weiche (blaue) Punkte, Bézier-Kurvenpunkte. */
+  canvasVertexPointUiScale: number
+  /** Drehpunkt, Drehring und Drehgriff am ausgewählten Teil (Standard: an). */
+  showPivotRotationUi: boolean
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
 }
@@ -188,6 +196,16 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       ? { start: { ...(raw.grainLine as { start: Point }).start }, end: { ...(raw.grainLine as { end: Point }).end } }
       : null,
     internalLines,
+    internalLineSoftJunctions: (() => {
+      const rawJ = (raw as { internalLineSoftJunctions?: unknown }).internalLineSoftJunctions
+      if (!Array.isArray(rawJ)) return undefined
+      const n = internalLines.length
+      if (n < 2) return undefined
+      const u = [...new Set(rawJ.filter((x): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 1 && x < n))].sort(
+        (a, b) => a - b
+      )
+      return u.length > 0 ? u : undefined
+    })(),
     internalCircles,
     layer: typeof raw.layer === 'string' ? raw.layer : 'CUT',
     transform: {
@@ -369,6 +387,10 @@ export function buildTrimTexProjectFile(args: {
   dxfImportDetectVNotches: boolean
   dxfImportCreateSeamLine: boolean
   dxfImportSeamAllowanceMm: number
+  canvasRotationUiScale: number
+  canvasDigitizeUiScale: number
+  canvasVertexPointUiScale: number
+  showPivotRotationUi: boolean
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
 }): TrimTexProjectFileV1 {
@@ -384,6 +406,10 @@ export function buildTrimTexProjectFile(args: {
     dxfImportDetectVNotches: args.dxfImportDetectVNotches,
     dxfImportCreateSeamLine: args.dxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm: args.dxfImportSeamAllowanceMm,
+    canvasRotationUiScale: args.canvasRotationUiScale,
+    canvasDigitizeUiScale: args.canvasDigitizeUiScale,
+    canvasVertexPointUiScale: args.canvasVertexPointUiScale,
+    showPivotRotationUi: args.showPivotRotationUi,
     notchSettings: args.notchSettings.map((n) => ({ ...n })),
     imageDigitizeSession: args.imageDigitizeSession
       ? { ...args.imageDigitizeSession, imageSizePx: args.imageDigitizeSession.imageSizePx ? { ...args.imageDigitizeSession.imageSizePx } : null }
@@ -450,6 +476,15 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
       ? o.dxfImportSeamAllowanceMm
       : 8
 
+  const clampOverlay = (x: unknown, def: number) => {
+    const n = typeof x === 'number' && Number.isFinite(x) ? x : def
+    return Math.min(2.5, Math.max(0.5, n))
+  }
+  const canvasRotationUiScale = clampOverlay(o.canvasRotationUiScale, 1)
+  const canvasDigitizeUiScale = clampOverlay(o.canvasDigitizeUiScale, 1)
+  const canvasVertexPointUiScale = clampOverlay(o.canvasVertexPointUiScale, 1)
+  const showPivotRotationUi = o.showPivotRotationUi === false ? false : true
+
   let imageDigitizeSession: TrimTexProjectImageSession | null = null
   if (o.imageDigitizeSession !== undefined && o.imageDigitizeSession !== null) {
     const img = o.imageDigitizeSession as Record<string, unknown>
@@ -489,6 +524,10 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     dxfImportDetectVNotches,
     dxfImportCreateSeamLine,
     dxfImportSeamAllowanceMm,
+    canvasRotationUiScale,
+    canvasDigitizeUiScale,
+    canvasVertexPointUiScale,
+    showPivotRotationUi,
     notchSettings:
       notchSettings.length >= 10
         ? notchSettings

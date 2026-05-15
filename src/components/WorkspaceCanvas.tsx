@@ -19,6 +19,7 @@ import {
   totalPathLength,
 } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
+import { internalLineEndpointsTouch } from '../geometry/internalLineJunctions'
 import { offsetSegmentPoints } from '../geometry/offset'
 import {
   getNotchPositionAndAngle,
@@ -254,6 +255,17 @@ function pointAtDistanceOnRay(start: Point, current: Point, distanceMm: number):
   if (len <= 1e-6) return { x: start.x + distanceMm, y: start.y }
   const s = distanceMm / len
   return { x: start.x + dx * s, y: start.y + dy * s }
+}
+
+function nearestInternalLineForPointInsert(
+  piece: PatternPiece,
+  local: Point,
+  hitMm: number
+): { curveIndex: number; point: Point; t?: number; distance: number } | null {
+  if (piece.internalLines.length === 0) return null
+  const nearest = nearestCurveIndexAndPoint(local, piece.internalLines)
+  if (!nearest || nearest.distance > hitMm) return null
+  return nearest
 }
 
 function nearestPointForMasterPointEditing(piece: PatternPiece, local: Point, hitMm: number) {
@@ -552,6 +564,59 @@ const PIVOT_SNAP_NOTCH_MM = 6
 type DeletableHoverTarget =
   | { pieceId: string; kind: 'vertex'; vertexIndex: number }
   | { pieceId: string; kind: 'pointOnCurve'; curveIndex: number }
+  | { pieceId: string; kind: 'internalJunction'; j: number }
+  | { pieceId: string; kind: 'internalTerminal'; curveIndex: number; end: 'start' | 'end' }
+  | { pieceId: string; kind: 'internalPointOnCurve'; curveIndex: number }
+
+function collectInternalLineVertexHoverCandidates(
+  piece: PatternPiece,
+  local: Point,
+  hitMm: number
+): Array<{ dist: number; target: DeletableHoverTarget }> {
+  const lines = piece.internalLines
+  const n = lines.length
+  if (n === 0) return []
+  const pid = piece.id
+  const out: Array<{ dist: number; target: DeletableHoverTarget }> = []
+  const p0 = lines[0].start
+  out.push({
+    dist: Math.hypot(local.x - p0.x, local.y - p0.y),
+    target: { pieceId: pid, kind: 'internalTerminal', curveIndex: 0, end: 'start' },
+  })
+  for (let j = 1; j < n; j++) {
+    const jp = lines[j].start
+    const d = Math.hypot(local.x - jp.x, local.y - jp.y)
+    if (internalLineEndpointsTouch(lines[j - 1].end, lines[j].start)) {
+      out.push({ dist: d, target: { pieceId: pid, kind: 'internalJunction', j } })
+    } else {
+      const ep = lines[j - 1].end
+      out.push({
+        dist: Math.hypot(local.x - ep.x, local.y - ep.y),
+        target: { pieceId: pid, kind: 'internalTerminal', curveIndex: j - 1, end: 'end' },
+      })
+      out.push({ dist: d, target: { pieceId: pid, kind: 'internalTerminal', curveIndex: j, end: 'start' } })
+    }
+  }
+  const en = lines[n - 1].end
+  out.push({
+    dist: Math.hypot(local.x - en.x, local.y - en.y),
+    target: { pieceId: pid, kind: 'internalTerminal', curveIndex: n - 1, end: 'end' },
+  })
+  return out.filter((x) => x.dist <= hitMm)
+}
+
+function mergeInternalLineVertexVsCurve(
+  bestVertex: { dist: number; value: DeletableHoverTarget | null },
+  bestCurve: { dist: number; value: DeletableHoverTarget | null }
+): { dist: number; value: DeletableHoverTarget | null } {
+  if (bestCurve.value == null && bestVertex.value == null) {
+    return { dist: 1e15, value: null }
+  }
+  if (bestCurve.value == null) return bestVertex
+  if (bestVertex.value == null) return bestCurve
+  if (bestCurve.dist <= bestVertex.dist) return bestCurve
+  return bestVertex
+}
 
 /**
  * Gleiche Priorität wie Pointer-Down (select/point/curvepoint): bei gleichem Abstand gewinnt
@@ -582,15 +647,17 @@ function findPivotSnapTargetAtWorld(
   svgEl: SVGElement | null,
   container: HTMLElement | null
 ): { pieceId: string; pivotLocal: Point } | null {
+  const vtxUi = useStore.getState().canvasVertexPointUiScale
+  const vtxS = Math.min(2.5, Math.max(0.5, Number.isFinite(vtxUi) ? vtxUi : 1))
   const NOTCH_HOVER_HIT = PIVOT_SNAP_NOTCH_MM
   const hoverVertexHitMm = container
-    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgEl, container))
+    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * vtxS, view, svgEl, container))
     : 5
   const hoverVertexSeamHitMm = container
-    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgEl, container))
+    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * vtxS, view, svgEl, container))
     : 8
   const hoverCurveMidHitMm = container
-    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX, view, svgEl, container))
+    ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX * vtxS, view, svgEl, container))
     : 10
 
   let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
@@ -769,10 +836,30 @@ function resolvePivotFromHoveredTarget(
       if (!p) return null
       return { pieceId: piece.id, pivotLocal: p }
     }
-    const curvesPv = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
-    const c = curvesPv[hoveredPoint.curveIndex]
-    if (c?.type !== 'bezier') return null
-    return { pieceId: piece.id, pivotLocal: bezierAt(c, 0.5) }
+    if (hoveredPoint.kind === 'pointOnCurve') {
+      const curvesPv = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+      const c = curvesPv[hoveredPoint.curveIndex]
+      if (c?.type !== 'bezier') return null
+      return { pieceId: piece.id, pivotLocal: bezierAt(c, 0.5) }
+    }
+    if (hoveredPoint.kind === 'internalPointOnCurve') {
+      const c = piece.internalLines[hoveredPoint.curveIndex]
+      if (c?.type !== 'bezier') return null
+      return { pieceId: piece.id, pivotLocal: bezierAt(c, 0.5) }
+    }
+    if (hoveredPoint.kind === 'internalJunction') {
+      const j = hoveredPoint.j
+      const p = piece.internalLines[j]?.start
+      if (!p) return null
+      return { pieceId: piece.id, pivotLocal: { ...p } }
+    }
+    if (hoveredPoint.kind === 'internalTerminal') {
+      const c = piece.internalLines[hoveredPoint.curveIndex]
+      if (!c) return null
+      const p = hoveredPoint.end === 'start' ? c.start : c.end
+      return { pieceId: piece.id, pivotLocal: { ...p } }
+    }
+    return null
   }
   if (hoveredInternalLine) {
     const piece = pieces.find((x) => x.id === hoveredInternalLine.pieceId)
@@ -969,6 +1056,7 @@ const PieceGroup = memo(function PieceGroup({
   showPieceNames,
   showContourMeasurements,
   showRotationRing,
+  showPivotRotationUi,
   isRotationRingHovered,
   isRotationHandleHovered,
   isRotationActive,
@@ -976,6 +1064,7 @@ const PieceGroup = memo(function PieceGroup({
   hoveredInternalCircleId,
   onContextMenu,
   viewZoom,
+  rotationUiScale,
   themeMode: _themeMode,
 }: {
   piece: PatternPiece
@@ -1000,6 +1089,8 @@ const PieceGroup = memo(function PieceGroup({
   showPieceNames?: boolean
   showContourMeasurements?: boolean
   showRotationRing?: boolean
+  /** Drehpunkt, Drehring, Drehgriff am ausgewählten Teil */
+  showPivotRotationUi: boolean
   isRotationRingHovered?: boolean
   isRotationHandleHovered?: boolean
   isRotationActive?: boolean
@@ -1007,6 +1098,8 @@ const PieceGroup = memo(function PieceGroup({
   hoveredInternalCircleId?: string | null
   onContextMenu?: (e: React.MouseEvent) => void
   viewZoom: number
+  /** Zoom-unabhängige Skalierung für Drehring, Drehgriff, Drehpunkt (Einstellungen). */
+  rotationUiScale: number
   /** Theme-Modus: nur für memo-Invalidierung, T wird modulweit gesetzt. */
   themeMode: string
 }) {
@@ -1432,7 +1525,7 @@ const PieceGroup = memo(function PieceGroup({
           pointerEvents="none"
         />
       )}
-      {isSelected && cutLine.length >= 3 && (() => {
+      {isSelected && cutLine.length >= 3 && showPivotRotationUi && (() => {
         const pivot = getPiecePivotLocal(piece)
         const bounds = curvesBounds(cutLine)
         if (!bounds) return null
@@ -1440,37 +1533,39 @@ const PieceGroup = memo(function PieceGroup({
         const handleY = pivot.y - rotationRadius
         const ringInteractive = !!isRotationRingHovered || !!isRotationHandleHovered || !!isRotationActive
         const handleScale = isRotationHandleHovered ? 1.1 : 1
-        const handleRadius = ROTATION_HANDLE_BASE_RADIUS * ptPs * handleScale
+        const rs = Math.min(2.5, Math.max(0.5, rotationUiScale))
+        const z = ptPs * rs
+        const handleRadius = ROTATION_HANDLE_BASE_RADIUS * z * handleScale
         return (
           <>
             <g style={{ cursor: 'grab' }} pointerEvents="all">
               <title>Drehpunkt: ziehen, Doppelklick zurücksetzen · Alt+D auf Ecke, Kerbe oder Bézier-Mitte (ohne „Punkte anzeigen“)</title>
-              <circle cx={pivot.x} cy={pivot.y} r={16 * ptPs} fill="transparent" />
+              <circle cx={pivot.x} cy={pivot.y} r={16 * z} fill="transparent" />
               <circle
                 cx={pivot.x}
                 cy={pivot.y}
-                r={4.2 * ptPs}
+                r={4.2 * z}
                 fill={T.selection.pivotFill}
                 stroke={T.selection.pivotStroke}
-                strokeWidth={1 * ptPs}
+                strokeWidth={1 * z}
                 pointerEvents="none"
               />
               <line
-                x1={pivot.x - 6 * ptPs}
+                x1={pivot.x - 6 * z}
                 y1={pivot.y}
-                x2={pivot.x + 6 * ptPs}
+                x2={pivot.x + 6 * z}
                 y2={pivot.y}
                 stroke={T.selection.crosshairStroke}
-                strokeWidth={0.8 * ptPs}
+                strokeWidth={0.8 * z}
                 pointerEvents="none"
               />
               <line
                 x1={pivot.x}
-                y1={pivot.y - 6 * ptPs}
+                y1={pivot.y - 6 * z}
                 x2={pivot.x}
-                y2={pivot.y + 6 * ptPs}
+                y2={pivot.y + 6 * z}
                 stroke={T.selection.crosshairStroke}
-                strokeWidth={0.8 * ptPs}
+                strokeWidth={0.8 * z}
                 pointerEvents="none"
               />
             </g>
@@ -1481,7 +1576,7 @@ const PieceGroup = memo(function PieceGroup({
                 r={rotationRadius}
                 fill="none"
                 stroke={ringInteractive ? T.selection.rotationHandleAccent : '#7f7f7f'}
-                strokeWidth={ROTATION_RING_STROKE_BASE * ptPs}
+                strokeWidth={ROTATION_RING_STROKE_BASE * z}
                 opacity={ringInteractive ? ROTATION_RING_ALPHA_HOVER : ROTATION_RING_ALPHA_IDLE}
                 pointerEvents="none"
               />
@@ -1495,17 +1590,17 @@ const PieceGroup = memo(function PieceGroup({
                   r={handleRadius}
                   fill={T.selection.rotationHandleFill}
                   stroke={T.selection.rotationHandleStroke}
-                  strokeWidth={1.2 * ptPs}
+                  strokeWidth={1.2 * z}
                 />
                 <path
-                  d={`M ${pivot.x + 5 * ptPs * handleScale} ${handleY} A ${5 * ptPs * handleScale} ${5 * ptPs * handleScale} 0 0 1 ${pivot.x - 5 * ptPs * handleScale} ${handleY}`}
+                  d={`M ${pivot.x + 5 * z * handleScale} ${handleY} A ${5 * z * handleScale} ${5 * z * handleScale} 0 0 1 ${pivot.x - 5 * z * handleScale} ${handleY}`}
                   fill="none"
                   stroke={T.selection.rotationHandleStroke}
-                  strokeWidth={1.1 * ptPs}
+                  strokeWidth={1.1 * z}
                   strokeLinecap="round"
                 />
                 <path
-                  d={`M ${pivot.x - 5 * ptPs * handleScale} ${handleY} L ${pivot.x - 6 * ptPs * handleScale} ${handleY + 1.2 * ptPs * handleScale} L ${pivot.x - 4.2 * ptPs * handleScale} ${handleY + 0.4 * ptPs * handleScale} Z`}
+                  d={`M ${pivot.x - 5 * z * handleScale} ${handleY} L ${pivot.x - 6 * z * handleScale} ${handleY + 1.2 * z * handleScale} L ${pivot.x - 4.2 * z * handleScale} ${handleY + 0.4 * z * handleScale} Z`}
                   fill={T.selection.rotationHandleAccent}
                 />
               </g>
@@ -1516,20 +1611,20 @@ const PieceGroup = memo(function PieceGroup({
               <circle
                 cx={pivot.x}
                 cy={handleY}
-                r={ROTATION_HANDLE_BASE_RADIUS * ptPs}
+                r={ROTATION_HANDLE_BASE_RADIUS * z}
                 fill={T.selection.rotationHandleFill}
                 stroke={T.selection.rotationHandleStroke}
-                strokeWidth={1.2 * ptPs}
+                strokeWidth={1.2 * z}
               />
               <path
-                d={`M ${pivot.x + 5 * ptPs} ${handleY} A ${5 * ptPs} ${5 * ptPs} 0 0 1 ${pivot.x - 5 * ptPs} ${handleY}`}
+                d={`M ${pivot.x + 5 * z} ${handleY} A ${5 * z} ${5 * z} 0 0 1 ${pivot.x - 5 * z} ${handleY}`}
                 fill="none"
                 stroke={T.selection.rotationHandleStroke}
-                strokeWidth={1.1 * ptPs}
+                strokeWidth={1.1 * z}
                 strokeLinecap="round"
               />
               <path
-                d={`M ${pivot.x - 5 * ptPs} ${handleY} L ${pivot.x - 6 * ptPs} ${handleY + 1.2 * ptPs} L ${pivot.x - 4.2 * ptPs} ${handleY + 0.4 * ptPs} Z`}
+                d={`M ${pivot.x - 5 * z} ${handleY} L ${pivot.x - 6 * z} ${handleY + 1.2 * z} L ${pivot.x - 4.2 * z} ${handleY + 0.4 * z} Z`}
                 fill={T.selection.rotationHandleAccent}
               />
               </g>
@@ -1601,6 +1696,11 @@ export function WorkspaceCanvas() {
     addInternalLines,
     updatePiece,
     removeInternalLine,
+    insertPointOnInternalLine,
+    replaceInternalLineSegmentWithBezier,
+    moveInternalLinePointOnCurve,
+    moveInternalLineVertex,
+    convertInternalLineBezierToLine,
     removeInternalCircle,
     offsetSegment,
     addNotch,
@@ -1672,6 +1772,10 @@ export function WorkspaceCanvas() {
     setProfileDialogAssignmentId,
     canvasThemeMode,
     seamAdjustmentHoverPieceId,
+    canvasRotationUiScale,
+    canvasDigitizeUiScale,
+    canvasVertexPointUiScale,
+    showPivotRotationUi,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -1723,6 +1827,11 @@ export function WorkspaceCanvas() {
       addInternalLines: s.addInternalLines,
       updatePiece: s.updatePiece,
       removeInternalLine: s.removeInternalLine,
+      insertPointOnInternalLine: s.insertPointOnInternalLine,
+      replaceInternalLineSegmentWithBezier: s.replaceInternalLineSegmentWithBezier,
+      moveInternalLinePointOnCurve: s.moveInternalLinePointOnCurve,
+      moveInternalLineVertex: s.moveInternalLineVertex,
+      convertInternalLineBezierToLine: s.convertInternalLineBezierToLine,
       removeInternalCircle: s.removeInternalCircle,
       offsetSegment: s.offsetSegment,
       addNotch: s.addNotch,
@@ -1794,6 +1903,10 @@ export function WorkspaceCanvas() {
       setProfileDialogAssignmentId: s.setProfileDialogAssignmentId,
       canvasThemeMode: s.canvasThemeMode,
       seamAdjustmentHoverPieceId: s.seamAdjustmentHoverPieceId,
+      canvasRotationUiScale: s.canvasRotationUiScale,
+      canvasDigitizeUiScale: s.canvasDigitizeUiScale,
+      canvasVertexPointUiScale: s.canvasVertexPointUiScale,
+      showPivotRotationUi: s.showPivotRotationUi,
     })),
   )
   T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
@@ -1857,6 +1970,12 @@ export function WorkspaceCanvas() {
       }
     | { kind: 'controlpoint'; pieceId: string; curveIndex: number; pointKey: 'cp1' | 'cp2'; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutPointKey: 'cp1' | 'cp2' } }
     | { kind: 'pointOnCurve'; pieceId: string; curveIndex: number; t: number; seamDrag?: { startLocal: Point; cutCurveIndex: number; cutT: number }; notchStabilize?: { notches: PatternPiece['notches']; cutLine: Curve[]; seamLine: Curve[] } }
+    | { kind: 'internalPointOnCurve'; pieceId: string; curveIndex: number; t: number }
+    | {
+        kind: 'internalLineVertex'
+        pieceId: string
+        target: { kind: 'junction'; j: number } | { kind: 'terminal'; curveIndex: number; end: 'start' | 'end' }
+      }
     | { kind: 'rectangle'; start: Point; current: Point }
     /** Fensterauswahl im Select-Tool (leerer Bereich). */
     | { kind: 'selectionMarquee'; start: Point; current: Point }
@@ -1898,11 +2017,7 @@ export function WorkspaceCanvas() {
     () => filterBatchTargets(batchSelectionTargets, batchSelectionFilter, pieces),
     [batchSelectionTargets, batchSelectionFilter, pieces]
   )
-  const [hoveredDeletablePoint, setHoveredDeletablePoint] = useState<
-    | { pieceId: string; kind: 'vertex'; vertexIndex: number }
-    | { pieceId: string; kind: 'pointOnCurve'; curveIndex: number }
-    | null
-  >(null)
+  const [hoveredDeletablePoint, setHoveredDeletablePoint] = useState<DeletableHoverTarget | null>(null)
   const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
   const [hoveredPivotForRotationPieceId, setHoveredPivotForRotationPieceId] = useState<string | null>(null)
   const [hoveredRotationRingPieceId, setHoveredRotationRingPieceId] = useState<string | null>(null)
@@ -1981,7 +2096,11 @@ export function WorkspaceCanvas() {
     clientX: number
     clientY: number
   } | null>(null)
-  const [hoveredCurvepointSegment, setHoveredCurvepointSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
+  const [hoveredCurvepointSegment, setHoveredCurvepointSegment] = useState<{
+    pieceId: string
+    curveIndex: number
+    internal?: boolean
+  } | null>(null)
   const [hoveredInternalLine, setHoveredInternalLine] = useState<{ pieceId: string; curveIndex: number } | null>(null)
   const [hoveredInternalCircle, setHoveredInternalCircle] = useState<{ pieceId: string; circleId: string } | null>(null)
   const [digitizeMouseWorld, setDigitizeMouseWorld] = useState<Point | null>(null)
@@ -2724,10 +2843,14 @@ export function WorkspaceCanvas() {
         const ctnHit = containerRef.current
         const svgHit = svgRef.current
         const vHitWorld = ctnHit
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgHit, ctnHit))
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgHit, ctnHit),
+            )
           : 5
         const vHitSeamWorld = ctnHit
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgHit, ctnHit))
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * canvasVertexPointUiScale, view, svgHit, ctnHit),
+            )
           : 8
         const targetId = selectedPieceIds[0]
         const p = pieces.find((x) => x.id === targetId)
@@ -2923,16 +3046,24 @@ export function WorkspaceCanvas() {
       const ctnHit = containerRef.current
       const svgHit = svgRef.current
       const vHitWorld = ctnHit
-        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgHit, ctnHit))
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgHit, ctnHit),
+          )
         : 5
       const vHitSeamWorld = ctnHit
-        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgHit, ctnHit))
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * canvasVertexPointUiScale, view, svgHit, ctnHit),
+          )
         : 8
       const pocHitWorld = ctnHit
-        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX, view, svgHit, ctnHit))
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgHit, ctnHit),
+          )
         : 10
       const pointInsertHitMmDown = ctnHit
-        ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX, view, svgHit, ctnHit))
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgHit, ctnHit),
+          )
         : POINT_INSERT_HIT_FALLBACK_MM
       // Treffer: Seam-as-Master = Eckpunkte auf Innenkontur (seamLine); sonst cut/seam je nach Ansicht.
       if (!layoutOnly && showPoints && (tool === 'select' || tool === 'point' || tool === 'curvepoint') && selectedPieceIds.length > 0) {
@@ -3010,6 +3141,35 @@ export function WorkspaceCanvas() {
         const minVertexDist = bestVertex?.dist ?? Infinity
         const minPointOnCurveDist = bestPointOnCurve?.dist ?? Infinity
         const minNotchDist = bestNotchClick?.dist ?? Infinity
+        let bestInternalVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
+          dist: 1e15,
+          value: null,
+        }
+        let bestInternalCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
+          dist: 1e15,
+          value: null,
+        }
+        for (const p of piecesForClick) {
+          if (!p.internalLines.length) continue
+          const localIl = worldToPieceLocal(world, p)
+          for (let ci = 0; ci < p.internalLines.length; ci++) {
+            const c = p.internalLines[ci]
+            if (c.type !== 'bezier') continue
+            const ptOnCurve = bezierAt(c, 0.5)
+            const d = Math.hypot(localIl.x - ptOnCurve.x, localIl.y - ptOnCurve.y)
+            if (d < pocHitWorld && (!bestInternalCurveOnly.value || d < bestInternalCurveOnly.dist)) {
+              bestInternalCurveOnly = {
+                dist: d,
+                value: { pieceId: p.id, kind: 'internalPointOnCurve', curveIndex: ci },
+              }
+            }
+          }
+          for (const { dist, target } of collectInternalLineVertexHoverCandidates(p, localIl, vHitWorld)) {
+            if (dist < bestInternalVertexOnly.dist) bestInternalVertexOnly = { dist, value: target }
+          }
+        }
+        const internalMerged = mergeInternalLineVertexVsCurve(bestInternalVertexOnly, bestInternalCurveOnly)
+        const minInternalDist = internalMerged.value != null ? internalMerged.dist : Infinity
         // Modifier-Klick soll die Kerben-Bearbeitung robust öffnen, auch wenn Vertex/Kurvenpunkt ähnlich nah liegt.
         if (tool === 'select' && contourEditEnabled && (e.altKey || e.metaKey) && bestNotchClick) {
           e.preventDefault()
@@ -3022,7 +3182,8 @@ export function WorkspaceCanvas() {
         const useNotch =
           bestNotchClick &&
           minNotchDist < minVertexDist &&
-          minNotchDist < minPointOnCurveDist
+          minNotchDist < minPointOnCurveDist &&
+          minNotchDist < minInternalDist
         if (useNotch && bestNotchClick && tool === 'select') {
           // Vor dem Ziehen: gleicher Treffer wie hover — ⌥/⌘+Klick öffnet Bearbeiten (sonst blockiert dieser Block den späteren Handler).
           if (contourEditEnabled && (e.altKey || e.metaKey)) {
@@ -3041,15 +3202,65 @@ export function WorkspaceCanvas() {
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
-        // Punkt-/Kurvenpunkt-Werkzeug: kein Eck- oder Bézier-Mittelpunkt-Ziehen (sonst wird nie eingefügt/umgewandelt).
+        // Punkt-/Kurvenpunkt-Werkzeug: Kontur vs. interne Linie — näherer Treffer gewinnt.
+        const contourVertexForMerge: { dist: number; value: DeletableHoverTarget | null } = bestVertex
+          ? { dist: bestVertex.dist, value: { pieceId: bestVertex.pieceId, kind: 'vertex', vertexIndex: bestVertex.vertexIndex } }
+          : { dist: 1e15, value: null }
+        const contourCurveForMerge: { dist: number; value: DeletableHoverTarget | null } = bestPointOnCurve
+          ? {
+              dist: bestPointOnCurve.dist,
+              value: { pieceId: bestPointOnCurve.pieceId, kind: 'pointOnCurve', curveIndex: bestPointOnCurve.curveIndex },
+            }
+          : { dist: 1e15, value: null }
+        const contourMerged = mergeDeletableHoverVertexVsCurve(contourVertexForMerge, contourCurveForMerge)
+        const internalCloser =
+          internalMerged.value != null &&
+          (contourMerged.value == null || internalMerged.dist < contourMerged.dist - 1e-9)
+
         const usePointOnCurve =
           tool === 'select' &&
+          !internalCloser &&
           bestPointOnCurve &&
           (!bestVertex || bestPointOnCurve.dist <= bestVertex.dist)
         const useVertex =
           tool === 'select' &&
+          !internalCloser &&
           bestVertex &&
           (!bestPointOnCurve || bestVertex.dist < bestPointOnCurve.dist)
+        const useInternalPointOnCurve =
+          tool === 'select' &&
+          internalCloser &&
+          internalMerged.value?.kind === 'internalPointOnCurve'
+        const useInternalVertex =
+          tool === 'select' &&
+          internalCloser &&
+          internalMerged.value != null &&
+          internalMerged.value.kind !== 'internalPointOnCurve'
+
+        if (useInternalPointOnCurve && internalMerged.value?.kind === 'internalPointOnCurve') {
+          setDragging({
+            kind: 'internalPointOnCurve',
+            pieceId: internalMerged.value.pieceId,
+            curveIndex: internalMerged.value.curveIndex,
+            t: 0.5,
+          })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+        if (useInternalVertex && internalMerged.value) {
+          const iv = internalMerged.value
+          if (iv.kind === 'internalJunction') {
+            setDragging({ kind: 'internalLineVertex', pieceId: iv.pieceId, target: { kind: 'junction', j: iv.j } })
+          } else if (iv.kind === 'internalTerminal') {
+            setDragging({
+              kind: 'internalLineVertex',
+              pieceId: iv.pieceId,
+              target: { kind: 'terminal', curveIndex: iv.curveIndex, end: iv.end },
+            })
+          }
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
         if (usePointOnCurve && bestPointOnCurve) {
           const pocPiece = pieces.find((x) => x.id === bestPointOnCurve.pieceId)
           const pocNotchSnap = pocPiece && (pocPiece.notches ?? []).length > 0
@@ -3101,34 +3312,55 @@ export function WorkspaceCanvas() {
       if (!layoutOnly && tool === 'curvepoint' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
-        if (piece) {
-        const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
-        if (masterPc.length > 0) {
-          const local = worldToPieceLocal(world, piece)
-          const nearest = nearestPointForMasterPointEditing(piece, local, pointInsertHitMmDown)
-          if (nearest) {
-            const curve = masterPc[nearest.curveIndex]
-            if (curve.type === 'line') {
-              const seg = masterPc[nearest.curveIndex]
-              if (seg?.type === 'line') {
-                const { start, end } = seg
-                const dx = end.x - start.x
-                const dy = end.y - start.y
-                const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
-                const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
-                replaceSegmentWithBezier(pieceId, nearest.curveIndex, cp1, cp2)
-              }
-            } else if (curve.type === 'bezier' && nearest.t != null && nearest.t > 1e-6 && nearest.t < 1 - 1e-6) {
-              const bez = masterPc[nearest.curveIndex]
-              if (bez?.type === 'bezier') {
-                const pt = nearest.point
-                insertPointOnCutLine(pieceId, nearest.curveIndex, pt, nearest.t)
-              }
-            }
-            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-            return
-          }
+        if (!piece) {
+          return
         }
+        const local = worldToPieceLocal(world, piece)
+        const masterPc = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+        const nearMaster =
+          masterPc.length > 0 ? nearestPointForMasterPointEditing(piece, local, pointInsertHitMmDown) : null
+        const nearIl =
+          piece.internalLines.length > 0
+            ? nearestInternalLineForPointInsert(piece, local, pointInsertHitMmDown)
+            : null
+        const pickIl = nearIl && (!nearMaster || nearIl.distance < nearMaster.distance - 1e-9)
+        if (pickIl && nearIl) {
+          const curve = piece.internalLines[nearIl.curveIndex]
+          if (curve.type === 'line') {
+            const seg = curve
+            const { start, end } = seg
+            const dx = end.x - start.x
+            const dy = end.y - start.y
+            const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
+            const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
+            replaceInternalLineSegmentWithBezier(pieceId, nearIl.curveIndex, cp1, cp2)
+          } else if (curve.type === 'bezier' && nearIl.t != null && nearIl.t > 1e-6 && nearIl.t < 1 - 1e-6) {
+            insertPointOnInternalLine(pieceId, nearIl.curveIndex, nearIl.point, nearIl.t)
+          }
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+        if (nearMaster && masterPc.length > 0) {
+          const curve = masterPc[nearMaster.curveIndex]
+          if (curve.type === 'line') {
+            const seg = masterPc[nearMaster.curveIndex]
+            if (seg?.type === 'line') {
+              const { start, end } = seg
+              const dx = end.x - start.x
+              const dy = end.y - start.y
+              const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
+              const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
+              replaceSegmentWithBezier(pieceId, nearMaster.curveIndex, cp1, cp2)
+            }
+          } else if (curve.type === 'bezier' && nearMaster.t != null && nearMaster.t > 1e-6 && nearMaster.t < 1 - 1e-6) {
+            const bez = masterPc[nearMaster.curveIndex]
+            if (bez?.type === 'bezier') {
+              const pt = nearMaster.point
+              insertPointOnCutLine(pieceId, nearMaster.curveIndex, pt, nearMaster.t)
+            }
+          }
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
         }
         return
       }
@@ -3203,29 +3435,51 @@ export function WorkspaceCanvas() {
       if (!layoutOnly && tool === 'point' && selectedPieceIds.length === 1) {
         const pieceId = selectedPieceIds[0]
         const piece = pieces.find((x) => x.id === pieceId)
-        if (piece) {
-        const masterPt = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
-        if (masterPt.length > 0) {
-          const local = worldToPieceLocal(world, piece)
-          const nearest = nearestPointForMasterPointEditing(piece, local, pointInsertHitMmDown)
-          if (nearest) {
-            const curve = masterPt[nearest.curveIndex]
-            let inserted = false
-            if (curve.type === 'line') {
-              inserted = insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
-            } else if (
-              curve.type === 'bezier' &&
-              nearest.t != null &&
-              nearest.t > 1e-6 &&
-              nearest.t < 1 - 1e-6
-            ) {
-              inserted = insertPointOnCutLine(pieceId, nearest.curveIndex, nearest.point, nearest.t)
-            }
-            if (inserted) setPointPreview(null)
-            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-            return
-          }
+        if (!piece) {
+          return
         }
+        const local = worldToPieceLocal(world, piece)
+        const masterPt = useSeamLineForPointCurveEditing(piece) ? piece.seamLine : piece.cutLine
+        const nearMaster =
+          masterPt.length > 0 ? nearestPointForMasterPointEditing(piece, local, pointInsertHitMmDown) : null
+        const nearIl =
+          piece.internalLines.length > 0
+            ? nearestInternalLineForPointInsert(piece, local, pointInsertHitMmDown)
+            : null
+        const pickIl = nearIl && (!nearMaster || nearIl.distance < nearMaster.distance - 1e-9)
+        if (pickIl && nearIl) {
+          const curve = piece.internalLines[nearIl.curveIndex]
+          let inserted = false
+          if (curve.type === 'line') {
+            inserted = insertPointOnInternalLine(pieceId, nearIl.curveIndex, nearIl.point, nearIl.t)
+          } else if (
+            curve.type === 'bezier' &&
+            nearIl.t != null &&
+            nearIl.t > 1e-6 &&
+            nearIl.t < 1 - 1e-6
+          ) {
+            inserted = insertPointOnInternalLine(pieceId, nearIl.curveIndex, nearIl.point, nearIl.t)
+          }
+          if (inserted) setPointPreview(null)
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+        if (nearMaster && masterPt.length > 0) {
+          const curve = masterPt[nearMaster.curveIndex]
+          let inserted = false
+          if (curve.type === 'line') {
+            inserted = insertPointOnCutLine(pieceId, nearMaster.curveIndex, nearMaster.point, nearMaster.t)
+          } else if (
+            curve.type === 'bezier' &&
+            nearMaster.t != null &&
+            nearMaster.t > 1e-6 &&
+            nearMaster.t < 1 - 1e-6
+          ) {
+            inserted = insertPointOnCutLine(pieceId, nearMaster.curveIndex, nearMaster.point, nearMaster.t)
+          }
+          if (inserted) setPointPreview(null)
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
         }
         return
       }
@@ -3267,49 +3521,58 @@ export function WorkspaceCanvas() {
           ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
-        const rotationHitMm = containerRef.current
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(ROTATION_RING_HOVER_RADIUS_PX, view, svgRef.current, containerRef.current))
-          : 10
-        const PIVOT_HIT = 20
-        for (let i = pieces.length - 1; i >= 0; i--) {
-          const p = pieces[i]
-          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-          const bounds = curvesBounds(p.cutLine)
-          if (!bounds) continue
-          const pivot = getPiecePivotLocal(p)
-          const radius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
-          const handleLocal = { x: pivot.x, y: pivot.y - radius }
-          const handleWorld = pieceLocalToWorld(handleLocal, p)
-          const distHandle = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
-          const pivotWorld = pieceLocalToWorld(pivot, p)
-          const distRing = Math.abs(Math.hypot(world.x - pivotWorld.x, world.y - pivotWorld.y) - radius)
-          if (distHandle < rotationHitMm || distRing < rotationHitMm) {
-            const worldCenter = pieceLocalToWorld(pivot, p)
-            const startWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
-            setDragging({
-              kind: 'rotate',
-              pieceId: p.id,
-              startRotation: p.transform.rotation,
-              startWorldAngle,
-            })
-            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
-            return
-          }
-        }
-        for (let i = pieces.length - 1; i >= 0; i--) {
-          const p = pieces[i]
-          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-          const pivot = getPiecePivotLocal(p)
-          const pivotWorld = pieceLocalToWorld(pivot, p)
-          const pivotDist = Math.hypot(world.x - pivotWorld.x, world.y - pivotWorld.y)
-          if (pivotDist < PIVOT_HIT) {
-            if (e.detail === 2) {
-              setPiecePivot(p.id, null)
+        if (showPivotRotationUi) {
+          const rotationHitMm = containerRef.current
+            ? clampPointHitWorldMm(
+                worldHitRadiusFromScreenPx(
+                  ROTATION_RING_HOVER_RADIUS_PX * canvasRotationUiScale,
+                  view,
+                  svgRef.current,
+                  containerRef.current,
+                ),
+              )
+            : 10
+          const PIVOT_HIT = 20
+          for (let i = pieces.length - 1; i >= 0; i--) {
+            const p = pieces[i]
+            if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+            const bounds = curvesBounds(p.cutLine)
+            if (!bounds) continue
+            const pivot = getPiecePivotLocal(p)
+            const radius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
+            const handleLocal = { x: pivot.x, y: pivot.y - radius }
+            const handleWorld = pieceLocalToWorld(handleLocal, p)
+            const distHandle = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
+            const pivotWorld = pieceLocalToWorld(pivot, p)
+            const distRing = Math.abs(Math.hypot(world.x - pivotWorld.x, world.y - pivotWorld.y) - radius)
+            if (distHandle < rotationHitMm || distRing < rotationHitMm) {
+              const worldCenter = pieceLocalToWorld(pivot, p)
+              const startWorldAngle = (Math.atan2(world.y - worldCenter.y, world.x - worldCenter.x) * 180) / Math.PI
+              setDragging({
+                kind: 'rotate',
+                pieceId: p.id,
+                startRotation: p.transform.rotation,
+                startWorldAngle,
+              })
+              ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
               return
             }
-            setDragging({ kind: 'pivot', pieceId: p.id })
-            containerRef.current?.setPointerCapture?.(e.pointerId)
-            return
+          }
+          for (let i = pieces.length - 1; i >= 0; i--) {
+            const p = pieces[i]
+            if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+            const pivot = getPiecePivotLocal(p)
+            const pivotWorld = pieceLocalToWorld(pivot, p)
+            const pivotDist = Math.hypot(world.x - pivotWorld.x, world.y - pivotWorld.y)
+            if (pivotDist < PIVOT_HIT) {
+              if (e.detail === 2) {
+                setPiecePivot(p.id, null)
+                return
+              }
+              setDragging({ kind: 'pivot', pieceId: p.id })
+              containerRef.current?.setPointerCapture?.(e.pointerId)
+              return
+            }
           }
         }
         if (contourEditEnabled && showGrain) {
@@ -3705,7 +3968,7 @@ export function WorkspaceCanvas() {
         return
       }
       if (!layoutOnly && tool === 'digitize' && digitizeState) {
-        const CLOSE_HIT = 8
+        const CLOSE_HIT = 8 * canvasDigitizeUiScale
         const nodes = digitizeState.nodes
         if (nodes.length >= 3) {
           const first = nodes[0].point
@@ -3759,7 +4022,9 @@ export function WorkspaceCanvas() {
       setTool,
       setDragging,
       insertPointOnCutLine,
+      insertPointOnInternalLine,
       replaceSegmentWithBezier,
+      replaceInternalLineSegmentWithBezier,
       hoveredDeletableNotch,
       closeSegmentMenu,
       cutSeamSwappedSet,
@@ -3801,6 +4066,10 @@ export function WorkspaceCanvas() {
       nahtTrimPickCutVertexActive,
       completeNahtTrimAtCutVertex,
       cancelNahtTrimVertexPick,
+      canvasRotationUiScale,
+      canvasDigitizeUiScale,
+      canvasVertexPointUiScale,
+      showPivotRotationUi,
     ]
   )
 
@@ -3899,7 +4168,7 @@ export function WorkspaceCanvas() {
         setDigitizeMouseWorld(world)
         if (digitizeState.nodes.length >= 3) {
           const first = digitizeState.nodes[0].point
-          setDigitizeNearFirst(Math.hypot(world.x - first.x, world.y - first.y) < 8)
+          setDigitizeNearFirst(Math.hypot(world.x - first.x, world.y - first.y) < 8 * canvasDigitizeUiScale)
         } else {
           setDigitizeNearFirst(false)
         }
@@ -3920,22 +4189,37 @@ export function WorkspaceCanvas() {
         const ctnM = containerRef.current
         const svgM = svgRef.current
         const hoverVertexHitMm = ctnM
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX, view, svgM, ctnM))
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+            )
           : 5
         const hoverVertexSeamHitMm = ctnM
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX, view, svgM, ctnM))
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+            )
           : 8
         const hoverCurveMidHitMm = ctnM
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX, view, svgM, ctnM))
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+            )
           : 10
         const pointInsertHitMmMove = ctnM
-          ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX, view, svgM, ctnM))
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+            )
           : POINT_INSERT_HIT_FALLBACK_MM
         const worldImg = toWorld(e.clientX, e.clientY)
         lastPointerClientRef.current = { x: e.clientX, y: e.clientY }
-        if (tool === 'select') {
+        if (tool === 'select' && showPivotRotationUi) {
           const rotationHoverHitMm = ctnM
-            ? clampPointHitWorldMm(worldHitRadiusFromScreenPx(ROTATION_RING_HOVER_RADIUS_PX, view, svgM, ctnM))
+            ? clampPointHitWorldMm(
+                worldHitRadiusFromScreenPx(
+                  ROTATION_RING_HOVER_RADIUS_PX * canvasRotationUiScale,
+                  view,
+                  svgM,
+                  ctnM,
+                ),
+              )
             : 10
           let pivotHit: { pieceId: string; dist: number } | null = null
           let ringHit: { pieceId: string; dist: number } | null = null
@@ -4222,7 +4506,50 @@ export function WorkspaceCanvas() {
                 bestCurveOnly = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
             }
           }
-          const bestVertex = mergeDeletableHoverVertexVsCurve(bestVertexOnly, bestCurveOnly)
+          const contourHoverMerged = mergeDeletableHoverVertexVsCurve(bestVertexOnly, bestCurveOnly)
+          let bestInternalVertexOnlyH: { dist: number; value: DeletableHoverTarget | null } = {
+            dist: 1e15,
+            value: null,
+          }
+          let bestInternalCurveOnlyH: { dist: number; value: DeletableHoverTarget | null } = {
+            dist: 1e15,
+            value: null,
+          }
+          for (const p of piecesForHover) {
+            if (!p.internalLines.length) continue
+            const localIl = worldToPieceLocal(world, p)
+            for (let ci = 0; ci < p.internalLines.length; ci++) {
+              const c = p.internalLines[ci]
+              if (c.type !== 'bezier') continue
+              const pt = bezierAt(c, 0.5)
+              const d = Math.hypot(localIl.x - pt.x, localIl.y - pt.y)
+              if (d < hoverCurveMidHitMm && (!bestInternalCurveOnlyH.value || d < bestInternalCurveOnlyH.dist)) {
+                bestInternalCurveOnlyH = {
+                  dist: d,
+                  value: { pieceId: p.id, kind: 'internalPointOnCurve', curveIndex: ci },
+                }
+              }
+            }
+            for (const { dist, target } of collectInternalLineVertexHoverCandidates(p, localIl, hoverVertexHitMm)) {
+              if (dist < bestInternalVertexOnlyH.dist) bestInternalVertexOnlyH = { dist, value: target }
+            }
+          }
+          const internalHoverMerged = mergeInternalLineVertexVsCurve(bestInternalVertexOnlyH, bestInternalCurveOnlyH)
+          const internalCloserHover =
+            internalHoverMerged.value != null &&
+            (contourHoverMerged.value == null || internalHoverMerged.dist < contourHoverMerged.dist - 1e-9)
+          const hoverPick = internalCloserHover ? internalHoverMerged.value : contourHoverMerged.value
+          const hoverPickDist = internalCloserHover ? internalHoverMerged.dist : contourHoverMerged.dist
+          const hpPiece = hoverPick ? pieces.find((x) => x.id === hoverPick.pieceId) : null
+          const hoverDelMaxDist = hoverPick
+            ? hoverPick.kind === 'vertex'
+              ? hpPiece && useSeamLineForVertexEditing(hpPiece)
+                ? hoverVertexSeamHitMm
+                : hoverVertexHitMm
+              : hoverPick.kind === 'pointOnCurve' || hoverPick.kind === 'internalPointOnCurve'
+                ? hoverCurveMidHitMm
+                : hoverVertexHitMm
+            : 0
           let bestNotch: { dist: number; pieceId: string; notchId: string } = {
             dist: NOTCH_HOVER_HIT + 1,
             pieceId: '',
@@ -4259,19 +4586,11 @@ export function WorkspaceCanvas() {
               }
             }
           }
-          const pieceForHoverDel = bestVertex.value ? pieces.find((p) => p.id === bestVertex.value!.pieceId) : null
-          const useSeamHoverDel = pieceForHoverDel != null && useSeamLineForVertexEditing(pieceForHoverDel)
-          const hoverDelMaxDist =
-            bestVertex.value == null
-              ? 0
-              : bestVertex.value.kind === 'vertex'
-                ? (useSeamHoverDel ? hoverVertexSeamHitMm : hoverVertexHitMm)
-                : hoverCurveMidHitMm
-          const vertexInRange = bestVertex.value != null && bestVertex.dist <= hoverDelMaxDist
+          const vertexInRange = hoverPick != null && hoverPickDist <= hoverDelMaxDist
           const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
           if (vertexInRange && notchInRange) {
             setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
-            setHoveredDeletablePoint(bestVertex.value)
+            setHoveredDeletablePoint(hoverPick)
             setHoveredInternalLine(null)
             setHoveredInternalCircle(null)
             setNotchPreview(null)
@@ -4287,7 +4606,7 @@ export function WorkspaceCanvas() {
             return
           }
           if (vertexInRange) {
-            setHoveredDeletablePoint(bestVertex.value)
+            setHoveredDeletablePoint(hoverPick)
             setHoveredDeletableNotch(null)
             setHoveredInternalLine(null)
             setHoveredInternalCircle(null)
@@ -4532,18 +4851,16 @@ export function WorkspaceCanvas() {
           if (!p) {
             setPointPreview(null)
           } else {
-          const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-          if (masterPv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const nearest = nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove)
-            if (nearest) {
-              setPointPreview({ pieceId: p.id, point: nearest.point })
-            } else {
-              setPointPreview(null)
-            }
-          } else {
-            setPointPreview(null)
-          }
+            const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+            const nm = masterPv.length > 0 ? nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove) : null
+            const ni =
+              p.internalLines.length > 0
+                ? nearestInternalLineForPointInsert(p, local, pointInsertHitMmMove)
+                : null
+            const pick = ni && (!nm || ni.distance < nm.distance - 1e-9) ? ni : nm
+            if (pick) setPointPreview({ pieceId: p.id, point: pick.point })
+            else setPointPreview(null)
           }
         } else {
           setPointPreview(null)
@@ -4554,19 +4871,26 @@ export function WorkspaceCanvas() {
           const p = pieces.find((x) => x.id === pieceId)
           if (!p) {
             setHoveredCurvepointSegment(null)
+            setHoveredInternalLine(null)
           } else {
-          const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-          if (masterCv.length > 0) {
             const local = worldToPieceLocal(world, p)
-            const r = nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove)
-            if (r && masterCv[r.curveIndex]?.type === 'line') {
-              setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: r.curveIndex })
+            const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+            const nm = masterCv.length > 0 ? nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove) : null
+            const ni =
+              p.internalLines.length > 0
+                ? nearestInternalLineForPointInsert(p, local, pointInsertHitMmMove)
+                : null
+            const pickIl = ni && (!nm || ni.distance < nm.distance - 1e-9)
+            if (pickIl && ni && p.internalLines[ni.curveIndex]?.type === 'line') {
+              setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: ni.curveIndex, internal: true })
+              setHoveredInternalLine({ pieceId: p.id, curveIndex: ni.curveIndex })
+            } else if (nm && masterCv[nm.curveIndex]?.type === 'line') {
+              setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: nm.curveIndex })
+              setHoveredInternalLine(null)
             } else {
               setHoveredCurvepointSegment(null)
+              setHoveredInternalLine(null)
             }
-          } else {
-            setHoveredCurvepointSegment(null)
-          }
           }
         } else {
           setHoveredCurvepointSegment(null)
@@ -4706,6 +5030,31 @@ export function WorkspaceCanvas() {
           target = { x: local.x + dx, y: local.y + dy }
         }
         movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target, false, dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined)
+      } else if (dragging.kind === 'internalPointOnCurve') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece) return
+        const local = worldToPieceLocal(toWorld(e.clientX, e.clientY), piece)
+        moveInternalLinePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, local)
+      } else if (dragging.kind === 'internalLineVertex') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece) return
+        let local = worldToPieceLocal(toWorld(e.clientX, e.clientY), piece)
+        if (e.altKey) {
+          const SNAP_MM = 5
+          const start =
+            dragging.target.kind === 'junction'
+              ? piece.internalLines[dragging.target.j]?.start
+              : dragging.target.end === 'start'
+                ? piece.internalLines[dragging.target.curveIndex]?.start
+                : piece.internalLines[dragging.target.curveIndex]?.end
+          if (start) {
+            local = {
+              x: start.x + Math.round((local.x - start.x) / SNAP_MM) * SNAP_MM,
+              y: start.y + Math.round((local.y - start.y) / SNAP_MM) * SNAP_MM,
+            }
+          }
+        }
+        moveInternalLineVertex(dragging.pieceId, dragging.target, local)
       } else if (dragging.kind === 'line') {
         if (lineLengthEditor?.mode === 'draw' && lineLengthEditor.pieceId === dragging.pieceId) return
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -4815,6 +5164,8 @@ export function WorkspaceCanvas() {
       pieces,
       updateVertex,
       movePointOnCurve,
+      moveInternalLinePointOnCurve,
+      moveInternalLineVertex,
       updateNotch,
       toggleNotchAnchor,
       contourEditEnabled,
@@ -4845,6 +5196,10 @@ export function WorkspaceCanvas() {
       lineLengthEditor,
       internalCircleRadiusEditor,
       cornerRoundEditor,
+      canvasRotationUiScale,
+      canvasDigitizeUiScale,
+      canvasVertexPointUiScale,
+      showPivotRotationUi,
     ]
   )
 
@@ -5429,6 +5784,27 @@ export function WorkspaceCanvas() {
           convertBezierSegmentToLine(hp.pieceId, hp.curveIndex)
           e.preventDefault()
           return
+        } else if (hp.kind === 'internalPointOnCurve' && (e.key === 'e' || e.key === 'E')) {
+          convertInternalLineBezierToLine(hp.pieceId, hp.curveIndex)
+          e.preventDefault()
+          return
+        } else if (hp.kind === 'internalTerminal' && (e.key === 'c' || e.key === 'C')) {
+          const piece = pieces.find((x) => x.id === hp.pieceId)
+          if (piece) {
+            const curve = piece.internalLines[hp.curveIndex]
+            if (curve?.type === 'line') {
+              const { start, end } = curve
+              const dx = end.x - start.x
+              const dy = end.y - start.y
+              const cp1 = { x: start.x + dx / 3, y: start.y + dy / 3 }
+              const cp2 = { x: start.x + (2 * dx) / 3, y: start.y + (2 * dy) / 3 }
+              replaceInternalLineSegmentWithBezier(hp.pieceId, hp.curveIndex, cp1, cp2)
+            } else if (curve?.type === 'bezier') {
+              setToastMessage('warn:Segment ist bereits eine Kurve.')
+            }
+          }
+          e.preventDefault()
+          return
         }
       }
       if (contourEditEnabled && segmentActive && !inInput) {
@@ -5642,7 +6018,13 @@ export function WorkspaceCanvas() {
         setHoveredInternalCircle(null)
         return
       }
-      if (contourEditEnabled && hoveredInternalLine) {
+      if (contourEditEnabled && hoveredDeletablePoint?.kind === 'internalPointOnCurve') {
+        e.preventDefault()
+        convertInternalLineBezierToLine(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.curveIndex)
+        setHoveredDeletablePoint(null)
+        return
+      }
+      if (contourEditEnabled && hoveredInternalLine && !hoveredDeletablePoint) {
         e.preventDefault()
         removeInternalLine(hoveredInternalLine.pieceId, hoveredInternalLine.curveIndex)
         setHoveredInternalLine(null)
@@ -5652,7 +6034,7 @@ export function WorkspaceCanvas() {
       e.preventDefault()
       if (hoveredDeletablePoint.kind === 'vertex') {
         removeVertex(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.vertexIndex)
-      } else {
+      } else if (hoveredDeletablePoint.kind === 'pointOnCurve') {
         convertBezierSegmentToLine(hoveredDeletablePoint.pieceId, hoveredDeletablePoint.curveIndex)
       }
       setHoveredDeletablePoint(null)
@@ -6877,6 +7259,7 @@ export function WorkspaceCanvas() {
               key={piece.id}
               piece={piece}
               viewZoom={view.zoom}
+              rotationUiScale={canvasRotationUiScale}
               isSelected={selectedPieceIds.includes(piece.id)}
               isDialogHovered={seamAdjustmentHoverPieceId === piece.id}
               isHovered={hoveredPieceId === piece.id}
@@ -6888,6 +7271,7 @@ export function WorkspaceCanvas() {
                 (tool === 'kante' ||
                   (tool === 'curvepoint' &&
                     hoveredCurvepointSegment != null &&
+                    !hoveredCurvepointSegment.internal &&
                     hoveredCurvepointSegment.pieceId === effectiveSegmentForHighlight.pieceId &&
                     hoveredCurvepointSegment.curveIndex === effectiveSegmentForHighlight.curveIndex))
               }
@@ -6904,6 +7288,7 @@ export function WorkspaceCanvas() {
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
               showContourMeasurements={showContourMeasurements}
+              showPivotRotationUi={showPivotRotationUi}
               showRotationRing={
                 selectedPieceIds.includes(piece.id) &&
                 (hoveredPivotForRotationPieceId === piece.id ||
@@ -7105,7 +7490,8 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === pointPreview.pieceId)
             if (!piece) return null
             const w = pieceLocalToWorld(pointPreview.point, piece)
-            const ps = 1 / Math.max(view.zoom, 1e-6)
+            const vpS = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
+            const ps = (1 / Math.max(view.zoom, 1e-6)) * vpS
             const [fill, stroke] = COLOR_SOFT_PUNKT
             return (
               <circle
@@ -7124,7 +7510,8 @@ export function WorkspaceCanvas() {
             showPoints &&
             (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
-              const ps = 1 / Math.max(view.zoom, 1e-6)
+              const vpS = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
+              const ps = (1 / Math.max(view.zoom, 1e-6)) * vpS
               const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
@@ -7184,7 +7571,8 @@ export function WorkspaceCanvas() {
             showPoints &&
             (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
             (() => {
-              const ps = 1 / Math.max(view.zoom, 1e-6)
+              const vpS = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
+              const ps = (1 / Math.max(view.zoom, 1e-6)) * vpS
               const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
@@ -7212,9 +7600,139 @@ export function WorkspaceCanvas() {
                 })
               })
             })()}
+          {/* Interne Linien: Eckpunkte (blau = eingefügte Verbindung) und Kurvenpunkt (Bézier-Mitte) */}
+          {contourEditEnabled &&
+            showPoints &&
+            showInternalLines !== false &&
+            (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+            (() => {
+              const vpS = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
+              const ps = (1 / Math.max(view.zoom, 1e-6)) * vpS
+              const HOVER_SCALE = 1.3
+              const nodes: React.ReactNode[] = []
+              for (const pieceId of selectedPieceIds) {
+                const piece = pieces.find((p) => p.id === pieceId)
+                if (!piece || piece.internalLines.length === 0) continue
+                const lines = piece.internalLines
+                const n = lines.length
+                const softJ = new Set(piece.internalLineSoftJunctions ?? [])
+                const hp = hoveredDeletablePoint
+                const pushVertex = (
+                  reactKey: string,
+                  local: Point,
+                  isSoft: boolean,
+                  isHovered: boolean
+                ) => {
+                  const w = pieceLocalToWorld(local, piece)
+                  const [fill, stroke] = isSoft ? COLOR_SOFT_PUNKT : COLOR_ECKPUNKT
+                  const scale = isHovered ? HOVER_SCALE : 1
+                  const r = POINT_SCREEN_R * ps * scale
+                  const eckSize = POINT_SCREEN_RECT * ps * scale
+                  const sw = POINT_SCREEN_STROKE * ps * (isHovered ? 1.3 : 1)
+                  nodes.push(
+                    isSoft ? (
+                      <circle
+                        key={reactKey}
+                        cx={w.x}
+                        cy={w.y}
+                        r={r}
+                        fill={isHovered ? stroke : fill}
+                        stroke={stroke}
+                        strokeWidth={sw}
+                        pointerEvents="none"
+                      />
+                    ) : (
+                      <rect
+                        key={reactKey}
+                        x={w.x - eckSize / 2}
+                        y={w.y - eckSize / 2}
+                        width={eckSize}
+                        height={eckSize}
+                        fill={isHovered ? stroke : fill}
+                        stroke={stroke}
+                        strokeWidth={sw}
+                        pointerEvents="none"
+                      />
+                    )
+                  )
+                }
+                pushVertex(
+                  `il-${pieceId}-t0s`,
+                  lines[0].start,
+                  false,
+                  hp?.pieceId === pieceId &&
+                    hp.kind === 'internalTerminal' &&
+                    hp.curveIndex === 0 &&
+                    hp.end === 'start'
+                )
+                for (let j = 1; j < n; j++) {
+                  const jp = lines[j].start
+                  if (internalLineEndpointsTouch(lines[j - 1].end, lines[j].start)) {
+                    pushVertex(
+                      `il-${pieceId}-jj${j}`,
+                      jp,
+                      softJ.has(j),
+                      hp?.pieceId === pieceId && hp.kind === 'internalJunction' && hp.j === j
+                    )
+                  } else {
+                    pushVertex(
+                      `il-${pieceId}-brk-${j}-a`,
+                      lines[j - 1].end,
+                      false,
+                      hp?.pieceId === pieceId &&
+                        hp.kind === 'internalTerminal' &&
+                        hp.curveIndex === j - 1 &&
+                        hp.end === 'end'
+                    )
+                    pushVertex(
+                      `il-${pieceId}-brk-${j}-b`,
+                      jp,
+                      false,
+                      hp?.pieceId === pieceId &&
+                        hp.kind === 'internalTerminal' &&
+                        hp.curveIndex === j &&
+                        hp.end === 'start'
+                    )
+                  }
+                }
+                pushVertex(
+                  `il-${pieceId}-tne`,
+                  lines[n - 1].end,
+                  false,
+                  hp?.pieceId === pieceId &&
+                    hp.kind === 'internalTerminal' &&
+                    hp.curveIndex === n - 1 &&
+                    hp.end === 'end'
+                )
+                const [fillC, strokeC] = COLOR_PUNKT_AUF_KURVE
+                for (let ci = 0; ci < n; ci++) {
+                  const c = lines[ci]
+                  if (c.type !== 'bezier') continue
+                  const ptOnCurve = bezierAt(c, 0.5)
+                  const w = pieceLocalToWorld(ptOnCurve, piece)
+                  const isHoveredPt =
+                    hp?.pieceId === pieceId && hp.kind === 'internalPointOnCurve' && hp.curveIndex === ci
+                  const scale = isHoveredPt ? HOVER_SCALE : 1
+                  nodes.push(
+                    <circle
+                      key={`il-${pieceId}-poc-${ci}`}
+                      cx={w.x}
+                      cy={w.y}
+                      r={POINT_SCREEN_R * ps * scale}
+                      fill={isHoveredPt ? strokeC : fillC}
+                      stroke={strokeC}
+                      strokeWidth={POINT_SCREEN_STROKE * ps * (isHoveredPt ? 1.3 : 1)}
+                      pointerEvents="none"
+                    />
+                  )
+                }
+              }
+              return nodes
+            })()}
           {/* Digitalisierung: Linien/Kurven, Punkte, Handles, Vorschau, Close-Indikator */}
           {tool === 'digitize' && digitizeState && digitizeState.nodes.length > 0 && (() => {
-            const dps = 1 / Math.max(view.zoom, 1e-6)
+            const digS = Math.min(2.5, Math.max(0.5, canvasDigitizeUiScale))
+            const dps = (1 / Math.max(view.zoom, 1e-6)) * digS
             const nodes = digitizeState.nodes
             const segments: React.ReactNode[] = []
             for (let i = 0; i < nodes.length - 1; i++) {
@@ -7408,7 +7926,9 @@ export function WorkspaceCanvas() {
               const hi = batchUiHighlightByTargetId[key]
               const ringStroke = hi ?? T.batch.ringStroke
               const ringFill = hi ? `${hi}55` : 'none'
-              const ps = 1 / Math.max(view.zoom, 1e-6)
+              const psBase = 1 / Math.max(view.zoom, 1e-6)
+              const vpRing = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
+              const psV = psBase * vpRing
               const tx = `translate(${piece.transform.x},${piece.transform.y}) rotate(${piece.transform.rotation}) scale(${piece.transform.mirrored ? -1 : 1},1)`
               if (t.kind === 'vertex') {
                 const w = getVertexWorldForBatchHighlight(piece, t.vertexIndex)
@@ -7418,10 +7938,10 @@ export function WorkspaceCanvas() {
                     key={key}
                     cx={w.x}
                     cy={w.y}
-                    r={(POINT_SCREEN_R + 2.5) * ps}
+                    r={(POINT_SCREEN_R + 2.5) * psV}
                     fill={ringFill}
                     stroke={ringStroke}
-                    strokeWidth={1.2 * ps}
+                    strokeWidth={1.2 * psV}
                     pointerEvents="none"
                   />
                 )
@@ -7437,10 +7957,10 @@ export function WorkspaceCanvas() {
                     key={key}
                     cx={w.x}
                     cy={w.y}
-                    r={(POINT_SCREEN_R + 2.5) * ps}
+                    r={(POINT_SCREEN_R + 2.5) * psV}
                     fill={ringFill}
                     stroke={ringStroke}
-                    strokeWidth={1.2 * ps}
+                    strokeWidth={1.2 * psV}
                     pointerEvents="none"
                   />
                 )
@@ -7455,10 +7975,10 @@ export function WorkspaceCanvas() {
                     key={key}
                     cx={w.x}
                     cy={w.y}
-                    r={5 * ps}
+                    r={5 * psBase}
                     fill={ringFill}
                     stroke={ringStroke}
-                    strokeWidth={1.2 * ps}
+                    strokeWidth={1.2 * psBase}
                     pointerEvents="none"
                   />
                 )
@@ -7472,8 +7992,8 @@ export function WorkspaceCanvas() {
                       d={curveToPathD([curve])}
                       fill="none"
                       stroke={ringStroke}
-                      strokeWidth={T.internalLine.strokeWidthHover * ps}
-                      strokeDasharray={scaleSvgDashArray(T.internalLine.dash, ps)}
+                      strokeWidth={T.internalLine.strokeWidthHover * psBase}
+                      strokeDasharray={scaleSvgDashArray(T.internalLine.dash, psBase)}
                       opacity={0.95}
                     />
                   </g>
@@ -7482,7 +8002,7 @@ export function WorkspaceCanvas() {
               if (t.kind === 'piece') {
                 const b = boundsForPieceCutLineWorld(piece)
                 if (!b) return null
-                const pad = 2 * ps
+                const pad = 2 * psBase
                 return (
                   <rect
                     key={key}
@@ -7492,7 +8012,7 @@ export function WorkspaceCanvas() {
                     height={b.maxY - b.minY + 2 * pad}
                     fill={ringFill}
                     stroke={ringStroke}
-                    strokeWidth={1.4 * ps}
+                    strokeWidth={1.4 * psBase}
                     strokeDasharray="6 3"
                     pointerEvents="none"
                   />

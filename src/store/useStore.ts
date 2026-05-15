@@ -79,11 +79,22 @@ import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece
 import type { PieceSymmetryKeepSide } from '../geometry/pieceSymmetry'
 import type { PieceSymmetryUiState } from '../symmetry/types'
 import { trimPieceCutLineByOtherPieceOverlap } from '../geometry/seamTrimByOverlap'
+import {
+  internalLineEndpointsTouch,
+  remapSoftJunctionsAfterRemoveCurve,
+  remapSoftJunctionsAfterSplitCurve,
+} from '../geometry/internalLineJunctions'
 
 export type { PieceSymmetryPhase, PieceSymmetryUiState } from '../symmetry/types'
 
 const defaultView: ViewState = { zoom: 1, panX: 0, panY: 0 }
 const NOTCH_ROLES: readonly NotchRole[] = ['nahtanfang', 'nahtende', 'beides'] as const
+
+/** Einstellungen: Dreh-UI und Digitalisier-Punkte (0.5–2.5, Zoom-unabhängige Darstellung). */
+function clampCanvasOverlayScale(v: number): number {
+  if (!Number.isFinite(v)) return 1
+  return Math.min(2.5, Math.max(0.5, v))
+}
 
 /** Nahtlinie geändert → Außenkontur wieder aus Nahtzugabe; manuelles „Naht trimmen“ geht verloren. */
 const TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL =
@@ -396,6 +407,7 @@ type Store = {
   profileDialogAssignmentId: string | null
   showSettingsModal: boolean
   showStuecklisteModal: boolean
+  showMaterialCatalogModal: boolean
   showHelpModal: boolean
   /** Kompakte Tastenkürzel-Übersicht (Hilfe-Menü). */
   showShortcutListModal: boolean
@@ -410,6 +422,10 @@ type Store = {
   dxfImportCreateSeamLine: boolean
   /** Nahtzugabe (mm) für „Nahtlinie beim Import erzeugen“. */
   dxfImportSeamAllowanceMm: number
+  canvasRotationUiScale: number
+  canvasDigitizeUiScale: number
+  canvasVertexPointUiScale: number
+  showPivotRotationUi: boolean
   notchSettings: NotchSetting[]
   /** 0..9 = Notch 1..10; steuert welches Preset beim Notch-Werkzeug verwendet wird (Standard: 0 = Notch 1). */
   activeNotchPresetIndex: number
@@ -463,6 +479,7 @@ type Store = {
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
   setShowStuecklisteModal: (v: boolean) => void
+  setShowMaterialCatalogModal: (v: boolean) => void
   setShowHelpModal: (v: boolean) => void
   setShowShortcutListModal: (v: boolean) => void
   setShowConfiguratorModal: (v: boolean) => void
@@ -480,6 +497,10 @@ type Store = {
   setDxfImportDetectVNotches: (v: boolean) => void
   setDxfImportCreateSeamLine: (v: boolean) => void
   setDxfImportSeamAllowanceMm: (v: number) => void
+  setCanvasRotationUiScale: (v: number) => void
+  setCanvasDigitizeUiScale: (v: number) => void
+  setCanvasVertexPointUiScale: (v: number) => void
+  setShowPivotRotationUi: (v: boolean) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
   setActiveNotchPresetIndex: (index: number) => void
@@ -523,6 +544,18 @@ type Store = {
   removeInternalCircle: (pieceId: string, circleId: string) => void
   addInternalLines: (pieceId: string, curves: Curve[]) => void
   removeInternalLine: (pieceId: string, curveIndex: number) => void
+  /** Punkt auf internem Segment einfügen (Linie teilen oder Bézier an t); weiche Ecke an neuer Verbindung. */
+  insertPointOnInternalLine: (pieceId: string, curveIndex: number, point: Point, t?: number) => boolean
+  replaceInternalLineSegmentWithBezier: (pieceId: string, curveIndex: number, cp1: Point, cp2?: Point) => void
+  moveInternalLinePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point) => void
+  moveInternalLineVertex: (
+    pieceId: string,
+    target:
+      | { kind: 'junction'; j: number }
+      | { kind: 'terminal'; curveIndex: number; end: 'start' | 'end' },
+    p: Point
+  ) => void
+  convertInternalLineBezierToLine: (pieceId: string, curveIndex: number) => void
   updateCurvePoint: (pieceId: string, curveIndex: number, pointKey: string, p: Point) => void
   addNotch: (pieceId: string, notch: Notch) => void
   removeNotch: (pieceId: string, notchId: string) => void
@@ -838,6 +871,7 @@ export const useStore = create<Store>()(
   profileDialogAssignmentId: null,
   showSettingsModal: false,
   showStuecklisteModal: false,
+  showMaterialCatalogModal: false,
   showHelpModal: false,
   showShortcutListModal: false,
   dxfExportScale: 1,
@@ -846,6 +880,10 @@ export const useStore = create<Store>()(
   dxfImportDetectVNotches: true,
   dxfImportCreateSeamLine: false,
   dxfImportSeamAllowanceMm: 8,
+  canvasRotationUiScale: 1,
+  canvasDigitizeUiScale: 1,
+  canvasVertexPointUiScale: 1,
+  showPivotRotationUi: true,
   toastMessage: null,
   seamAdjustmentDialog: null,
   seamAdjustmentHoverPieceId: null,
@@ -1200,6 +1238,7 @@ export const useStore = create<Store>()(
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
   setShowStuecklisteModal: (v) => set({ showStuecklisteModal: v }),
+  setShowMaterialCatalogModal: (v) => set({ showMaterialCatalogModal: v }),
   setShowHelpModal: (v) => set({ showHelpModal: v }),
   setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
   setShowConfiguratorModal: (v) => set({ configuratorModalOpen: v }),
@@ -1294,6 +1333,10 @@ export const useStore = create<Store>()(
   setDxfImportDetectVNotches: (v) => set({ dxfImportDetectVNotches: v }),
   setDxfImportCreateSeamLine: (v) => set({ dxfImportCreateSeamLine: v }),
   setDxfImportSeamAllowanceMm: (v) => set({ dxfImportSeamAllowanceMm: v }),
+  setCanvasRotationUiScale: (v) => set({ canvasRotationUiScale: clampCanvasOverlayScale(v) }),
+  setCanvasDigitizeUiScale: (v) => set({ canvasDigitizeUiScale: clampCanvasOverlayScale(v) }),
+  setCanvasVertexPointUiScale: (v) => set({ canvasVertexPointUiScale: clampCanvasOverlayScale(v) }),
+  setShowPivotRotationUi: (v) => set({ showPivotRotationUi: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
     set((s) => {
@@ -1756,7 +1799,158 @@ export const useStore = create<Store>()(
         pieces: s.workspace.pieces.map((p) => {
           if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.internalLines.length) return p
           const internalLines = p.internalLines.filter((_, i) => i !== curveIndex)
-          return { ...p, internalLines }
+          const internalLineSoftJunctions = remapSoftJunctionsAfterRemoveCurve(
+            p.internalLineSoftJunctions,
+            curveIndex,
+            internalLines.length
+          )
+          return { ...p, internalLines, internalLineSoftJunctions }
+        }),
+      },
+    })),
+
+  insertPointOnInternalLine: (pieceId, curveIndex, point, t) => {
+    let inserted = false
+    set((s) => {
+      const LINE_SPLIT_MIN_MM = 0.5
+      const pieces = s.workspace.pieces.map((p) => {
+        if (p.id !== pieceId) return p
+        const master = p.internalLines
+        if (curveIndex < 0 || curveIndex >= master.length) return p
+        const curve = master[curveIndex]
+        let newLines: Curve[] | null = null
+        if (curve.type === 'line') {
+          const lineLen = Math.hypot(curve.end.x - curve.start.x, curve.end.y - curve.start.y)
+          const minT = Math.min(0.49, LINE_SPLIT_MIN_MM / Math.max(lineLen, 1e-6))
+          const tt = Number.isFinite(t) ? Math.min(1 - minT, Math.max(minT, t as number)) : null
+          const splitPoint =
+            tt == null
+              ? point
+              : {
+                  x: curve.start.x + (curve.end.x - curve.start.x) * tt,
+                  y: curve.start.y + (curve.end.y - curve.start.y) * tt,
+                }
+          const seg1: Curve = { type: 'line', start: { ...curve.start }, end: { ...splitPoint } }
+          const seg2: Curve = { type: 'line', start: { ...splitPoint }, end: { ...curve.end } }
+          newLines = [...master]
+          newLines.splice(curveIndex, 1, seg1, seg2)
+        } else if (curve.type === 'bezier' && t != null && t > 0 && t < 1) {
+          const [seg1, seg2] = splitBezierAt(curve, t)
+          newLines = [...master]
+          newLines.splice(curveIndex, 1, seg1, seg2)
+        }
+        if (!newLines) return p
+        inserted = true
+        const internalLineSoftJunctions = remapSoftJunctionsAfterSplitCurve(
+          p.internalLineSoftJunctions,
+          curveIndex,
+          newLines.length
+        )
+        return { ...p, internalLines: newLines, internalLineSoftJunctions }
+      })
+      return { workspace: { ...s.workspace, pieces } }
+    })
+    return inserted
+  },
+
+  replaceInternalLineSegmentWithBezier: (pieceId, curveIndex, cp1, cp2) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          if (curveIndex < 0 || curveIndex >= p.internalLines.length) return p
+          const c = p.internalLines[curveIndex]
+          if (c.type !== 'line') return p
+          const bezier: Curve = {
+            type: 'bezier',
+            start: { ...c.start },
+            end: { ...c.end },
+            cp1: { ...cp1 },
+            cp2: { ...(cp2 ?? cp1) },
+          }
+          const next = [...p.internalLines]
+          next[curveIndex] = bezier
+          return { ...p, internalLines: next }
+        }),
+      },
+    })),
+
+  moveInternalLinePointOnCurve: (pieceId, curveIndex, t, newPoint) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          const il = p.internalLines
+          if (curveIndex < 0 || curveIndex >= il.length) return p
+          const c = il[curveIndex]
+          if (c.type !== 'bezier') return p
+          const adjusted = adjustControlPointsForPointOnCurve(c, t, newPoint)
+          if (!adjusted) return p
+          const bezier: Curve = {
+            type: 'bezier',
+            start: { ...c.start },
+            end: { ...c.end },
+            cp1: { ...adjusted.cp1 },
+            cp2: { ...adjusted.cp2 },
+          }
+          const next = [...il]
+          next[curveIndex] = bezier
+          return { ...p, internalLines: next }
+        }),
+      },
+    })),
+
+  moveInternalLineVertex: (pieceId, target, p) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((piece) => {
+          if (piece.id !== pieceId) return piece
+          const lines = piece.internalLines.map((c) =>
+            c.type === 'line'
+              ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
+              : {
+                  type: 'bezier' as const,
+                  start: { ...c.start },
+                  end: { ...c.end },
+                  cp1: { ...c.cp1 },
+                  cp2: { ...c.cp2 },
+                }
+          )
+          if (target.kind === 'junction') {
+            const j = target.j
+            if (j < 1 || j >= lines.length) return piece
+            const prev = lines[j - 1]
+            const cur = lines[j]
+            if (!internalLineEndpointsTouch(prev.end, cur.start)) return piece
+            lines[j - 1] = { ...prev, end: { ...p } } as Curve
+            lines[j] = { ...cur, start: { ...p } } as Curve
+          } else {
+            const { curveIndex, end } = target
+            if (curveIndex < 0 || curveIndex >= lines.length) return piece
+            const c = lines[curveIndex]
+            lines[curveIndex] = (end === 'start' ? { ...c, start: { ...p } } : { ...c, end: { ...p } }) as Curve
+          }
+          return { ...piece, internalLines: lines }
+        }),
+      },
+    })),
+
+  convertInternalLineBezierToLine: (pieceId, curveIndex) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          if (curveIndex < 0 || curveIndex >= p.internalLines.length) return p
+          const c = p.internalLines[curveIndex]
+          if (c.type !== 'bezier') return p
+          const lineSeg: Curve = { type: 'line', start: { ...c.start }, end: { ...c.end } }
+          const next = [...p.internalLines]
+          next[curveIndex] = lineSeg
+          return { ...p, internalLines: next }
         }),
       },
     })),
@@ -3423,6 +3617,7 @@ export const useStore = create<Store>()(
       showShortcutListModal: false,
       showSettingsModal: false,
       showStuecklisteModal: false,
+      showMaterialCatalogModal: false,
       workspaceImageSelected: false,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
@@ -3564,6 +3759,16 @@ export const useStore = create<Store>()(
       dxfImportDetectVNotches: project.dxfImportDetectVNotches,
       dxfImportCreateSeamLine: project.dxfImportCreateSeamLine,
       dxfImportSeamAllowanceMm: project.dxfImportSeamAllowanceMm,
+      canvasRotationUiScale: clampCanvasOverlayScale(
+        typeof project.canvasRotationUiScale === 'number' ? project.canvasRotationUiScale : 1,
+      ),
+      canvasDigitizeUiScale: clampCanvasOverlayScale(
+        typeof project.canvasDigitizeUiScale === 'number' ? project.canvasDigitizeUiScale : 1,
+      ),
+      canvasVertexPointUiScale: clampCanvasOverlayScale(
+        typeof project.canvasVertexPointUiScale === 'number' ? project.canvasVertexPointUiScale : 1,
+      ),
+      showPivotRotationUi: project.showPivotRotationUi === false ? false : true,
       notchSettings,
       activeNotchPresetIndex: 0,
       imageDigitizeSession: project.imageDigitizeSession,
@@ -3593,6 +3798,7 @@ export const useStore = create<Store>()(
       showShortcutListModal: false,
       showSettingsModal: false,
       showStuecklisteModal: false,
+      showMaterialCatalogModal: false,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
       toastMessage: null,

@@ -116,6 +116,11 @@ export type PatternPiece = {
   drills: Drill[]
   grainLine: Line | null
   internalLines: Curve[]
+  /**
+   * Weiche Eckpunkte an Verbindungen zwischen aufeinanderfolgenden Einträgen in `internalLines`:
+   * Index `j` bezeichnet die gemeinsame Ecke zwischen Segment `j-1` und `j` (1 <= j < internalLines.length).
+   */
+  internalLineSoftJunctions?: number[]
   internalCircles: InternalCircle[]
   /**
    * Semantische Layer-Klassifikation des Teils (derzeit v. a. für UI/Interchange).

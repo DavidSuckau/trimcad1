@@ -21,6 +21,7 @@ describe('exitAllModes', () => {
       showShortcutListModal: true,
       showSettingsModal: true,
       showStuecklisteModal: true,
+      showMaterialCatalogModal: true,
       configuratorModalOpen: true,
       rockGeneratorModalOpen: true,
       toastMessage: 'warn:test',
@@ -53,6 +54,7 @@ describe('exitAllModes', () => {
     expect(s.showShortcutListModal).toBe(false)
     expect(s.showSettingsModal).toBe(false)
     expect(s.showStuecklisteModal).toBe(false)
+    expect(s.showMaterialCatalogModal).toBe(false)
     expect(s.configuratorModalOpen).toBe(false)
     expect(s.rockGeneratorModalOpen).toBe(false)
   })
