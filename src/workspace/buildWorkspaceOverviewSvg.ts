@@ -1,10 +1,11 @@
 import type { PatternPiece, ProfileAssignment } from '../types/model'
-import { bezierDerivativeAt, signedAreaCurves, curvesBounds } from '../geometry/curveToPath'
+import { signedAreaCurves, curvesBounds } from '../geometry/curveToPath'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { getNotchPositionAndAngleOnInternalLine, isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import { getPieceContourDisplayPaths } from '../components/pieceSolidContourPath'
 import { getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import { getCurvesForSeamEdge } from '../geometry/seamUtils'
-import { enumerateEdges } from '../geometry/edgeEnumeration'
+import { buildProfileOffsetPathD, getProfileAssignmentDisplayCurves } from '../geometry/internalLineProfile'
 import {
   boundsForWorkspaceImage,
   computeWorkspaceOverviewViewBox,
@@ -87,7 +88,12 @@ export function buildWorkspaceOverviewSvgDocument(
 
     for (const n of p.notches) {
       if (n.type !== 'single') continue
-      const { position, angle } = getNotchPositionAndAngleOnCutLine(n, p.cutLine, p.seamLine)
+      const onInternal =
+        isNotchOnInternalLine(n) && p.internalLines.length > 0
+          ? getNotchPositionAndAngleOnInternalLine(n, p.internalLines)
+          : null
+      const { position, angle } =
+        onInternal ?? getNotchPositionAndAngleOnCutLine(n, p.cutLine, p.seamLine)
       const rad = (angle * Math.PI) / 180
       const d = Math.max(1e-6, n.depth)
       const x2 = position.x + d * Math.cos(rad)
@@ -99,51 +105,29 @@ export function buildWorkspaceOverviewSvgDocument(
 
     const grain = getGrainArrowLayout(p)
     if (grain && p.cutLine.length >= 3) {
-      const { line, tickStart, tickEnd, triangleD } = grain
+      const { line, tickStart, tickEnd, tickTriangleD, triangleD } = grain
       parts.push(
         `<line x1="${line.start.x}" y1="${line.start.y}" x2="${line.end.x}" y2="${line.end.y}" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}" stroke-dasharray="${T.grain.dash}" fill="none"/>`,
       )
       parts.push(
-        `<line x1="${tickStart.x}" y1="${tickStart.y}" x2="${tickEnd.x}" y2="${tickEnd.y}" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}" fill="none"/>`,
+        `<line x1="${tickStart.x}" y1="${tickStart.y}" x2="${tickEnd.x}" y2="${tickEnd.y}" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}" stroke-dasharray="${T.grain.dash}" fill="none"/>`,
       )
+      parts.push(`<path d="${escapeXmlAttr(tickTriangleD)}" fill="none" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}"/>`)
       parts.push(`<path d="${escapeXmlAttr(triangleD)}" fill="none" stroke="${T.grain.stroke}" stroke-width="${T.grain.strokeWidth}"/>`)
     }
     const pieceProfiles = (profileAssignments ?? []).filter((pa) => pa.pieceId === p.id)
     for (const pa of pieceProfiles) {
       const masterK = getCurvesForSeamEdge(p)
-      const edges = enumerateEdges(p)
-      const edge = edges.find((e) => e.edgeIndex === pa.edgeIndex)
-      if (!edge) continue
-      const curves = edge.curveIndices.map((ci) => masterK[ci]).filter(Boolean)
+      const curves = getProfileAssignmentDisplayCurves(p, pa)
       if (curves.length === 0) continue
 
       const OFFSET = 20
-      const area = signedAreaCurves(masterK)
-      const outSign = area >= 0 ? -1 : 1
-
-      let pathD = ''
-      for (const seg of curves) {
-        if (seg.type === 'line') {
-          const tdx = seg.end.x - seg.start.x
-          const tdy = seg.end.y - seg.start.y
-          const tlen = Math.hypot(tdx, tdy) || 1
-          const ox = outSign * (-tdy / tlen) * OFFSET
-          const oy = outSign * (tdx / tlen) * OFFSET
-          const sx = seg.start.x + ox, sy = seg.start.y + oy
-          const ex = seg.end.x + ox, ey = seg.end.y + oy
-          pathD += `M ${sx} ${sy} L ${ex} ${ey} `
-        } else {
-          const dd0 = bezierDerivativeAt(seg, 0)
-          const dd1 = bezierDerivativeAt(seg, 1)
-          const len0 = Math.hypot(dd0.x, dd0.y) || 1
-          const len1 = Math.hypot(dd1.x, dd1.y) || 1
-          const o0x = outSign * (-dd0.y / len0) * OFFSET
-          const o0y = outSign * (dd0.x / len0) * OFFSET
-          const o1x = outSign * (-dd1.y / len1) * OFFSET
-          const o1y = outSign * (dd1.x / len1) * OFFSET
-          pathD += `M ${seg.start.x + o0x} ${seg.start.y + o0y} C ${seg.cp1.x + o0x} ${seg.cp1.y + o0y} ${seg.cp2.x + o1x} ${seg.cp2.y + o1y} ${seg.end.x + o1x} ${seg.end.y + o1y} `
-        }
-      }
+      const pathD = buildProfileOffsetPathD(
+        curves,
+        OFFSET,
+        pa.onInternalLine ? 'internal-left' : 'contour-outward',
+        masterK
+      )
       if (pathD) {
         const profStroke = strokeColorForProfileKey(pa.profileKey, false)
         parts.push(
@@ -156,6 +140,7 @@ export function buildWorkspaceOverviewSvgDocument(
         const edgeDx = lastSeg.end.x - firstSeg.start.x
         const edgeDy = lastSeg.end.y - firstSeg.start.y
         const edgeLen = Math.hypot(edgeDx, edgeDy) || 1
+        const outSign = pa.onInternalLine ? 1 : signedAreaCurves(masterK) >= 0 ? -1 : 1
         const nx = outSign * (-edgeDy / edgeLen) * (OFFSET + 12)
         const ny = outSign * (edgeDx / edgeLen) * (OFFSET + 12)
         const lx = midX + nx

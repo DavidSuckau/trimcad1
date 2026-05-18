@@ -2,6 +2,7 @@ import type { Curve, InternalCircle, PatternPiece, Point } from '../types/model'
 import type { BatchSelectionFilter, BatchSelectionTarget } from '../types/model'
 import { bezierAt } from '../geometry/curveToPath'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { getNotchPositionAndAngleOnInternalLine, isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import { pieceLocalToWorld } from '../geometry/pieceTransform'
 import { masterNotchVertexIndexSet, masterSoftVertexIndexSet } from '../geometry/seamUtils'
 import { useSeamLineForPointCurveEditing, useSeamLineForVertexEditing } from '../geometry/vertexMaster'
@@ -159,10 +160,14 @@ export function collectMarqueeTargets(pieces: PatternPiece[], rect: WorldRect): 
       }
     }
 
-    // Kerben (Referenzpunkt auf Schnittkontur)
+    // Kerben (Schnittkontur oder interne Linie)
     for (const n of piece.notches) {
-      const cutPos = getNotchPositionAndAngleOnCutLine(n, piece.cutLine, piece.seamLine)
-      const w = pieceLocalToWorld(cutPos.position, piece.transform)
+      const pos =
+        isNotchOnInternalLine(n) && piece.internalLines.length > 0
+          ? getNotchPositionAndAngleOnInternalLine(n, piece.internalLines)?.position
+          : getNotchPositionAndAngleOnCutLine(n, piece.cutLine, piece.seamLine).position
+      if (!pos) continue
+      const w = pieceLocalToWorld(pos, piece.transform)
       if (pointInWorldRect(w, rect)) {
         add({ kind: 'notch', pieceId: piece.id, notchId: n.id })
       }

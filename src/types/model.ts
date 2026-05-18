@@ -54,6 +54,15 @@ export type Notch = {
   arcLengthMm?: number
   /** Semantische Rolle für Naht-/Profil-Grenzen. */
   role?: NotchRole
+  /**
+   * Kerbe auf interner Linie (Abnäher etc.) – nur Editor/Planung, kein DXF-Schnitt.
+   * Index in `piece.internalLines`. Kanonische Lage: `internalSNormalized` / `internalArcLengthMm`
+   * entlang der offenen internen Polylinie, sonst Projektion von `position`.
+   */
+  internalLineIndex?: number
+  /** Anteil der Bogenlänge entlang aller `internalLines` [0, 1] (offene Polylinie). */
+  internalSNormalized?: number
+  internalArcLengthMm?: number
 }
 
 export type Drill = {
@@ -168,6 +177,8 @@ export const SEAM_ASSIGNMENT_KIND_IDS = [
   'kapp',
   'doppelkapp',
   'beleg',
+  'deko',
+  'steppung',
 ] as const
 export type SeamAssignmentKindId = (typeof SEAM_ASSIGNMENT_KIND_IDS)[number]
 
@@ -177,6 +188,8 @@ export const SEAM_ASSIGNMENT_KIND_LABELS: Record<SeamAssignmentKindId, string> =
   kapp: 'Kappnaht',
   doppelkapp: 'Doppelkappnaht',
   beleg: 'Naht mit Beleg',
+  deko: 'Dekorative Naht / Deco',
+  steppung: 'Steppnaht',
 }
 
 /** Zuordnung zweier Nahtkanten (Eckpunkt→Eckpunkt) zwischen zwei Teilen. Nur Ansicht, nicht im DXF. */
@@ -202,6 +215,20 @@ export type SeamAssignment = {
   orderNumber?: number | null
   /** Art der Naht (optional). */
   seamKind?: SeamAssignmentKindId | null
+  /**
+   * Einzelnaht auf interner Linie (ohne Partner-Teil): Saum, Deco, Steppung usw.
+   * `curveIndicesA` verweisen auf `piece.internalLines`; `pieceIdB` = `pieceIdA` (Platzhalter).
+   */
+  isInternalSingle?: boolean
+}
+
+/** Anhänge-Modus für Profile auf internen Linien (Stückliste / Nähplan). */
+export const PROFILE_INTERNAL_LINE_ATTACHMENT_IDS = ['separate', 'with_seam'] as const
+export type ProfileInternalLineAttachmentId = (typeof PROFILE_INTERNAL_LINE_ATTACHMENT_IDS)[number]
+
+export const PROFILE_INTERNAL_LINE_ATTACHMENT_LABELS: Record<ProfileInternalLineAttachmentId, string> = {
+  separate: 'Profil wird separat angenäht',
+  with_seam: 'Profil wird mit Naht angenäht',
 }
 
 /** Profilzuordnung an einer Kante (Ecke-zu-Ecke). Nur Visualisierung/Stückliste, nicht im DXF-Export. */
@@ -210,6 +237,8 @@ export type ProfileAssignment = {
   pieceId: string
   /** 0-basierte Kantennummer (Ecke-zu-Ecke auf Master-Kontur, analog EdgeSeamAllowance). */
   edgeIndex: number
+  /** true: Profil auf interner Polylinie (`internalLines`); `edgeIndex` ist dann 0 (gesamte Polylinie). */
+  onInternalLine?: boolean
   /** Optionaler Start-Notch für Teilsegment auf der Kante. */
   startNotchId?: string
   /** Optionales Ende-Notch für Teilsegment auf der Kante. */
@@ -226,6 +255,12 @@ export type ProfileAssignment = {
   profileKey: string
   /** Pfad/URL zu hinterlegtem PDF-Dokument. */
   pdfDocumentUrl?: string
+  /**
+   * Nur bei `onInternalLine`: ob das Profil im Nähplan mit der internen Nahtzuordnung
+   * zusammengefasst wird (`with_seam`) oder separat als Profilnaht geführt wird.
+   * Fehlt → `separate`.
+   */
+  internalLineAttachment?: ProfileInternalLineAttachmentId
 }
 
 /** Editor-Notiz am Schnittteil (Teilkoordinaten, mm); bewegt sich mit dem Teil; kein DXF-Export. */

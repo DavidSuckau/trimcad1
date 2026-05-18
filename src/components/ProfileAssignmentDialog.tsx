@@ -1,9 +1,14 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
-import { enumerateEdges } from '../geometry/edgeEnumeration'
-import { edgeLengthInNotchRange } from '../geometry/seamUtils'
+import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
+import { internalSeamForProfile } from '../geometry/profileInternalSeamLink'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import {
+  PROFILE_INTERNAL_LINE_ATTACHMENT_IDS,
+  PROFILE_INTERNAL_LINE_ATTACHMENT_LABELS,
+  type ProfileInternalLineAttachmentId,
+} from '../types/model'
 
 export function ProfileAssignmentDialog() {
   const {
@@ -12,6 +17,7 @@ export function ProfileAssignmentDialog() {
     setProfileDialogAssignmentId,
     updateProfileAssignment,
     removeProfileAssignment,
+    setToastMessage,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -19,6 +25,7 @@ export function ProfileAssignmentDialog() {
       setProfileDialogAssignmentId: s.setProfileDialogAssignmentId,
       updateProfileAssignment: s.updateProfileAssignment,
       removeProfileAssignment: s.removeProfileAssignment,
+      setToastMessage: s.setToastMessage,
     })),
   )
 
@@ -37,6 +44,8 @@ export function ProfileAssignmentDialog() {
   const [internalArticleNumber, setInternalArticleNumber] = useState('')
   const [seamAllowanceStr, setSeamAllowanceStr] = useState('')
   const [pdfDocumentUrl, setPdfDocumentUrl] = useState('')
+  const [internalLineAttachment, setInternalLineAttachment] =
+    useState<ProfileInternalLineAttachmentId>('separate')
 
   useEffect(() => {
     if (assignment) {
@@ -46,21 +55,13 @@ export function ProfileAssignmentDialog() {
       setInternalArticleNumber(assignment.internalArticleNumber ?? '')
       setSeamAllowanceStr(assignment.seamAllowanceMm != null ? String(assignment.seamAllowanceMm) : '')
       setPdfDocumentUrl(assignment.pdfDocumentUrl ?? '')
+      setInternalLineAttachment(assignment.internalLineAttachment ?? 'separate')
     }
   }, [assignment?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const edgeLengthMm = useMemo(() => {
     if (!piece || !assignment) return 0
-    const edges = enumerateEdges(piece)
-    const edge = edges.find((e) => e.edgeIndex === assignment.edgeIndex)
-    if (!edge) return 0
-    return edgeLengthInNotchRange(
-      piece,
-      edge.curveIndices,
-      assignment.startNotchId && assignment.endNotchId
-        ? { startNotchId: assignment.startNotchId, endNotchId: assignment.endNotchId }
-        : null
-    )
+    return profileAssignmentLengthMm(piece, assignment)
   }, [piece, assignment])
 
   useEffect(() => {
@@ -76,14 +77,27 @@ export function ProfileAssignmentDialog() {
   const handleSave = () => {
     if (!isValid) return
     const seamMm = parseFloat(seamAllowanceStr)
-    updateProfileAssignment(assignment.id, {
+    const patch = {
       profileName: profileName.trim(),
       profileKey: profileKey.trim(),
       supplierNumber: supplierNumber.trim() || undefined,
       internalArticleNumber: internalArticleNumber.trim() || undefined,
       seamAllowanceMm: Number.isFinite(seamMm) && seamMm > 0 ? seamMm : undefined,
       pdfDocumentUrl: pdfDocumentUrl.trim() || undefined,
-    })
+      ...(assignment.onInternalLine
+        ? { internalLineAttachment }
+        : { internalLineAttachment: undefined }),
+    }
+    updateProfileAssignment(assignment.id, patch)
+    if (
+      assignment.onInternalLine &&
+      internalLineAttachment === 'with_seam' &&
+      !internalSeamForProfile(workspace, { ...assignment, ...patch, id: assignment.id })
+    ) {
+      setToastMessage(
+        'warn:Keine interne Nahtzuordnung auf dieser Linie – Profil erscheint vorerst separat im Nähplan.',
+      )
+    }
     setProfileDialogAssignmentId(null)
   }
 
@@ -110,7 +124,9 @@ export function ProfileAssignmentDialog() {
         ref={trapRef}
       >
         <h3 id="profile-dialog-title" className="nahtzugabe-dialog-title">
-          Profil – Kante {assignment.edgeIndex + 1}
+          {assignment.onInternalLine
+            ? 'Profil – interne Linie'
+            : `Profil – Kante ${assignment.edgeIndex + 1}`}
         </h3>
 
         <label className="nahtzugabe-dialog-label">
@@ -181,6 +197,32 @@ export function ProfileAssignmentDialog() {
           <span>Profillänge:</span>
           <strong>{edgeLengthMm.toFixed(1)} mm</strong>
         </div>
+
+        {assignment.onInternalLine ? (
+          <fieldset className="nahtzugabe-dialog-label" style={{ border: 'none', margin: 0, padding: 0 }}>
+            <legend style={{ marginBottom: 8 }}>Anhänge an interne Naht</legend>
+            {PROFILE_INTERNAL_LINE_ATTACHMENT_IDS.map((id) => (
+              <label
+                key={id}
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6, cursor: 'pointer' }}
+              >
+                <input
+                  type="radio"
+                  name="internalLineAttachment"
+                  value={id}
+                  checked={internalLineAttachment === id}
+                  onChange={() => setInternalLineAttachment(id)}
+                />
+                <span>{PROFILE_INTERNAL_LINE_ATTACHMENT_LABELS[id]}</span>
+              </label>
+            ))}
+            <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--muted, #666)' }}>
+              Bei „mit Naht angenäht“ erscheint das Profil im Nähplan an der internen Nahtzuordnung
+              (Nahtart z. B. Deco im Naht-Dialog). Die Profil-Übersicht in der Stückliste bleibt für
+              Material und Länge erhalten.
+            </p>
+          </fieldset>
+        ) : null}
 
         <PdfDocumentField value={pdfDocumentUrl} onChange={setPdfDocumentUrl} />
 

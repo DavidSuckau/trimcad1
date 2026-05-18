@@ -1,5 +1,6 @@
 import type { Workspace, PatternPiece } from '../types/model'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
+import { isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import {
   EOL, fmt,
@@ -73,8 +74,8 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
     out.push(dxfPolyline(AAMA_LAYERS.SEAM, scaledSeamPts, true))
   }
 
-  // NOTCH layer: Kerben mit korrekter Position/Winkel (projiziert auf cutLine)
-  for (const notch of piece.notches) {
+  // NOTCH layer: nur Schnittkerben (interne Hilfslinien werden nicht geschnitten)
+  for (const notch of piece.notches.filter((n) => !isNotchOnInternalLine(n))) {
     const { position, angle } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
     out.push(dxfNotchGeometry(AAMA_LAYERS.NOTCH, { ...notch, position, angle }, scale))
   }

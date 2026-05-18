@@ -5,6 +5,7 @@ import {
   getNotchCutLineParameter,
   materializeNotchAnchorsOnCutLine,
 } from './notchOnCurve'
+import { isNotchOnInternalLine } from './notchOnInternalLine'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { ENDPOINT_EPS_MM, CORNER_T_EPS } from './geometryConstants'
 
@@ -74,6 +75,8 @@ export function resyncNotchesAfterCutLineRebuilt(
   const topoCompat = isTopologyCompatibleForIndexT(oldCutLine, newCutLine)
 
   return notches.map((notch) => {
+    if (isNotchOnInternalLine(notch)) return notch
+
     const oldPos = getNotchPositionAndAngle(notch, oldCutLine).position
 
     let nr: Nr | null = null
@@ -170,6 +173,8 @@ export function resyncNotchesViaSeamAnchor(
   }
 
   return notches.map((notch) => {
+    if (isNotchOnInternalLine(notch)) return notch
+
     const oldPos = getNotchPositionAndAngle(notch, oldCutLine).position
 
     const seamProj = nearestCurveIndexAndPoint(oldPos, oldSeamLine)

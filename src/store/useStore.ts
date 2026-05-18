@@ -34,6 +34,7 @@ import {
   closedPointsToLineCurves,
 } from '../geometry/offset'
 import { remapEdgeSeamAllowances, remapProfileAssignmentsForPiece, enumerateEdges } from '../geometry/edgeEnumeration'
+import { deriveInternalSeamNotchRangeAtClick, isInternalSeamAssignment } from '../geometry/internalSeamAssignment'
 import { deltaMinimalDegToHorizontal, masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import {
   splitBezierAt,
@@ -57,9 +58,13 @@ import {
   getEffectiveSoftVerticesCut,
   syncSoftAfterSharpCornerPromotion,
 } from '../geometry/seamUtils'
+import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
 import {
-  materializeNotchAnchorsOnCutLine,
-} from '../geometry/notchOnCurve'
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+  remapNotchesAfterInternalLineRemove,
+  remapNotchesAfterInternalLineSplit,
+} from '../geometry/notchOnInternalLine'
 import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
@@ -84,6 +89,7 @@ import {
   remapSoftJunctionsAfterRemoveCurve,
   remapSoftJunctionsAfterSplitCurve,
 } from '../geometry/internalLineJunctions'
+import { clampUiTextScale } from '../ui/uiTextScale'
 
 export type { PieceSymmetryPhase, PieceSymmetryUiState } from '../symmetry/types'
 
@@ -396,8 +402,8 @@ type Store = {
   horizontalLevelPickingActive: boolean
   /** Zwei Punkte Spiegelachse, dann Seitenwahl für symmetrische Kontur. */
   pieceSymmetryState: PieceSymmetryUiState
-  /** Nahtzuordnung: 'first' = erste Naht anklicken, 'second' = zweite Naht (anderes Teil) anklicken */
-  nahtzuordnungMode: 'idle' | 'first' | 'second'
+  /** Nahtzuordnung: zwei Teile oder Einzelnaht auf interner Linie */
+  nahtzuordnungMode: 'idle' | 'first' | 'second' | 'internal'
   pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
   /** Manuell „Naht trimmen“: nach Menüwahl Ecke an der Schnittkontur anklicken. */
   nahtTrimPickCutVertexActive: boolean
@@ -425,6 +431,8 @@ type Store = {
   canvasRotationUiScale: number
   canvasDigitizeUiScale: number
   canvasVertexPointUiScale: number
+  /** 0.75–1.75: Schriftgröße in Oberfläche und auf der Arbeitsfläche. */
+  uiTextScale: number
   showPivotRotationUi: boolean
   notchSettings: NotchSetting[]
   /** 0..9 = Notch 1..10; steuert welches Preset beim Notch-Werkzeug verwendet wird (Standard: 0 = Notch 1). */
@@ -475,7 +483,7 @@ type Store = {
   setEdgeSeamPickingActive: (v: boolean) => void
   setHorizontalLevelPickingActive: (v: boolean) => void
   setPieceSymmetryState: (v: PieceSymmetryUiState) => void
-  setNahtzuordnungMode: (v: 'idle' | 'first' | 'second') => void
+  setNahtzuordnungMode: (v: 'idle' | 'first' | 'second' | 'internal') => void
   setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
   setShowSettingsModal: (v: boolean) => void
   setShowStuecklisteModal: (v: boolean) => void
@@ -500,11 +508,19 @@ type Store = {
   setCanvasRotationUiScale: (v: number) => void
   setCanvasDigitizeUiScale: (v: number) => void
   setCanvasVertexPointUiScale: (v: number) => void
+  setUiTextScale: (v: number) => void
   setShowPivotRotationUi: (v: boolean) => void
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
   setActiveNotchPresetIndex: (index: number) => void
   addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
+  /** Einzelnaht auf interner Linie (ein Teil, kein Partner). */
+  addInternalSeamAssignment: (
+    pieceId: string,
+    curveIndices: number[],
+    clickedCurve: number,
+    tOnCurve: number
+  ) => void
   removeSeamAssignment: (id: string) => void
   setSeamAdjustmentDialog: (v: string | null) => void
   setSeamAdjustmentHoverPieceId: (v: string | null) => void
@@ -566,7 +582,22 @@ type Store = {
   updateNotch: (
     pieceId: string,
     notchId: string,
-    upd: Partial<Pick<Notch, 'position' | 'angle' | 'type' | 'depth' | 'width' | 'sNormalized' | 'arcLengthMm' | 'role'>>
+    upd: Partial<
+      Pick<
+        Notch,
+        | 'position'
+        | 'angle'
+        | 'type'
+        | 'depth'
+        | 'width'
+        | 'sNormalized'
+        | 'arcLengthMm'
+        | 'role'
+        | 'internalLineIndex'
+        | 'internalSNormalized'
+        | 'internalArcLengthMm'
+      >
+    >
   ) => void
   addDrill: (pieceId: string, drill: Drill) => void
   movePiece: (pieceId: string, dx: number, dy: number) => void
@@ -883,6 +914,7 @@ export const useStore = create<Store>()(
   canvasRotationUiScale: 1,
   canvasDigitizeUiScale: 1,
   canvasVertexPointUiScale: 1,
+  uiTextScale: 1,
   showPivotRotationUi: true,
   toastMessage: null,
   seamAdjustmentDialog: null,
@@ -1234,7 +1266,11 @@ export const useStore = create<Store>()(
   setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
   setHorizontalLevelPickingActive: (v) => set({ horizontalLevelPickingActive: v }),
   setPieceSymmetryState: (v) => set({ pieceSymmetryState: v }),
-  setNahtzuordnungMode: (v) => set({ nahtzuordnungMode: v, pendingNahtzuordnungFirst: v === 'first' ? null : get().pendingNahtzuordnungFirst }),
+  setNahtzuordnungMode: (v) =>
+    set({
+      nahtzuordnungMode: v,
+      pendingNahtzuordnungFirst: v === 'first' || v === 'internal' ? null : get().pendingNahtzuordnungFirst,
+    }),
   setPendingNahtzuordnungFirst: (v) => set({ pendingNahtzuordnungFirst: v }),
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
   setShowStuecklisteModal: (v) => set({ showStuecklisteModal: v }),
@@ -1336,6 +1372,7 @@ export const useStore = create<Store>()(
   setCanvasRotationUiScale: (v) => set({ canvasRotationUiScale: clampCanvasOverlayScale(v) }),
   setCanvasDigitizeUiScale: (v) => set({ canvasDigitizeUiScale: clampCanvasOverlayScale(v) }),
   setCanvasVertexPointUiScale: (v) => set({ canvasVertexPointUiScale: clampCanvasOverlayScale(v) }),
+  setUiTextScale: (v) => set({ uiTextScale: clampUiTextScale(v) }),
   setShowPivotRotationUi: (v) => set({ showPivotRotationUi: v }),
   setToastMessage: (v) => set({ toastMessage: v }),
   updateNotchSetting: (index, upd) =>
@@ -1404,6 +1441,49 @@ export const useStore = create<Store>()(
     // damit der Dialog für Notch-Abstandsangleich sofort erscheint.
     get().checkSeamAdjustment()
   },
+
+  addInternalSeamAssignment: (pieceId, curveIndices, clickedCurve, tOnCurve) => {
+    const newId = generateId()
+    const piece = get().workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece || piece.internalLines.length === 0) {
+      set({ toastMessage: 'error:Keine internen Linien am Teil – zuerst interne Linie anlegen.' })
+      return
+    }
+    const indices =
+      curveIndices.length > 0 ? curveIndices : piece.internalLines.map((_, i) => i)
+    const notchRange = deriveInternalSeamNotchRangeAtClick(
+      piece,
+      indices,
+      clickedCurve,
+      tOnCurve
+    )
+    const notchRangeA =
+      notchRange?.startNotchId && notchRange?.endNotchId
+        ? { startNotchId: notchRange.startNotchId, endNotchId: notchRange.endNotchId }
+        : undefined
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        seamAssignments: [
+          ...s.workspace.seamAssignments,
+          {
+            id: newId,
+            pieceIdA: pieceId,
+            curveIndicesA: indices,
+            clickedCurveA: clickedCurve,
+            pieceIdB: pieceId,
+            curveIndicesB: [],
+            clickedCurveB: 0,
+            isInternalSingle: true,
+            ...(notchRangeA ? { notchRangeA } : {}),
+          },
+        ],
+      },
+      nahtzuordnungMode: 'idle',
+      pendingNahtzuordnungFirst: null,
+    }))
+  },
+
   removeSeamAssignment: (id) =>
     set((s) => ({
       workspace: {
@@ -1644,6 +1724,7 @@ export const useStore = create<Store>()(
     const s = get()
     if (s.seamAdjustmentDialog) return
     for (const a of s.workspace.seamAssignments) {
+      if (isInternalSeamAssignment(a)) continue
       const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
       const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
       if (!pieceA || !pieceB) continue
@@ -1682,6 +1763,7 @@ export const useStore = create<Store>()(
     type SnapCand = { snapPt: Point; diff: number; id: string }
     const candidates: SnapCand[] = []
     for (const a of s.workspace.seamAssignments) {
+      if (isInternalSeamAssignment(a)) continue
       const isA = a.pieceIdA === pieceId
       const isB = a.pieceIdB === pieceId
       if (!isA && !isB) continue
@@ -1804,7 +1886,8 @@ export const useStore = create<Store>()(
             curveIndex,
             internalLines.length
           )
-          return { ...p, internalLines, internalLineSoftJunctions }
+          const notches = remapNotchesAfterInternalLineRemove(p.notches, curveIndex)
+          return { ...p, internalLines, internalLineSoftJunctions, notches }
         }),
       },
     })),
@@ -1846,7 +1929,8 @@ export const useStore = create<Store>()(
           curveIndex,
           newLines.length
         )
-        return { ...p, internalLines: newLines, internalLineSoftJunctions }
+        const notches = remapNotchesAfterInternalLineSplit(p.notches, curveIndex, newLines)
+        return { ...p, internalLines: newLines, internalLineSoftJunctions, notches }
       })
       return { workspace: { ...s.workspace, pieces } }
     })
@@ -2029,12 +2113,15 @@ export const useStore = create<Store>()(
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return s
-      const toAdd = materializeNotchAnchorsOnCutLine(notch, piece.cutLine) ?? notch
+      const toAdd = isNotchOnInternalLine(notch)
+        ? materializeNotchAnchorsOnInternalLine(notch, piece.internalLines) ?? notch
+        : materializeNotchAnchorsOnCutLine(notch, piece.cutLine) ?? notch
       if (!isNotchSpacingValidForCandidate(piece, toAdd)) {
         return {
           ...s,
-          toastMessage:
-            'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
+          toastMessage: isNotchOnInternalLine(toAdd)
+            ? 'error: Zwischen zwei Kerben auf internen Linien müssen mindestens 4 mm Abstand liegen.'
+            : 'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
         }
       }
       return {
@@ -2100,8 +2187,9 @@ export const useStore = create<Store>()(
         if (!isNotchSpacingValidForCandidate(piece, candidate, notchId)) {
           return {
             ...s,
-            toastMessage:
-              'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
+            toastMessage: isNotchOnInternalLine(candidate)
+              ? 'error: Zwischen zwei Kerben auf internen Linien müssen mindestens 4 mm Abstand liegen.'
+              : 'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
           }
         }
       }
@@ -2110,6 +2198,10 @@ export const useStore = create<Store>()(
         isPositionUpdate &&
         !Object.prototype.hasOwnProperty.call(upd, 'sNormalized') &&
         !Object.prototype.hasOwnProperty.call(upd, 'arcLengthMm')
+      const clearInternalPathAnchorsForNewPosition =
+        isPositionUpdate &&
+        !Object.prototype.hasOwnProperty.call(upd, 'internalSNormalized') &&
+        !Object.prototype.hasOwnProperty.call(upd, 'internalArcLengthMm')
       return {
         workspace: {
           ...s.workspace,
@@ -2125,6 +2217,12 @@ export const useStore = create<Store>()(
                   ...(clearCutPathAnchorsForNewPosition
                     ? { sNormalized: undefined, arcLengthMm: undefined }
                     : {}),
+                  ...(clearInternalPathAnchorsForNewPosition
+                    ? { internalSNormalized: undefined, internalArcLengthMm: undefined }
+                    : {}),
+                }
+                if (isNotchOnInternalLine(merged)) {
+                  return materializeNotchAnchorsOnInternalLine(merged, p.internalLines) ?? merged
                 }
                 return materializeNotchAnchorsOnCutLine(merged, p.cutLine) ?? merged
               }),
@@ -3321,12 +3419,18 @@ export const useStore = create<Store>()(
         angle: 180 - n.angle,
         sNormalized: undefined as number | undefined,
         arcLengthMm: undefined as number | undefined,
+        ...(isNotchOnInternalLine(n)
+          ? { internalSNormalized: undefined as number | undefined, internalArcLengthMm: undefined as number | undefined }
+          : {}),
       }))
-      const notches = mirroredNotches
-        .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
-        .filter((n): n is Notch => n != null)
       const drills = piece.drills.map((d) => ({ ...d, center: mirrorX(d.center, cx) }))
       const internalLines = piece.internalLines.map((c) => mirrorCurve(c, cx))
+      const notches = mirroredNotches.map((n) => {
+        if (isNotchOnInternalLine(n)) {
+          return materializeNotchAnchorsOnInternalLine(n, internalLines) ?? n
+        }
+        return materializeNotchAnchorsOnCutLine(n, cutLine) ?? n
+      })
       const internalCircles = piece.internalCircles.map((ic) => ({
         ...ic,
         center: mirrorX(ic.center, cx),
@@ -3383,12 +3487,18 @@ export const useStore = create<Store>()(
         angle: mirrorAngleAcrossAxisDeg(n.angle, axisA, axisB),
         sNormalized: undefined as number | undefined,
         arcLengthMm: undefined as number | undefined,
+        ...(isNotchOnInternalLine(n)
+          ? { internalSNormalized: undefined as number | undefined, internalArcLengthMm: undefined as number | undefined }
+          : {}),
       }))
-      const notches = mirroredNotches
-        .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
-        .filter((n): n is Notch => n != null)
       const drills = piece.drills.map((d) => ({ ...d, center: mirrorPointAcrossAxis(d.center, axisA, axisB) }))
       const internalLines = piece.internalLines.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+      const notches = mirroredNotches.map((n) => {
+        if (isNotchOnInternalLine(n)) {
+          return materializeNotchAnchorsOnInternalLine(n, internalLines) ?? n
+        }
+        return materializeNotchAnchorsOnCutLine(n, cutLine) ?? n
+      })
       const internalCircles = piece.internalCircles.map((ic) => ({
         ...ic,
         center: mirrorPointAcrossAxis(ic.center, axisA, axisB),
@@ -3768,6 +3878,7 @@ export const useStore = create<Store>()(
       canvasVertexPointUiScale: clampCanvasOverlayScale(
         typeof project.canvasVertexPointUiScale === 'number' ? project.canvasVertexPointUiScale : 1,
       ),
+      uiTextScale: clampUiTextScale(typeof project.uiTextScale === 'number' ? project.uiTextScale : 1),
       showPivotRotationUi: project.showPivotRotationUi === false ? false : true,
       notchSettings,
       activeNotchPresetIndex: 0,

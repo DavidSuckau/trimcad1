@@ -7,6 +7,7 @@ import {
   pointAtPathLength,
   outwardNormalAngleAt,
 } from './curveToPath'
+import { isNotchOnInternalLine } from './notchOnInternalLine'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { VERTEX_T_EPS, lerpPt } from './geometryConstants'
 
@@ -61,6 +62,7 @@ export function resolveNotchCutLineAnchor(
   notch: Notch,
   cutLine: Curve[]
 ): { curveIndex: number; t: number } | null {
+  if (isNotchOnInternalLine(notch)) return null
   if (cutLine.length === 0) return null
 
   const total = totalPathLength(cutLine)
@@ -105,6 +107,7 @@ function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point |
  * über `resolveNotchCutLineAnchor` (freie Lage auf der Kontur). `vertexIndex` wird nicht gesetzt.
  */
 export function materializeNotchAnchorsOnCutLine(notch: Notch, cutLine: Curve[]): Notch | null {
+  if (isNotchOnInternalLine(notch)) return null
   if (cutLine.length === 0) return null
   const total = totalPathLength(cutLine)
   if (total <= 0) return null
@@ -139,6 +142,9 @@ export function getNotchPositionAndAngle(
     ? notch.position
     : { x: 0, y: 0 }
   const fallbackAngle = Number.isFinite(notch.angle) ? notch.angle : 0
+  if (isNotchOnInternalLine(notch)) {
+    return { position: fallbackPos, angle: fallbackAngle }
+  }
   const anchor = resolveNotchCutLineAnchor(notch, cutLine)
   if (!anchor) {
     return { position: fallbackPos, angle: fallbackAngle }
@@ -167,6 +173,7 @@ export function getNotchPositionAndAngleOnSeamLine(
   cutLine: Curve[],
   seamLine: Curve[]
 ): { position: Point; angle: number } | null {
+  if (isNotchOnInternalLine(notch)) return null
   if (seamLine.length === 0) return null
 
   const cutPos = getNotchPositionAndAngleOnCutLine(notch, cutLine, seamLine)
@@ -400,6 +407,7 @@ export function cutLineWithNotchCutouts(
   const intervals: NotchInterval[] = []
 
   for (const n of notches) {
+    if (isNotchOnInternalLine(n)) continue
     if (n.type === 'single') continue
 
     const ct = getNotchCurveIndexAndT(n, cutLine, seamLine)
@@ -493,6 +501,7 @@ export function seamLineWithNotchCutouts(
   const intervals: NotchInterval[] = []
 
   for (const n of notches) {
+    if (isNotchOnInternalLine(n)) continue
     if (n.type === 'single') continue
 
     const seamPos = getNotchPositionAndAngleOnSeamLine(n, cutLine, seamLine)

@@ -1,6 +1,10 @@
-import type { PatternPiece, Notch } from '../types/model'
+import type { PatternPiece } from '../types/model'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
+import {
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+} from '../geometry/notchOnInternalLine'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
@@ -71,10 +75,10 @@ export function applyPieceSymmetryToPiece(
     angle: mirrorAngleDegrees(n.angle, axisA, axisB),
     sNormalized: undefined as number | undefined,
     arcLengthMm: undefined as number | undefined,
+    ...(isNotchOnInternalLine(n)
+      ? { internalSNormalized: undefined as number | undefined, internalArcLengthMm: undefined as number | undefined }
+      : {}),
   }))
-  const notches = mirroredNotches
-    .map((n) => materializeNotchAnchorsOnCutLine(n, cutLine))
-    .filter((n): n is Notch => n != null)
 
   const drills = piece.drills.map((d) => ({
     ...d,
@@ -109,6 +113,13 @@ export function applyPieceSymmetryToPiece(
         end: mirrorPointAcrossLine(piece.grainLine.end, axisA, axisB),
       }
     : null
+
+  const notches = mirroredNotches.map((n) => {
+    if (isNotchOnInternalLine(n)) {
+      return materializeNotchAnchorsOnInternalLine(n, internalLines) ?? n
+    }
+    return materializeNotchAnchorsOnCutLine(n, cutLine) ?? n
+  })
 
   const pieceOut = applySharpCornerPromotion({
     ...piece,

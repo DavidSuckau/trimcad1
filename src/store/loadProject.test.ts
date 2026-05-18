@@ -52,6 +52,7 @@ const makeProject = (): TrimTexProjectFileV1 => ({
   canvasRotationUiScale: 1,
   canvasDigitizeUiScale: 1,
   canvasVertexPointUiScale: 1,
+  uiTextScale: 1,
   showPivotRotationUi: true,
   notchSettings: [
     { type: 'kerbe', widthMm: 6, depthMm: 4 },

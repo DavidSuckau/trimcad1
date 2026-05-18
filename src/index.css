@@ -9,7 +9,7 @@
 }
 
 html {
-  font-size: 16px;
+  font-size: calc(16px * var(--ui-text-scale, 1));
   -webkit-font-smoothing: antialiased;
   height: 100%;
   overflow: hidden;
@@ -1193,6 +1193,16 @@ body {
   margin-top: 1.25rem;
   padding-top: 1rem;
   border-top: 1px solid #e0e0e0;
+}
+
+.stueckliste-naehplan-totals {
+  margin-top: 0.75rem;
+}
+
+.stueckliste-naehplan-totals h5 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 .stueckliste-naehplan-section h4 {

@@ -22,6 +22,9 @@ export function getGrainArrowLayout(piece: PatternPiece): {
   line: Line
   tickStart: Point
   tickEnd: Point
+  tickBaseLeft: Point
+  tickBaseRight: Point
+  tickTriangleD: string
   endTip: Point
   baseLeft: Point
   baseRight: Point
@@ -53,6 +56,32 @@ export function getGrainArrowLayout(piece: PatternPiece): {
   // Nur einseitig nach links der Laufrichtung (kein rechter Anteil).
   const tickStart = { x: midX, y: midY }
   const tickEnd = { x: midX + perpX * tickLen, y: midY + perpY * tickLen }
+  const tickAngle = Math.atan2(tickEnd.y - tickStart.y, tickEnd.x - tickStart.x)
+  const tickTip = { ...tickEnd }
+  const tickAh = ah * 0.75
+  const tickAw = aw * 0.75
+  const tickBaseMidX = tickTip.x - tickAh * Math.cos(tickAngle)
+  const tickBaseMidY = tickTip.y - tickAh * Math.sin(tickAngle)
+  const tickBaseLeft = {
+    x: tickBaseMidX - tickAw * Math.sin(tickAngle),
+    y: tickBaseMidY + tickAw * Math.cos(tickAngle),
+  }
+  const tickBaseRight = {
+    x: tickBaseMidX + tickAw * Math.sin(tickAngle),
+    y: tickBaseMidY - tickAw * Math.cos(tickAngle),
+  }
+  const tickTriangleD = `M ${tickTip.x} ${tickTip.y} L ${tickBaseLeft.x} ${tickBaseLeft.y} L ${tickBaseRight.x} ${tickBaseRight.y} Z`
   const triangleD = `M ${endTip.x} ${endTip.y} L ${baseLeft.x} ${baseLeft.y} L ${baseRight.x} ${baseRight.y} Z`
-  return { line, tickStart, tickEnd, endTip, baseLeft, baseRight, triangleD }
+  return {
+    line,
+    tickStart,
+    tickEnd,
+    tickBaseLeft,
+    tickBaseRight,
+    tickTriangleD,
+    endTip,
+    baseLeft,
+    baseRight,
+    triangleD,
+  }
 }

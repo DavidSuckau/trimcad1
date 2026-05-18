@@ -17,7 +17,13 @@ import {
   totalMaterialCostEuro,
 } from '../bom/materialCatalogCost'
 import { loadMaterialCatalog } from '../material/materialCatalogStorage'
-import { buildNaehplanRows } from '../bom/naehplan'
+import {
+  buildNaehplanRows,
+  buildNaehplanSeamKindTotals,
+  buildProfilnahtRows,
+  profilnahtTotalLengthMm,
+  PROFILNAHT_KIND_LABEL,
+} from '../bom/naehplan'
 import { computeMaterialAreaShares } from '../bom/materialAreaShare'
 import { aggregateProfileBom } from '../bom/profileBomStats'
 import { StuecklisteMaterialPie } from './StuecklisteMaterialPie'
@@ -100,6 +106,12 @@ export function StuecklisteModal() {
   )
 
   const naehplanRows = useMemo(() => buildNaehplanRows(workspace), [workspace])
+
+  const naehplanSeamKindTotals = useMemo(() => buildNaehplanSeamKindTotals(workspace), [workspace])
+
+  const profilnahtRows = useMemo(() => buildProfilnahtRows(workspace), [workspace])
+
+  const profilnahtTotalMm = useMemo(() => profilnahtTotalLengthMm(workspace), [workspace, profilnahtRows])
 
   const profileBomRows = useMemo(
     () => aggregateProfileBom(workspace.profileAssignments ?? [], pieces),
@@ -323,19 +335,57 @@ export function StuecklisteModal() {
               <div className="stueckliste-naehplan-section">
                 <h4>Nähplan</h4>
                 <p className="stueckliste-overview-hint">
-                  Reihenfolge nach Nahtnummer (Arbeitsfläche); ohne Nummer ans Ende der Liste.
+                  Reihenfolge nach Nahtnummer (Arbeitsfläche); ohne Nummer ans Ende der Liste. Längen in mm.
                 </p>
                 <ul className="stueckliste-naehplan-list">
                   {naehplanRows.map((row) => (
                     <li key={`${row.stepNr}-${row.line}`}>{row.line}</li>
                   ))}
                 </ul>
+                {naehplanSeamKindTotals.length > 0 ? (
+                  <div className="stueckliste-naehplan-totals">
+                    <h5>Summen je Nahtart</h5>
+                    <ul className="stueckliste-naehplan-list">
+                      {naehplanSeamKindTotals.map((t) => (
+                        <li key={t.kindKey}>
+                          Σ {t.kindLabel}:{' '}
+                          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {t.totalLengthMm.toLocaleString('de-DE', {
+                              minimumFractionDigits: 1,
+                              maximumFractionDigits: 1,
+                            })}{' '}
+                            mm
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {profilnahtRows.length > 0 ? (
+              <div className="stueckliste-naehplan-section">
+                <h4>{PROFILNAHT_KIND_LABEL}</h4>
+                <ul className="stueckliste-naehplan-list">
+                  {profilnahtRows.map((row) => (
+                    <li key={row.line}>{row.line}</li>
+                  ))}
+                </ul>
+                <p className="stueckliste-grand" style={{ marginTop: '0.5rem' }}>
+                  Σ {PROFILNAHT_KIND_LABEL}:{' '}
+                  {profilnahtTotalMm.toLocaleString('de-DE', {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1,
+                  })}{' '}
+                  mm
+                </p>
               </div>
             ) : null}
 
             {profileBomRows.length > 0 ? (
               <div className="stueckliste-naehplan-section">
-                <h4>Komponenten / Profile</h4>
+                <h4>Komponenten / Profile (Übersicht)</h4>
                 <table className="stueckliste-summary-table">
                   <thead>
                     <tr>

@@ -13,7 +13,13 @@ import { loadMaterialCatalog } from '../material/materialCatalogStorage'
 import { aggregateProfileBom } from './profileBomStats'
 import { buildMaterialPieSvgDocument } from './buildMaterialPieSvg'
 import { computeMaterialAreaShares } from './materialAreaShare'
-import { buildNaehplanRows } from './naehplan'
+import {
+  buildNaehplanRows,
+  buildNaehplanSeamKindTotals,
+  buildProfilnahtRows,
+  profilnahtTotalLengthMm,
+  PROFILNAHT_KIND_LABEL,
+} from './naehplan'
 import { buildWorkspaceOverviewSvgDocument } from '../workspace/buildWorkspaceOverviewSvg'
 import type { OverviewImageSession } from '../workspace/workspaceOverviewBounds'
 
@@ -413,6 +419,61 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
       doc.text(lines, margin, y)
       y += lines.length * 4.5 + 1
     }
+    const seamKindTotals = buildNaehplanSeamKindTotals(workspace)
+    if (seamKindTotals.length > 0) {
+      y += 3
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9)
+      if (y > pageH - margin - 12) {
+        doc.addPage()
+        y = margin
+      }
+      doc.text('Summen je Nahtart', margin, y)
+      y += 5
+      doc.setFont('helvetica', 'normal')
+      for (const t of seamKindTotals) {
+        const line = `Σ ${t.kindLabel}: ${t.totalLengthMm.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`
+        if (y > pageH - margin - 8) {
+          doc.addPage()
+          y = margin
+        }
+        doc.text(line, margin, y)
+        y += 4.5
+      }
+    }
+  }
+
+  const profilnahtRows = buildProfilnahtRows(workspace)
+  if (profilnahtRows.length > 0) {
+    if (y > pageH - margin - 40) {
+      doc.addPage()
+      y = margin
+    }
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(11)
+    doc.text(PROFILNAHT_KIND_LABEL, margin, y)
+    y += 6
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    for (const row of profilnahtRows) {
+      const lines = doc.splitTextToSize(row.line, contentW)
+      if (y + lines.length * 4.5 > pageH - margin) {
+        doc.addPage()
+        y = margin
+      }
+      doc.text(lines, margin, y)
+      y += lines.length * 4.5 + 1
+    }
+    const totalMm = profilnahtTotalLengthMm(workspace)
+    y += 2
+    doc.setFont('helvetica', 'bold')
+    doc.text(
+      `Σ ${PROFILNAHT_KIND_LABEL}: ${totalMm.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`,
+      margin,
+      y,
+    )
+    y += 8
+    doc.setFont('helvetica', 'normal')
   }
 
   const profileRows = aggregateProfileBom(workspace.profileAssignments ?? [], pieces)
@@ -423,7 +484,7 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
     }
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(11)
-    doc.text('Komponenten / Profile', margin, y)
+    doc.text('Komponenten / Profile (Übersicht)', margin, y)
     y += 6
 
     autoTable(doc, {

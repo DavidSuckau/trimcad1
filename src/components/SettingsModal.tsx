@@ -39,6 +39,8 @@ export function SettingsModal() {
     setCanvasVertexPointUiScale,
     showPivotRotationUi,
     setShowPivotRotationUi,
+    uiTextScale,
+    setUiTextScale,
   } = useStore(
     useShallow((s) => ({
       showSettingsModal: s.showSettingsModal,
@@ -65,6 +67,8 @@ export function SettingsModal() {
       setCanvasVertexPointUiScale: s.setCanvasVertexPointUiScale,
       showPivotRotationUi: s.showPivotRotationUi,
       setShowPivotRotationUi: s.setShowPivotRotationUi,
+      uiTextScale: s.uiTextScale,
+      setUiTextScale: s.setUiTextScale,
     })),
   )
   const [activeTab, setActiveTab] = useState<SettingsTab>('allgemein')
@@ -234,6 +238,31 @@ export function SettingsModal() {
                 <p style={{ fontSize: '11px', color: '#999', margin: '4px 0 0' }}>
                   Nahtlinie: Offset nach innen aus der Schnittkontur; die Schnittkontur wird für die Seam-as-Master-Logik
                   aus der Naht neu abgeleitet (Clipper kann geringfügig von der importierten Polylinie abweichen).
+                </p>
+              </div>
+
+              <h3 style={{ margin: '20px 0 12px', fontSize: '14px' }}>Darstellung</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+                <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>
+                  Textgröße (Oberfläche und Beschriftungen auf der Arbeitsfläche)
+                </label>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={1.75}
+                    step={0.05}
+                    value={uiTextScale}
+                    onChange={(e) => setUiTextScale(parseFloat(e.target.value))}
+                    style={{ width: 'min(100%, 280px)' }}
+                    aria-valuetext={`${uiTextScale.toFixed(2)}×`}
+                  />
+                  <span style={{ fontSize: '12px', color: '#888', minWidth: '52px' }}>
+                    {uiTextScale.toFixed(2)}×
+                  </span>
+                </div>
+                <p style={{ fontSize: '11px', color: '#999', margin: '6px 0 0' }}>
+                  Menüs, Seitenleiste und Teilnamen, Maße sowie Nahtbeschriftungen skalieren gemeinsam. Wird mit dem Projekt gespeichert.
                 </p>
               </div>
 

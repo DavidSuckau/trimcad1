@@ -4,6 +4,7 @@ import {
   notchCutoutPoints,
   resolveNotchCutLineAnchor,
 } from '../geometry/notchOnCurve'
+import { isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
@@ -283,7 +284,7 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     out.push(emitPointsAlongPolylineOpen(scaledSeamPts, ASTM_LAYER.POINT_AUX))
   }
 
-  for (const notch of piece.notches) {
+  for (const notch of piece.notches.filter((n) => !isNotchOnInternalLine(n))) {
     out.push(emitGerberNotchPackLocal(notch, piece, fileScale, boundaryRing, polygonOpen))
   }
 

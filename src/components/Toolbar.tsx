@@ -100,6 +100,7 @@ export function Toolbar() {
     canvasRotationUiScale,
     canvasDigitizeUiScale,
     canvasVertexPointUiScale,
+    uiTextScale,
     showPivotRotationUi,
     notchSettings,
     activeNotchPresetIndex,
@@ -159,6 +160,7 @@ export function Toolbar() {
       canvasRotationUiScale: s.canvasRotationUiScale,
       canvasDigitizeUiScale: s.canvasDigitizeUiScale,
       canvasVertexPointUiScale: s.canvasVertexPointUiScale,
+      uiTextScale: s.uiTextScale,
       showPivotRotationUi: s.showPivotRotationUi,
       notchSettings: s.notchSettings,
       activeNotchPresetIndex: s.activeNotchPresetIndex,
@@ -258,6 +260,7 @@ export function Toolbar() {
       canvasRotationUiScale,
       canvasDigitizeUiScale,
       canvasVertexPointUiScale,
+      uiTextScale,
       showPivotRotationUi,
       notchSettings,
       imageDigitizeSession,
@@ -1025,7 +1028,19 @@ export function Toolbar() {
                     closeMenu()
                   }}
                 >
-                  Nahtzuordnung
+                  Nahtzuordnung (zwei Teile)
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setNahtzuordnungMode('internal')
+                    closeMenu()
+                  }}
+                >
+                  Einzelnaht (interne Linie)
                 </button>
               </li>
               <li>
@@ -1245,7 +1260,11 @@ export function Toolbar() {
       <div className="menubar-right">
         {nahtzuordnungMode !== 'idle' && (
           <span className="nahtzuordnung-hint">
-            {nahtzuordnungMode === 'first' ? 'Erste Kante anklicken (Konturlinie eines Teils)' : 'Zweite Kante anklicken (anderes Teil)'}
+            {nahtzuordnungMode === 'first'
+              ? 'Erste Kante anklicken (Konturlinie eines Teils)'
+              : nahtzuordnungMode === 'second'
+                ? 'Zweite Kante anklicken (anderes Teil)'
+                : 'Interne Linie anklicken (Saum, Deco, Steppung …)'}
             <button
               type="button"
               className="nahtzuordnung-abbrechen"

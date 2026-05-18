@@ -79,7 +79,17 @@ export function boundsForPieceCurvesWorld(curves: Curve[], transform: PatternPie
 export function boundsForGrainArrowWorld(piece: PatternPiece): WorldBounds | null {
   const g = getGrainArrowLayout(piece)
   if (!g) return null
-  const pts = [g.line.start, g.line.end, g.tickStart, g.tickEnd, g.endTip, g.baseLeft, g.baseRight]
+  const pts = [
+    g.line.start,
+    g.line.end,
+    g.tickStart,
+    g.tickEnd,
+    g.endTip,
+    g.baseLeft,
+    g.baseRight,
+    g.tickBaseLeft,
+    g.tickBaseRight,
+  ]
   let acc: WorldBounds | null = null
   for (const pt of pts) {
     const w = pieceLocalToWorld(pt, piece.transform)

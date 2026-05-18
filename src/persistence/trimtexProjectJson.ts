@@ -15,6 +15,10 @@ import type {
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
+import {
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+} from '../geometry/notchOnInternalLine'
 import { worldToPieceLocal } from '../geometry/pieceTransform'
 import { isPointInClosedCurves } from '../geometry/pointInPolygon'
 
@@ -54,6 +58,8 @@ export type TrimTexProjectFileV1 = {
   canvasDigitizeUiScale: number
   /** 0.5–2.5: rote Eckpunkte, weiche (blaue) Punkte, Bézier-Kurvenpunkte. */
   canvasVertexPointUiScale: number
+  /** 0.75–1.75: Schriftgröße in Oberfläche und auf der Arbeitsfläche. */
+  uiTextScale: number
   /** Drehpunkt, Drehring und Drehgriff am ausgewählten Teil (Standard: an). */
   showPivotRotationUi: boolean
   notchSettings: ProjectNotchSetting[]
@@ -126,6 +132,17 @@ function parseNotchRaw(o: unknown): Notch | null {
   if (sNormalized !== undefined && !Number.isFinite(sNormalized)) return null
   const arcLengthMm = r.arcLengthMm === undefined ? undefined : Number(r.arcLengthMm)
   if (arcLengthMm !== undefined && !Number.isFinite(arcLengthMm)) return null
+  const internalLineIndex =
+    r.internalLineIndex === undefined ? undefined : Number(r.internalLineIndex)
+  if (internalLineIndex !== undefined && (!Number.isFinite(internalLineIndex) || internalLineIndex < 0)) {
+    return null
+  }
+  const internalSNormalized =
+    r.internalSNormalized === undefined ? undefined : Number(r.internalSNormalized)
+  if (internalSNormalized !== undefined && !Number.isFinite(internalSNormalized)) return null
+  const internalArcLengthMm =
+    r.internalArcLengthMm === undefined ? undefined : Number(r.internalArcLengthMm)
+  if (internalArcLengthMm !== undefined && !Number.isFinite(internalArcLengthMm)) return null
   return {
     id: r.id,
     position: { ...(r.position as Point) },
@@ -135,16 +152,22 @@ function parseNotchRaw(o: unknown): Notch | null {
     ...(width !== undefined ? { width } : {}),
     ...(sNormalized !== undefined ? { sNormalized } : {}),
     ...(arcLengthMm !== undefined ? { arcLengthMm } : {}),
+    ...(internalLineIndex !== undefined ? { internalLineIndex: Math.floor(internalLineIndex) } : {}),
+    ...(internalSNormalized !== undefined ? { internalSNormalized } : {}),
+    ...(internalArcLengthMm !== undefined ? { internalArcLengthMm } : {}),
   }
 }
 
-function normalizeNotchesArray(raw: unknown, cutLine: Curve[]): Notch[] {
+function normalizeNotchesArray(raw: unknown, cutLine: Curve[], internalLines: Curve[]): Notch[] {
   if (!Array.isArray(raw)) return []
   const out: Notch[] = []
   for (const item of raw) {
     const n = parseNotchRaw(item)
     if (!n) continue
-    if (cutLine.length >= 2) {
+    if (isNotchOnInternalLine(n) && internalLines.length > 0) {
+      const m = materializeNotchAnchorsOnInternalLine(n, internalLines)
+      out.push(m ?? n)
+    } else if (cutLine.length >= 2) {
       const m = materializeNotchAnchorsOnCutLine(n, cutLine)
       out.push(m ?? n)
     } else {
@@ -190,7 +213,7 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
             const v = Number(raw.seamAllowanceMm)
             return Number.isFinite(v) ? v : null
           })(),
-    notches: normalizeNotchesArray(raw.notches, cutLine),
+    notches: normalizeNotchesArray(raw.notches, cutLine, internalLines),
     drills: Array.isArray(raw.drills) ? raw.drills : [],
     grainLine: raw.grainLine && isPoint((raw.grainLine as { start?: unknown }).start) && isPoint((raw.grainLine as { end?: unknown }).end)
       ? { start: { ...(raw.grainLine as { start: Point }).start }, end: { ...(raw.grainLine as { end: Point }).end } }
@@ -238,21 +261,20 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
   return applySharpCornerPromotion(base)
 }
 
+function normalizeSeamNotchRange(raw: unknown): { startNotchId: string; endNotchId: string } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const o = raw as Record<string, unknown>
+  if (typeof o.startNotchId !== 'string' || typeof o.endNotchId !== 'string') return undefined
+  return { startNotchId: o.startNotchId, endNotchId: o.endNotchId }
+}
+
 function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
   if (!Array.isArray(raw)) return []
   const out: SeamAssignment[] = []
   for (const a of raw) {
     if (typeof a !== 'object' || a === null) continue
     const o = a as Record<string, unknown>
-    if (
-      typeof o.id !== 'string' ||
-      typeof o.pieceIdA !== 'string' ||
-      typeof o.pieceIdB !== 'string' ||
-      typeof o.clickedCurveA !== 'number' ||
-      typeof o.clickedCurveB !== 'number' ||
-      !Array.isArray(o.curveIndicesA) ||
-      !Array.isArray(o.curveIndicesB)
-    ) {
+    if (typeof o.id !== 'string' || typeof o.pieceIdA !== 'string' || typeof o.clickedCurveA !== 'number') {
       continue
     }
     let orderNumber: number | null | undefined
@@ -270,14 +292,47 @@ function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
     ) {
       seamKind = o.seamKind as SeamAssignmentKindId
     }
+    const notchRangeA = normalizeSeamNotchRange(o.notchRangeA)
+    const notchRangeB = normalizeSeamNotchRange(o.notchRangeB)
+    const curveIndicesA = Array.isArray(o.curveIndicesA)
+      ? o.curveIndicesA.filter((n): n is number => typeof n === 'number')
+      : []
+
+    if (o.isInternalSingle === true) {
+      const pieceIdB = typeof o.pieceIdB === 'string' ? o.pieceIdB : o.pieceIdA
+      out.push({
+        id: o.id,
+        pieceIdA: o.pieceIdA,
+        curveIndicesA,
+        clickedCurveA: o.clickedCurveA,
+        pieceIdB,
+        curveIndicesB: [],
+        clickedCurveB: 0,
+        isInternalSingle: true,
+        ...(notchRangeA ? { notchRangeA } : {}),
+        ...(orderNumber !== undefined ? { orderNumber } : {}),
+        ...(seamKind !== undefined ? { seamKind } : {}),
+      })
+      continue
+    }
+
+    if (
+      typeof o.pieceIdB !== 'string' ||
+      typeof o.clickedCurveB !== 'number' ||
+      !Array.isArray(o.curveIndicesB)
+    ) {
+      continue
+    }
     out.push({
       id: o.id,
       pieceIdA: o.pieceIdA,
-      curveIndicesA: o.curveIndicesA.filter((n): n is number => typeof n === 'number'),
+      curveIndicesA,
       clickedCurveA: o.clickedCurveA,
       pieceIdB: o.pieceIdB,
       curveIndicesB: o.curveIndicesB.filter((n): n is number => typeof n === 'number'),
       clickedCurveB: o.clickedCurveB,
+      ...(notchRangeA ? { notchRangeA } : {}),
+      ...(notchRangeB ? { notchRangeB } : {}),
       ...(orderNumber !== undefined ? { orderNumber } : {}),
       ...(seamKind !== undefined ? { seamKind } : {}),
     })
@@ -340,12 +395,25 @@ function normalizeProfileAssignments(raw: unknown, pieces: PatternPiece[]): Prof
     const profileName = typeof o.profileName === 'string' ? o.profileName : ''
     const profileKey = typeof o.profileKey === 'string' ? o.profileKey : ''
     if (!profileName || !profileKey) continue
+    const startNotchId = typeof o.startNotchId === 'string' && o.startNotchId ? o.startNotchId : undefined
+    const endNotchId = typeof o.endNotchId === 'string' && o.endNotchId ? o.endNotchId : undefined
+    const onInternalLine = o.onInternalLine === true
+    const attachmentRaw = o.internalLineAttachment
+    const internalLineAttachment =
+      onInternalLine &&
+      (attachmentRaw === 'separate' || attachmentRaw === 'with_seam')
+        ? attachmentRaw
+        : undefined
     out.push({
       id: o.id,
       pieceId: o.pieceId,
       edgeIndex: Math.floor(edgeIndex),
       profileName,
       profileKey,
+      ...(onInternalLine ? { onInternalLine: true } : {}),
+      ...(internalLineAttachment ? { internalLineAttachment } : {}),
+      ...(startNotchId ? { startNotchId } : {}),
+      ...(endNotchId ? { endNotchId } : {}),
       ...(typeof o.seamAllowanceMm === 'number' && Number.isFinite(o.seamAllowanceMm)
         ? { seamAllowanceMm: o.seamAllowanceMm }
         : {}),
@@ -390,6 +458,7 @@ export function buildTrimTexProjectFile(args: {
   canvasRotationUiScale: number
   canvasDigitizeUiScale: number
   canvasVertexPointUiScale: number
+  uiTextScale: number
   showPivotRotationUi: boolean
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
@@ -409,6 +478,7 @@ export function buildTrimTexProjectFile(args: {
     canvasRotationUiScale: args.canvasRotationUiScale,
     canvasDigitizeUiScale: args.canvasDigitizeUiScale,
     canvasVertexPointUiScale: args.canvasVertexPointUiScale,
+    uiTextScale: args.uiTextScale,
     showPivotRotationUi: args.showPivotRotationUi,
     notchSettings: args.notchSettings.map((n) => ({ ...n })),
     imageDigitizeSession: args.imageDigitizeSession
@@ -483,6 +553,11 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
   const canvasRotationUiScale = clampOverlay(o.canvasRotationUiScale, 1)
   const canvasDigitizeUiScale = clampOverlay(o.canvasDigitizeUiScale, 1)
   const canvasVertexPointUiScale = clampOverlay(o.canvasVertexPointUiScale, 1)
+  const clampText = (x: unknown, def: number) => {
+    const n = typeof x === 'number' && Number.isFinite(x) ? x : def
+    return Math.min(1.75, Math.max(0.75, n))
+  }
+  const uiTextScale = clampText(o.uiTextScale, 1)
   const showPivotRotationUi = o.showPivotRotationUi === false ? false : true
 
   let imageDigitizeSession: TrimTexProjectImageSession | null = null
@@ -527,6 +602,7 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     canvasRotationUiScale,
     canvasDigitizeUiScale,
     canvasVertexPointUiScale,
+    uiTextScale,
     showPivotRotationUi,
     notchSettings:
       notchSettings.length >= 10

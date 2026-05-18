@@ -540,17 +540,24 @@ export function edgeLengthInNotchRange(
  * Liefert den geometrischen Teil einer Kante zwischen zwei Rollen-Notches.
  * Ohne/ungültige Range: gesamte Kante.
  */
+export type GetNotchesOnEdgeFn = (
+  piece: PatternPiece,
+  curveIndices: number[],
+  curves?: Curve[]
+) => { notchId: string; arcLength: number }[]
+
 export function getEdgeCurvesInNotchRange(
   piece: PatternPiece,
   curveIndices: number[],
   range?: NotchBoundaryRange | null,
-  curves?: Curve[]
+  curves?: Curve[],
+  getNotchesOnEdgeFn: GetNotchesOnEdgeFn = getNotchesOnEdge
 ): Curve[] {
   if (curveIndices.length === 0) return []
   const curvs = curves ?? getCurvesForSeamEdge(piece)
   if (!range) return curveIndices.map((ci) => curvs[ci]).filter(Boolean)
 
-  const all = getNotchesOnEdge(piece, curveIndices, curvs)
+  const all = getNotchesOnEdgeFn(piece, curveIndices, curvs)
   const totalLen = edgeTotalLength(piece, curveIndices, curvs)
   const start = range.startNotchId ? all.find((n) => n.notchId === range.startNotchId) : null
   const end = range.endNotchId ? all.find((n) => n.notchId === range.endNotchId) : null

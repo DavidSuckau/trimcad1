@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useStore as useZustandStore } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { useStore, undoAction, redoAction } from '../store/useStore'
+import { canvasTextSize, uiTextPx } from '../ui/uiTextScale'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import { CanvasToolbar } from './CanvasToolbar'
 import {
@@ -30,7 +31,12 @@ import {
   notchCutoutPoints,
   type NotchCutoutGeom,
 } from '../geometry/notchOnCurve'
-import { isNotchSpacingValid, NOTCH_MIN_SPACING_MM } from '../geometry/notchMinSpacing'
+import { isNotchSpacingValid, isInternalNotchSpacingValid, NOTCH_MIN_SPACING_MM } from '../geometry/notchMinSpacing'
+import {
+  isNotchOnInternalLine,
+  getNotchPositionAndAngleOnInternalLine,
+  resolveNotchInternalLineAnchor,
+} from '../geometry/notchOnInternalLine'
 import {
   evenlySpacedTsOnLineSegment,
   lineSegmentLengthMm,
@@ -46,7 +52,6 @@ import {
   getCurvesForSeamEdge,
   deriveNotchRoleRangeOnEdge,
   deriveNotchRoleRangeAtArcLength,
-  edgeLengthInNotchRange,
   getEdgeCurvesInNotchRange,
   mapMasterVertexIndexToCutVertexIndex,
   resolvedSeamAssignmentCurveIndices,
@@ -58,6 +63,22 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing, getDispla
 import { vertexPositionOnClosedMaster, validateCornerRound, ROUND_CORNER_MIN_RADIUS_MM, ROUND_CORNER_MAX_RADIUS_MM, applyCornerRoundings } from '../geometry/cornerRounding'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
+import {
+  deriveInternalNotchRoleRangeAtArcLength,
+  deriveInternalNotchRoleRangeOnPath,
+  getInternalProfileCurveIndices,
+  getInternalProfileCurvesInRange,
+  getProfileAssignmentDisplayCurves,
+  hitProfileAssignment,
+  profileAssignmentLengthMm,
+  PROFILE_DISPLAY_OFFSET_MM,
+} from '../geometry/internalLineProfile'
+import {
+  deriveInternalSeamNotchRangeAtClick,
+  getInternalSeamAssignmentCurves,
+  hitInternalLineForSeamAssignment,
+  isInternalSeamAssignment,
+} from '../geometry/internalSeamAssignment'
 import { masterEdgeIsStraightLine } from '../geometry/horizontalLevelEdge'
 import {
   crossZ,
@@ -69,7 +90,7 @@ import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
-import type { PatternPiece, Point, Line, Curve, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType, NotchRole } from '../types/model'
+import type { PatternPiece, Point, Line, Curve, Notch, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType, NotchRole } from '../types/model'
 import { findMatchingNotchPresetIndex, modelNotchFieldsFromPreset } from '../notch/notchPresetMapping'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
@@ -183,6 +204,51 @@ function distanceToNotchCutoutGeom(
     Math.hypot(local.x - cutPosCenter.x, local.y - cutPosCenter.y),
     ...tri.map((pt) => Math.hypot(local.x - pt.x, local.y - pt.y))
   )
+}
+
+function distanceToNotchHoverMm(local: Point, notch: Notch, piece: PatternPiece): number {
+  const depth = notch.depth
+  const width = notch.width ?? 6
+  if (isNotchOnInternalLine(notch) && piece.internalLines.length > 0) {
+    const intPos = getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)
+    if (!intPos) return 1e15
+    const intParam = resolveNotchInternalLineAnchor(notch, piece.internalLines)
+    const intPts = notchCutoutPoints(
+      intPos.position,
+      intPos.angle,
+      depth,
+      width,
+      piece.internalLines,
+      intParam,
+      notch.type
+    )
+    if (intPts) return distanceToNotchCutoutGeom(local, intPts, intPos.position)
+    return Math.hypot(local.x - intPos.position.x, local.y - intPos.position.y)
+  }
+  const cutPos = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+  const cutParam = getNotchCurveIndexAndT(notch, piece.cutLine, piece.seamLine)
+  const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, piece.cutLine, cutParam, notch.type)
+  let d = 1e15
+  if (cutPts) {
+    d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
+  } else {
+    const { position } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+    d = Math.hypot(local.x - position.x, local.y - position.y)
+  }
+  if (piece.seamLine.length >= 3) {
+    const seamPos = getNotchPositionAndAngleOnSeamLine(notch, piece.cutLine, piece.seamLine)
+    if (seamPos) {
+      const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, piece.seamLine, undefined, notch.type)
+      if (seamPts) {
+        const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
+        if (dSeam < d) d = dSeam
+      } else {
+        const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
+        if (dSeam < d) d = dSeam
+      }
+    }
+  }
+  return d
 }
 
 function workspaceImageLayout(session: {
@@ -371,13 +437,15 @@ const GRAIN_HIT_HEAD_MM = 4.5
 function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
   const g = getGrainArrowLayout(piece)
   if (!g) return false
-  const { line, tickStart, tickEnd, endTip, baseLeft, baseRight } = g
+  const { line, tickStart, tickEnd, tickBaseLeft, tickBaseRight, endTip, baseLeft, baseRight } = g
   const shaft = distPointToSegmentMm(local, line.start, line.end)
   if (shaft.d <= GRAIN_HIT_SHAFT_HALF_MM) return true
   const tick = distPointToSegmentMm(local, tickStart, tickEnd)
   if (tick.d <= GRAIN_HIT_TICK_HALF_MM) return true
   if (isPointInPolygon(local, [endTip, baseLeft, baseRight])) return true
   if (minDistToTriangleEdgesMm(local, endTip, baseLeft, baseRight) <= GRAIN_HIT_HEAD_MM) return true
+  if (isPointInPolygon(local, [tickEnd, tickBaseLeft, tickBaseRight])) return true
+  if (minDistToTriangleEdgesMm(local, tickEnd, tickBaseLeft, tickBaseRight) <= GRAIN_HIT_HEAD_MM) return true
   return false
 }
 
@@ -702,32 +770,8 @@ function findPivotSnapTargetAtWorld(
   for (const p of pieces) {
     const local = worldToPieceLocal(world, p)
     for (const notch of p.notches) {
-      const depth = notch.depth
-      const width = notch.width ?? 6
-      const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-      const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
-      const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
-      let d = bestNotch.dist + 1
-      if (cutPts) {
-        d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
-      } else {
-        const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
-        d = Math.hypot(local.x - position.x, local.y - position.y)
-      }
+      const d = distanceToNotchHoverMm(local, notch, p)
       if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
-      if (p.seamLine.length >= 3) {
-        const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
-        if (seamPos) {
-          const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
-          if (seamPts) {
-            const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
-            if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-          } else {
-            const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
-            if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-          }
-        }
-      }
     }
   }
 
@@ -788,7 +832,12 @@ function findPivotSnapTargetAtWorld(
     const piece = pieces.find((x) => x.id === bestNotch.pieceId)
     const notch = piece?.notches.find((n) => n.id === bestNotch.notchId)
     if (!piece || !notch) return null
-    const { position } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+    const intPos =
+      isNotchOnInternalLine(notch) && piece.internalLines.length > 0
+        ? getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)?.position
+        : null
+    const position =
+      intPos ?? getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine).position
     return { pieceId: piece.id, pivotLocal: { ...position } }
   }
   if (pick === 'aux') {
@@ -824,7 +873,13 @@ function resolvePivotFromHoveredTarget(
     const piece = pieces.find((x) => x.id === hoveredNotch.pieceId)
     const notch = piece?.notches.find((n) => n.id === hoveredNotch.notchId)
     if (piece && notch) {
-      const { position } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+      const intPos =
+        isNotchOnInternalLine(notch) && piece.internalLines.length > 0
+          ? getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)?.position
+          : null
+      const { position } = intPos
+        ? { position: intPos }
+        : getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
       return { pieceId: piece.id, pivotLocal: { ...position } }
     }
   }
@@ -958,6 +1013,138 @@ function tAtArcDistanceFromEnd(curve: Curve, endT: number, distanceMm: number): 
   return (lo + hi) / 2
 }
 
+type NotchMovePreviewState = {
+  pieceId: string
+  position: Point
+  angle: number
+  curveIndex: number
+  t: number
+  distanceMmLeft: number
+  distanceMmRight: number
+  storePos: Point
+  storeAngle: number
+  onInternalLine?: boolean
+}
+
+/** Vorschau beim Verschieben einer Kerbe (cutLine); optional Mausposition zur Projektion. */
+function buildNotchMovePreview(
+  piece: PatternPiece,
+  notchId: string,
+  localHint?: Point,
+): NotchMovePreviewState | null {
+  const notch = piece.notches.find((n) => n.id === notchId)
+  if (!notch) return null
+  if (isNotchOnInternalLine(notch)) {
+    if (piece.internalLines.length === 0) return null
+    const intPos = getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)
+    if (!intPos) return null
+    const nearest = nearestCurveIndexAndPoint(localHint ?? intPos.position, piece.internalLines)
+    if (!nearest) return null
+    const tNudged = nearest.t ?? 0
+    const curve = piece.internalLines[nearest.curveIndex]
+    const storePos = pointOnCurveAt(curve, tNudged)
+    const storeAngle = outwardNormalAngleAt(piece.internalLines, nearest.curveIndex, tNudged) + 180
+    const notchesOnSegment = piece.notches
+      .map((n) => {
+        if (n.id === notchId || !isNotchOnInternalLine(n)) return null
+        const p = getNotchPositionAndAngleOnInternalLine(n, piece.internalLines)?.position
+        if (!p) return null
+        const nr = nearestCurveIndexAndPoint(p, piece.internalLines)
+        return nr && nr.curveIndex === nearest.curveIndex && nr.t != null ? nr.t : null
+      })
+      .filter((x): x is number => x != null)
+    return {
+      pieceId: piece.id,
+      position: storePos,
+      angle: storeAngle,
+      curveIndex: nearest.curveIndex,
+      t: tNudged,
+      distanceMmLeft: distanceToPrevVertexOrNotch(curve, tNudged, notchesOnSegment),
+      distanceMmRight: distanceToNextVertexOrNotch(curve, tNudged, notchesOnSegment),
+      storePos,
+      storeAngle,
+      onInternalLine: true,
+    }
+  }
+  if (piece.cutLine.length === 0) return null
+  const { position: notchPos } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+  const cutNearest = nearestCurveIndexAndPoint(localHint ?? notchPos, piece.cutLine)
+  if (!cutNearest) return null
+  const cutT = cutNearest.t ?? 0
+  const tNudged =
+    cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
+  const cutCurveIndex = cutNearest.curveIndex
+  const curve = piece.cutLine[cutCurveIndex]
+  const storePos = pointOnCurveAt(piece.cutLine[cutCurveIndex], tNudged)
+  const storeAngle = outwardNormalAngleAt(piece.cutLine, cutCurveIndex, tNudged) + 180
+  const notchesOnSegment = piece.notches
+    .map((n) => {
+      if (n.id === notchId) return tNudged
+      const { position: nPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
+      const nr = nearestCurveIndexAndPoint(nPos, piece.cutLine)
+      return nr && nr.curveIndex === cutCurveIndex && nr.t != null ? nr.t : null
+    })
+    .filter((x): x is number => x != null)
+  return {
+    pieceId: piece.id,
+    position: storePos,
+    angle: storeAngle,
+    curveIndex: cutCurveIndex,
+    t: tNudged,
+    distanceMmLeft: distanceToPrevVertexOrNotch(curve, tNudged, notchesOnSegment),
+    distanceMmRight: distanceToNextVertexOrNotch(curve, tNudged, notchesOnSegment),
+    storePos,
+    storeAngle,
+  }
+}
+
+function openNotchMoveDistanceEditorFromPreview(
+  piece: PatternPiece,
+  notchId: string,
+  preview: NotchMovePreviewState,
+  side: 'left' | 'right',
+  clientX: number,
+  clientY: number,
+): {
+  pieceId: string
+  notchId: string
+  curveIndex: number
+  prevT: number
+  nextT: number
+  side: 'left' | 'right'
+  value: string
+  clientX: number
+  clientY: number
+} {
+  const otherNotchesOnCurve = piece.notches
+    .map((n) => {
+      if (n.id === notchId) return null
+      const { position } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
+      const nr = nearestCurveIndexAndPoint(position, piece.cutLine)
+      return nr && nr.curveIndex === preview.curveIndex && nr.t != null ? nr.t : null
+    })
+    .filter((x): x is number => x != null)
+  const prevCandidates = otherNotchesOnCurve.filter((tN) => tN < preview.t)
+  const nextCandidates = otherNotchesOnCurve.filter((tN) => tN > preview.t)
+  const prevT = prevCandidates.length > 0 ? Math.max(...prevCandidates) : 0
+  const nextT = nextCandidates.length > 0 ? Math.min(...nextCandidates) : 1
+  const value =
+    side === 'left'
+      ? preview.distanceMmLeft.toFixed(1).replace('.', ',')
+      : preview.distanceMmRight.toFixed(1).replace('.', ',')
+  return {
+    pieceId: piece.id,
+    notchId,
+    curveIndex: preview.curveIndex,
+    prevT,
+    nextT,
+    side,
+    value,
+    clientX,
+    clientY,
+  }
+}
+
 /** Client-Koordinaten → Weltkoordinaten (wie im transformierten <g>). */
 function getScreenPoint(
   clientX: number,
@@ -1065,6 +1252,7 @@ const PieceGroup = memo(function PieceGroup({
   onContextMenu,
   viewZoom,
   rotationUiScale,
+  textUiScale,
   themeMode: _themeMode,
 }: {
   piece: PatternPiece
@@ -1100,10 +1288,13 @@ const PieceGroup = memo(function PieceGroup({
   viewZoom: number
   /** Zoom-unabhängige Skalierung für Drehring, Drehgriff, Drehpunkt (Einstellungen). */
   rotationUiScale: number
+  /** Schrift auf dem Teil (Teilename, Maße, …). */
+  textUiScale: number
   /** Theme-Modus: nur für memo-Invalidierung, T wird modulweit gesetzt. */
   themeMode: string
 }) {
   void _themeMode
+  const ct = (base: number) => canvasTextSize(base, textUiScale)
   const { NOTCH_STROKE } = getVertexColors()
   const { cutLine, seamLine, notches, drills, internalLines, internalCircles } = piece
   const ptPs = 1 / Math.max(viewZoom, 1e-6)
@@ -1232,6 +1423,40 @@ const PieceGroup = memo(function PieceGroup({
         if (notchIdBeingDragged === n.id) return null
         const depth = n.depth
         const width = n.width ?? 6
+        if (isNotchOnInternalLine(n) && internalLines.length > 0) {
+          const intPos = getNotchPositionAndAngleOnInternalLine(n, internalLines)
+          if (!intPos) return null
+          const intParam = resolveNotchInternalLineAnchor(n, internalLines)
+          const intPts = notchCutoutPoints(
+            intPos.position,
+            intPos.angle,
+            depth,
+            width,
+            internalLines,
+            intParam,
+            n.type
+          )
+          if (!intPts) return null
+          const { fillD: intFillD, edgesD: intEdgesD } = notchCutoutSvgPaths(intPts)
+          const intIsLine = intPts.kind === 'line'
+          const isHovered = hoveredNotchId === n.id
+          const stroke = isHovered ? T.notch.strokeHover : NOTCH_STROKE
+          const roleFill = n.role ? (isHovered ? T.notch.roleFillHover : T.notch.roleFill) : T.notch.fill
+          const strokeW = isHovered ? 0.7 : 0.4
+          return (
+            <g key={n.id} pointerEvents="none">
+              {intFillD ? <path d={intFillD} fill={roleFill} stroke="none" /> : null}
+              <path
+                d={intEdgesD}
+                fill="none"
+                stroke={stroke}
+                strokeWidth={intIsLine ? Math.max(strokeW, 0.55) : strokeW}
+                strokeLinejoin="round"
+                strokeLinecap={intIsLine ? 'round' : 'butt'}
+              />
+            </g>
+          )
+        }
         const cutPos = getNotchPositionAndAngleOnCutLine(n, cutLine, seamLine)
         const cutParam = getNotchCurveIndexAndT(n, cutLine, seamLine)
         const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, cutLine, cutParam, n.type)
@@ -1293,10 +1518,8 @@ const PieceGroup = memo(function PieceGroup({
       {showGrain !== false && cutLine.length >= 3 && (() => {
         const g = getGrainArrowLayout(piece)
         if (!g) return null
-        const { line, tickStart, tickEnd, triangleD } = g
-        const midX = (line.start.x + line.end.x) / 2
-        const midY = (line.start.y + line.end.y) / 2
-        const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x)
+        const { line, tickStart, tickEnd, tickTriangleD, triangleD } = g
+        const shaftH = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y) || 1
         const hasGrainHandlers =
           onGrainArrowEnter != null &&
           onGrainArrowLeave != null &&
@@ -1332,6 +1555,14 @@ const PieceGroup = memo(function PieceGroup({
                 y2={tickEnd.y}
                 stroke={T.grain.stroke}
                 strokeWidth={T.grain.strokeWidth}
+                strokeDasharray={T.grain.dash}
+                pointerEvents="none"
+              />
+              <path
+                d={tickTriangleD}
+                fill="none"
+                stroke={T.grain.stroke}
+                strokeWidth={T.grain.strokeWidth}
                 pointerEvents="none"
               />
               <path
@@ -1361,6 +1592,14 @@ const PieceGroup = memo(function PieceGroup({
                     stroke="transparent"
                     strokeWidth={2 * GRAIN_HIT_TICK_HALF_MM}
                     pointerEvents="stroke"
+                  />
+                  <path
+                    d={tickTriangleD}
+                    fill="rgba(0,0,0,0)"
+                    stroke="rgba(0,0,0,0)"
+                    strokeWidth={2 * GRAIN_HIT_HEAD_MM}
+                    strokeLinejoin="miter"
+                    pointerEvents="all"
                   />
                   <path
                     d={triangleD}
@@ -1396,23 +1635,22 @@ const PieceGroup = memo(function PieceGroup({
               </>
             )}
             {showPieceNames !== false && (() => {
-              // Text parallel zur Laufrichtungslinie (wie auf der Linie geschrieben); leicht seitlich versetzt, damit er die Striche nicht überdeckt.
-              const perpX = -Math.sin(angle)
-              const perpY = Math.cos(angle)
-              const offMm = 3.5
-              const tx = midX + perpX * offMm
-              const ty = midY + perpY * offMm
-              let rotDeg = (angle * 180) / Math.PI
-              if (Math.cos(angle) < 0) rotDeg += 180
+              // Waagerecht unter der Querlinie (Richtung Pfeilspitze).
+              const tickMidX = (tickStart.x + tickEnd.x) / 2
+              const tickMidY = (tickStart.y + tickEnd.y) / 2
+              const grainDirX = (line.end.x - line.start.x) / shaftH
+              const grainDirY = (line.end.y - line.start.y) / shaftH
+              const offMm = 4
+              const tx = tickMidX + grainDirX * offMm
+              const ty = tickMidY + grainDirY * offMm
               return (
                 <text
                   x={tx}
                   y={ty}
-                  transform={`rotate(${rotDeg}, ${tx}, ${ty})`}
                   textAnchor="middle"
-                  dominantBaseline="middle"
+                  dominantBaseline="hanging"
                   fill={T.text.pieceName}
-                  fontSize={3.8}
+                  fontSize={ct(3.8)}
                   fontFamily="sans-serif"
                   fontWeight="600"
                   pointerEvents="none"
@@ -1448,7 +1686,7 @@ const PieceGroup = memo(function PieceGroup({
                   transform={`rotate(${rotDeg}, ${tx}, ${ty})`}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fontSize={3.4}
+                  fontSize={ct(3.4)}
                   fontFamily="sans-serif"
                   fontWeight={600}
                   fill={T.text.contourMeasure}
@@ -1495,7 +1733,7 @@ const PieceGroup = memo(function PieceGroup({
                   y={my + ny}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fontSize={3}
+                  fontSize={ct(3)}
                   fontFamily="sans-serif"
                   fontWeight={700}
                   fill={T.text.edgeAllowance}
@@ -1686,6 +1924,7 @@ export function WorkspaceCanvas() {
     completeNahtTrimAtCutVertex,
     cancelNahtTrimVertexPick,
     addSeamAssignment,
+    addInternalSeamAssignment,
     removeSeamAssignment,
     selectPiece,
     movePiece,
@@ -1775,6 +2014,7 @@ export function WorkspaceCanvas() {
     canvasRotationUiScale,
     canvasDigitizeUiScale,
     canvasVertexPointUiScale,
+    uiTextScale,
     showPivotRotationUi,
   } = useStore(
     useShallow((s) => ({
@@ -1817,6 +2057,7 @@ export function WorkspaceCanvas() {
       completeNahtTrimAtCutVertex: s.completeNahtTrimAtCutVertex,
       cancelNahtTrimVertexPick: s.cancelNahtTrimVertexPick,
       addSeamAssignment: s.addSeamAssignment,
+      addInternalSeamAssignment: s.addInternalSeamAssignment,
       removeSeamAssignment: s.removeSeamAssignment,
       selectPiece: s.selectPiece,
       movePiece: s.movePiece,
@@ -1906,9 +2147,12 @@ export function WorkspaceCanvas() {
       canvasRotationUiScale: s.canvasRotationUiScale,
       canvasDigitizeUiScale: s.canvasDigitizeUiScale,
       canvasVertexPointUiScale: s.canvasVertexPointUiScale,
+      uiTextScale: s.uiTextScale,
       showPivotRotationUi: s.showPivotRotationUi,
     })),
   )
+  const fs = uiTextPx
+  const ct = (base: number) => canvasTextSize(base, uiTextScale)
   T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
   const { COLOR_ECKPUNKT, COLOR_SOFT_PUNKT, COLOR_PUNKT_AUF_KURVE, NOTCH_STROKE } = getVertexColors()
   const { pieces, view, notes: workspaceNotesList } = workspace
@@ -1980,7 +2224,16 @@ export function WorkspaceCanvas() {
     /** Fensterauswahl im Select-Tool (leerer Bereich). */
     | { kind: 'selectionMarquee'; start: Point; current: Point }
     | { kind: 'line'; pieceId: string; start: Point; current: Point }
-    | { kind: 'notch'; pieceId: string; position: Point; current: Point; curveIndex: number; t: number; useSeamLine?: boolean }
+    | {
+        kind: 'notch'
+        pieceId: string
+        position: Point
+        current: Point
+        curveIndex: number
+        t: number
+        useSeamLine?: boolean
+        onInternalLine?: boolean
+      }
     | { kind: 'notchMove'; pieceId: string; notchId: string }
     | { kind: 'drill'; pieceId: string; center: Point; current: Point }
     | { kind: 'internalCircle'; pieceId: string; center: Point; current: Point }
@@ -2043,6 +2296,7 @@ export function WorkspaceCanvas() {
     distanceMmRight: number
     storePos: Point
     storeAngle: number
+    onInternalLine?: boolean
   } | null>(null)
   const [notchMoveDistanceEditor, setNotchMoveDistanceEditor] = useState<{
     pieceId: string
@@ -2071,6 +2325,12 @@ export function WorkspaceCanvas() {
     pieceId: string
     curveIndices: number[]
   } | null>(null)
+  const [hoveredInternalSeamForNahtzuordnung, setHoveredInternalSeamForNahtzuordnung] = useState<{
+    pieceId: string
+    curveIndices: number[]
+    startNotchId?: string
+    endNotchId?: string
+  } | null>(null)
   const [hoveredSeamAssignmentId, setHoveredSeamAssignmentId] = useState<string | null>(null)
   const [hoveredProfileEdge, setHoveredProfileEdge] = useState<{
     pieceId: string
@@ -2078,6 +2338,7 @@ export function WorkspaceCanvas() {
     curveIndices: number[]
     startNotchId?: string
     endNotchId?: string
+    onInternalLine?: boolean
   } | null>(null)
   const [hoveredEdgePicking, setHoveredEdgePicking] = useState<{
     pieceId: string
@@ -2142,6 +2403,17 @@ export function WorkspaceCanvas() {
     /** Falls eine bestehende Rundung editiert wird – sonst undefined. */
     existing?: boolean
   } | null>(null)
+  /** Aktueller Maß-Dialog (Ref vermeidet veraltete handlePointerUp-Closures bei Leertaste + Loslassen). */
+  const notchMoveDistanceEditorRef = useRef(notchMoveDistanceEditor)
+  notchMoveDistanceEditorRef.current = notchMoveDistanceEditor
+  const lineLengthEditorRef = useRef(lineLengthEditor)
+  lineLengthEditorRef.current = lineLengthEditor
+  const rectangleSizeEditorRef = useRef(rectangleSizeEditor)
+  rectangleSizeEditorRef.current = rectangleSizeEditor
+  const internalCircleRadiusEditorRef = useRef(internalCircleRadiusEditor)
+  internalCircleRadiusEditorRef.current = internalCircleRadiusEditor
+  const cornerRoundEditorRef = useRef(cornerRoundEditor)
+  cornerRoundEditorRef.current = cornerRoundEditor
   const lineLengthInputRef = useRef<HTMLInputElement | null>(null)
   const internalCircleRadiusInputRef = useRef<HTMLInputElement | null>(null)
   const rectangleWidthInputRef = useRef<HTMLInputElement | null>(null)
@@ -2263,18 +2535,17 @@ export function WorkspaceCanvas() {
 
   useEffect(() => {
     if (!notchMoveDistanceEditor) return
-    if (dragging?.kind !== 'notchMove') return
-    if (dragging.pieceId !== notchMoveDistanceEditor.pieceId || dragging.notchId !== notchMoveDistanceEditor.notchId) return
     const piece = pieces.find((p) => p.id === notchMoveDistanceEditor.pieceId)
     if (!piece || piece.cutLine.length === 0) return
     const curve = piece.cutLine[notchMoveDistanceEditor.curveIndex]
     if (!curve) return
     const raw = Number.parseFloat(notchMoveDistanceEditor.value.replace(',', '.'))
     if (!Number.isFinite(raw) || raw < 0) return
-    const segmentMax =
-      notchMoveDistanceEditor.side === 'left'
-        ? curveSegmentArcLength(curve, notchMoveDistanceEditor.prevT, notchMoveDistanceEditor.nextT)
-        : curveSegmentArcLength(curve, notchMoveDistanceEditor.prevT, notchMoveDistanceEditor.nextT)
+    const segmentMax = curveSegmentArcLength(
+      curve,
+      notchMoveDistanceEditor.prevT,
+      notchMoveDistanceEditor.nextT,
+    )
     const mm = Math.max(0, Math.min(segmentMax, raw))
     const nextT =
       notchMoveDistanceEditor.side === 'left'
@@ -2284,9 +2555,10 @@ export function WorkspaceCanvas() {
       nextT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : nextT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : nextT
     const storePos = pointOnCurveAt(piece.cutLine[notchMoveDistanceEditor.curveIndex], tClamped)
     const storeAngle = outwardNormalAngleAt(piece.cutLine, notchMoveDistanceEditor.curveIndex, tClamped) + 180
+    const notchId = notchMoveDistanceEditor.notchId
     const notchesOnSegment = piece.notches
       .map((n) => {
-        if (n.id === dragging.notchId) return tClamped
+        if (n.id === notchId) return tClamped
         const { position: notchPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
         const nr = nearestCurveIndexAndPoint(notchPos, piece.cutLine)
         return nr && nr.curveIndex === notchMoveDistanceEditor.curveIndex && nr.t != null ? nr.t : null
@@ -2305,11 +2577,7 @@ export function WorkspaceCanvas() {
       storePos,
       storeAngle,
     })
-  }, [notchMoveDistanceEditor, dragging, pieces])
-
-  useEffect(() => {
-    if (dragging?.kind !== 'notchMove') setNotchMoveDistanceEditor(null)
-  }, [dragging])
+  }, [notchMoveDistanceEditor, pieces])
 
   // Wenn der Nutzer im Eingabefeld einen Radius eintippt, Vorschau-Drag entsprechend skalieren.
   useEffect(() => {
@@ -2838,6 +3106,27 @@ export function WorkspaceCanvas() {
           return
         }
       }
+      if (!layoutOnly && nahtzuordnungMode === 'internal') {
+        const world = toWorld(e.clientX, e.clientY)
+        let best: {
+          pieceId: string
+          curveIndices: number[]
+          curveIndex: number
+          t: number
+          distance: number
+        } | null = null
+        for (const p of pieces) {
+          const local = worldToPieceLocal(world, p)
+          const hit = hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
+          if (hit && (!best || hit.distance < best.distance)) {
+            best = { pieceId: p.id, ...hit }
+          }
+        }
+        if (best) {
+          addInternalSeamAssignment(best.pieceId, best.curveIndices, best.curveIndex, best.t)
+        }
+        return
+      }
       if (nahtTrimPickCutVertexActive && tool === 'select') {
         const world = toWorld(e.clientX, e.clientY)
         const ctnHit = containerRef.current
@@ -2937,9 +3226,10 @@ export function WorkspaceCanvas() {
       }
       if (!layoutOnly && tool === 'profil' && hoveredProfileEdge) {
         const sameProfileRange = (
-          pa: { startNotchId?: string; endNotchId?: string },
-          edge: { startNotchId?: string; endNotchId?: string }
+          pa: { startNotchId?: string; endNotchId?: string; onInternalLine?: boolean },
+          edge: { startNotchId?: string; endNotchId?: string; onInternalLine?: boolean }
         ) =>
+          Boolean(pa.onInternalLine) === Boolean(edge.onInternalLine) &&
           (pa.startNotchId ?? null) === (edge.startNotchId ?? null) &&
           (pa.endNotchId ?? null) === (edge.endNotchId ?? null)
         const existing = profileAssignments.find(
@@ -2959,6 +3249,7 @@ export function WorkspaceCanvas() {
           const newId = addProfileAssignment({
             pieceId: hoveredProfileEdge.pieceId,
             edgeIndex: hoveredProfileEdge.edgeIndex,
+            onInternalLine: hoveredProfileEdge.onInternalLine,
             startNotchId: hoveredProfileEdge.startNotchId,
             endNotchId: hoveredProfileEdge.endNotchId,
             profileName: '',
@@ -3008,37 +3299,22 @@ export function WorkspaceCanvas() {
       }
 
       if (!layoutOnly && showProfiles && (tool === 'select' || tool === 'profil') && profileAssignments.length > 0) {
-        const PROFILE_HIT_MM = 8
-        const PROFILE_LINE_OFF = 20
-        for (const pa of profileAssignments) {
+        const PROFILE_HIT_PX = 16
+        const ctnProfile = containerRef.current
+        const svgProfile = svgRef.current
+        const profileHitMm = ctnProfile
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(PROFILE_HIT_PX, view, svgProfile, ctnProfile),
+            )
+          : 12
+        for (let i = profileAssignments.length - 1; i >= 0; i--) {
+          const pa = profileAssignments[i]
           const pp = pieces.find((p) => p.id === pa.pieceId)
           if (!pp) continue
-          const masterK = getCurvesForSeamEdge(pp)
-          const edges = enumerateEdges(pp)
-          const edge = edges.find((ed) => ed.edgeIndex === pa.edgeIndex)
-          if (!edge) continue
-          const area = signedAreaCurves(masterK)
-          const outSign = area >= 0 ? -1 : 1
           const local = worldToPieceLocal(world, pp)
-          for (const ci of edge.curveIndices) {
-            const seg = masterK[ci]
-            if (!seg) continue
-            const tdx = seg.end.x - seg.start.x
-            const tdy = seg.end.y - seg.start.y
-            const tlen = Math.hypot(tdx, tdy) || 1
-            const ox = outSign * (-tdy / tlen) * PROFILE_LINE_OFF
-            const oy = outSign * (tdx / tlen) * PROFILE_LINE_OFF
-            const offStart = { x: seg.start.x + ox, y: seg.start.y + oy }
-            const offEnd = { x: seg.end.x + ox, y: seg.end.y + oy }
-            const dx = offEnd.x - offStart.x, dy = offEnd.y - offStart.y
-            const len2 = dx * dx + dy * dy
-            const t = len2 > 0 ? Math.max(0, Math.min(1, ((local.x - offStart.x) * dx + (local.y - offStart.y) * dy) / len2)) : 0
-            const closest = { x: offStart.x + t * dx, y: offStart.y + t * dy }
-            const dist = Math.hypot(local.x - closest.x, local.y - closest.y)
-            if (dist < PROFILE_HIT_MM) {
-              setProfileDialogAssignmentId(pa.id)
-              return
-            }
+          if (hitProfileAssignment(pp, pa, local, profileHitMm)) {
+            setProfileDialogAssignmentId(pa.id)
+            return
           }
         }
       }
@@ -3103,37 +3379,9 @@ export function WorkspaceCanvas() {
           for (const p of piecesForClick) {
             const local = worldToPieceLocal(world, p)
             for (const notch of p.notches) {
-              const depth = notch.depth
-              const width = notch.width ?? 6
-              const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-              const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
-              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
-              let d = Infinity
-              if (cutPts) {
-                d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
-              } else {
-                const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
-                d = Math.hypot(local.x - position.x, local.y - position.y)
-              }
+              const d = distanceToNotchHoverMm(local, notch, p)
               if (d <= NOTCH_CLICK_HIT && (!bestNotchClick || d < bestNotchClick.dist)) {
                 bestNotchClick = { dist: d, pieceId: p.id, notchId: notch.id }
-              }
-              if (p.seamLine.length >= 3) {
-                const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
-                if (seamPos) {
-                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
-                  if (seamPts) {
-                    const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
-                    if (dSeam <= NOTCH_CLICK_HIT && (!bestNotchClick || dSeam < bestNotchClick.dist)) {
-                      bestNotchClick = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-                    }
-                  } else {
-                    const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
-                    if (dSeam <= NOTCH_CLICK_HIT && (!bestNotchClick || dSeam < bestNotchClick.dist)) {
-                      bestNotchClick = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-                    }
-                  }
-                }
               }
             }
           }
@@ -3193,6 +3441,10 @@ export function WorkspaceCanvas() {
               notchId: bestNotchClick.notchId,
             })
             return
+          }
+          const movePiece = pieces.find((p) => p.id === bestNotchClick.pieceId)
+          if (movePiece) {
+            setNotchPreview(buildNotchMovePreview(movePiece, bestNotchClick.notchId))
           }
           setDragging({
             kind: 'notchMove',
@@ -3513,6 +3765,10 @@ export function WorkspaceCanvas() {
           return
         }
         if (contourEditEnabled && hoveredDeletableNotch) {
+          const movePiece = pieces.find((p) => p.id === hoveredDeletableNotch.pieceId)
+          if (movePiece) {
+            setNotchPreview(buildNotchMovePreview(movePiece, hoveredDeletableNotch.notchId))
+          }
           setDragging({
             kind: 'notchMove',
             pieceId: hoveredDeletableNotch.pieceId,
@@ -3761,17 +4017,51 @@ export function WorkspaceCanvas() {
         const solidIsCut = !hasSeam || cutSeamSwappedSet.has(pieceId)
         const useSeam = hasSeam && !solidIsCut
         const curves = useSeam ? piece.seamLine : piece.cutLine
-        if (curves.length === 0) {
+        const nearestInternal =
+          piece.internalLines.length > 0
+            ? nearestCurveIndexAndPoint(local, piece.internalLines)
+            : null
+        if (curves.length === 0 && !nearestInternal) {
           selectPiece(null)
           setTool('select')
           return
         }
-        const nearest = nearestCurveIndexAndPoint(local, curves)
-        if (!nearest || nearest.distance > maxSnapDistance) {
+        const nearest = curves.length > 0 ? nearestCurveIndexAndPoint(local, curves) : null
+        const contourOk = nearest != null && nearest.distance <= maxSnapDistance
+        const internalOk = nearestInternal != null && nearestInternal.distance <= maxSnapDistance
+        if (!contourOk && !internalOk) {
           if (notchEdgeMidMode) {
             setToastMessage('warn: Nahe einer Kante klicken (Kantenmitte-Modus, 20 mm).')
             return
           }
+          selectPiece(null)
+          setTool('select')
+          return
+        }
+        if (
+          internalOk &&
+          nearestInternal &&
+          (!contourOk || nearestInternal.distance < (nearest?.distance ?? 1e15) - 1e-9)
+        ) {
+          if (notchEdgeMidMode) {
+            setToastMessage('warn: Kantenmitte gilt nur für Schnitt- oder Nahtkanten.')
+            return
+          }
+          const tInt = nearestInternal.t ?? 0
+          setNotchPreview(null)
+          setDragging({
+            kind: 'notch',
+            pieceId,
+            position: nearestInternal.point,
+            current: nearestInternal.point,
+            curveIndex: nearestInternal.curveIndex,
+            t: tInt,
+            onInternalLine: true,
+          })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+        if (!nearest) {
           selectPiece(null)
           setTool('select')
           return
@@ -4010,6 +4300,7 @@ export function WorkspaceCanvas() {
       setPendingNahtzuordnungFirst,
       pendingNahtzuordnungFirst,
       addSeamAssignment,
+      addInternalSeamAssignment,
       toWorld,
       setView,
       selectPiece,
@@ -4268,7 +4559,40 @@ export function WorkspaceCanvas() {
           }
         }
         setHoveredWorkspaceImage(imgHover)
-        if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
+        if (nahtzuordnungMode === 'internal') {
+          const world = toWorld(e.clientX, e.clientY)
+          let bestHover: {
+            pieceId: string
+            curveIndices: number[]
+            startNotchId?: string
+            endNotchId?: string
+            distance: number
+          } | null = null
+          for (const p of pieces) {
+            const local = worldToPieceLocal(world, p)
+            const hit = hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
+            if (hit && (!bestHover || hit.distance < bestHover.distance)) {
+              const range = deriveInternalSeamNotchRangeAtClick(p, hit.curveIndices, hit.curveIndex, hit.t)
+              bestHover = {
+                pieceId: p.id,
+                curveIndices: hit.curveIndices,
+                distance: hit.distance,
+                ...(range ? { startNotchId: range.startNotchId, endNotchId: range.endNotchId } : {}),
+              }
+            }
+          }
+          setHoveredInternalSeamForNahtzuordnung(
+            bestHover
+              ? {
+                  pieceId: bestHover.pieceId,
+                  curveIndices: bestHover.curveIndices,
+                  startNotchId: bestHover.startNotchId,
+                  endNotchId: bestHover.endNotchId,
+                }
+              : null
+          )
+          setHoveredSeamForNahtzuordnung(null)
+        } else if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
           const world = toWorld(e.clientX, e.clientY)
           let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
           for (const p of pieces) {
@@ -4301,8 +4625,10 @@ export function WorkspaceCanvas() {
           } else {
             setHoveredSeamForNahtzuordnung(null)
           }
+          setHoveredInternalSeamForNahtzuordnung(null)
         } else {
           setHoveredSeamForNahtzuordnung(null)
+          setHoveredInternalSeamForNahtzuordnung(null)
         }
         if (edgeSeamPickingActive && !edgeAllowancePopover) {
           const world = toWorld(e.clientX, e.clientY)
@@ -4335,11 +4661,50 @@ export function WorkspaceCanvas() {
             distance: number
             startNotchId?: string
             endNotchId?: string
+            onInternalLine?: boolean
           } | null = null
           for (const p of pieces) {
+            const local = worldToPieceLocal(world, p)
+            if (p.internalLines.length > 0) {
+              const nearestInt = nearestCurveIndexAndPoint(local, p.internalLines)
+              if (nearestInt && nearestInt.distance < SEAM_HIT_MM) {
+                const curveIndices = getInternalProfileCurveIndices(p)
+                let startNotchId: string | undefined
+                let endNotchId: string | undefined
+                const idxInPath = curveIndices.indexOf(nearestInt.curveIndex)
+                if (idxInPath >= 0) {
+                  const lengths = curveIndices.map((ci) => {
+                    const seg = p.internalLines[ci]
+                    return seg ? curveSegmentArcLength(seg, 0, 1) : 0
+                  })
+                  const prefix = lengths.slice(0, idxInPath).reduce((a, b) => a + b, 0)
+                  const segArc = curveSegmentArcLength(
+                    p.internalLines[nearestInt.curveIndex],
+                    0,
+                    nearestInt.t ?? 0
+                  )
+                  const arcOnPath = prefix + segArc
+                  const rangeAtClick =
+                    deriveInternalNotchRoleRangeAtArcLength(p, curveIndices, arcOnPath) ??
+                    deriveInternalNotchRoleRangeOnPath(p, curveIndices)
+                  startNotchId = rangeAtClick?.startNotchId
+                  endNotchId = rangeAtClick?.endNotchId
+                }
+                if (!bestEdge || nearestInt.distance < bestEdge.distance) {
+                  bestEdge = {
+                    pieceId: p.id,
+                    edgeIndex: 0,
+                    curveIndices,
+                    distance: nearestInt.distance,
+                    startNotchId,
+                    endNotchId,
+                    onInternalLine: true,
+                  }
+                }
+              }
+            }
             const masterK = getCurvesForSeamEdge(p)
             if (masterK.length < 3) continue
-            const local = worldToPieceLocal(world, p)
             const nearest = nearestCurveIndexAndPoint(local, masterK)
             if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
             const edges = enumerateEdges(p)
@@ -4369,6 +4734,7 @@ export function WorkspaceCanvas() {
                     distance: nearest.distance,
                     startNotchId,
                     endNotchId,
+                    onInternalLine: false,
                   }
                 }
                 break
@@ -4558,32 +4924,8 @@ export function WorkspaceCanvas() {
           for (const p of piecesForNotchHover) {
             const local = worldToPieceLocal(world, p)
             for (const notch of p.notches) {
-              const depth = notch.depth
-              const width = notch.width ?? 6
-              const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-              const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
-              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
-              let d = bestNotch.dist + 1
-              if (cutPts) {
-                d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
-              } else {
-                const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
-                d = Math.hypot(local.x - position.x, local.y - position.y)
-              }
+              const d = distanceToNotchHoverMm(local, notch, p)
               if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
-              if (p.seamLine.length >= 3) {
-                const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
-                if (seamPos) {
-                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
-                  if (seamPts) {
-                    const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
-                    if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-                  } else {
-                    const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
-                    if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-                  }
-                }
-              }
             }
           }
           const vertexInRange = hoverPick != null && hoverPickDist <= hoverDelMaxDist
@@ -4665,32 +5007,8 @@ export function WorkspaceCanvas() {
           for (const p of piecesForNotchHover) {
             const local = worldToPieceLocal(worldForNotch, p)
             for (const notch of p.notches) {
-              const depth = notch.depth
-              const width = notch.width ?? 6
-              const cutPos = getNotchPositionAndAngleOnCutLine(notch, p.cutLine, p.seamLine)
-              const cutParam = getNotchCurveIndexAndT(notch, p.cutLine, p.seamLine)
-              const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, p.cutLine, cutParam, notch.type)
-              let d = bestNotch.dist + 1
-              if (cutPts) {
-                d = distanceToNotchCutoutGeom(local, cutPts, cutPos.position)
-              } else {
-                const { position } = getNotchPositionAndAngle(notch, p.cutLine, p.seamLine)
-                d = Math.hypot(local.x - position.x, local.y - position.y)
-              }
+              const d = distanceToNotchHoverMm(local, notch, p)
               if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
-              if (p.seamLine.length >= 3) {
-                const seamPos = getNotchPositionAndAngleOnSeamLine(notch, p.cutLine, p.seamLine)
-                if (seamPos) {
-                  const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, p.seamLine, undefined, notch.type)
-                  if (seamPts) {
-                    const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
-                    if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-                  } else {
-                    const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
-                    if (dSeam < bestNotch.dist) bestNotch = { dist: dSeam, pieceId: p.id, notchId: notch.id }
-                  }
-                }
-              }
             }
           }
           if (bestNotch.dist <= NOTCH_HOVER_HIT) {
@@ -4752,28 +5070,55 @@ export function WorkspaceCanvas() {
             piece: PatternPiece
             r: { curveIndex: number; point: Point; t: number }
             curves: Curve[]
+            onInternalLine: boolean
           } | null = null
           for (const piece of piecesToCheck) {
+            const local = worldToPieceLocal(world, piece)
+            if (piece.internalLines.length > 0) {
+              const ri = nearestCurveIndexAndPoint(local, piece.internalLines)
+              if (ri && ri.distance <= 20 && (!best || ri.distance < best.distance)) {
+                const t = ri.t ?? 0
+                best = {
+                  distance: ri.distance,
+                  piece,
+                  r: { curveIndex: ri.curveIndex, point: ri.point, t },
+                  curves: piece.internalLines,
+                  onInternalLine: true,
+                }
+              }
+            }
             const hasSeam = piece.seamLine.length >= 3
             const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
-            const curves = (hasSeam && !solidIsCut) ? piece.seamLine : piece.cutLine
+            const curves = hasSeam && !solidIsCut ? piece.seamLine : piece.cutLine
             if (curves.length === 0) continue
-            const local = worldToPieceLocal(world, piece)
             const r = nearestCurveIndexAndPoint(local, curves)
             if (!r || r.distance > 20) continue
             const t = r.t ?? 0
             if (!best || r.distance < best.distance) {
-              best = { distance: r.distance, piece, r: { curveIndex: r.curveIndex, point: r.point, t }, curves }
+              best = {
+                distance: r.distance,
+                piece,
+                r: { curveIndex: r.curveIndex, point: r.point, t },
+                curves,
+                onInternalLine: false,
+              }
             }
           }
           if (best) {
             setHoveredInternalLine(null)
             setHoveredInternalCircle(null)
-            const { piece, r, curves } = best
+            const { piece, r, curves, onInternalLine } = best
             const outwardAngle = outwardNormalAngleAt(curves, r.curveIndex, r.t)
             const angle = outwardAngle + 180
             const notchesOnSegment = piece.notches
               .map((n) => {
+                if (onInternalLine) {
+                  if (!isNotchOnInternalLine(n)) return null
+                  const p = getNotchPositionAndAngleOnInternalLine(n, piece.internalLines)?.position
+                  if (!p) return null
+                  const nr = nearestCurveIndexAndPoint(p, piece.internalLines)
+                  return nr && nr.curveIndex === r.curveIndex && nr.t != null ? nr.t : null
+                }
                 const pos =
                   curves === piece.seamLine && piece.seamLine.length > 0
                     ? (getNotchPositionAndAngleOnSeamLine(n, piece.cutLine, piece.seamLine)?.position ??
@@ -4796,6 +5141,7 @@ export function WorkspaceCanvas() {
               distanceMmRight,
               storePos: r.point,
               storeAngle: angle,
+              onInternalLine,
             })
           } else {
             setNotchPreview(null)
@@ -4895,7 +5241,12 @@ export function WorkspaceCanvas() {
         } else {
           setHoveredCurvepointSegment(null)
         }
-        if (tool === 'select' && nahtzuordnungMode !== 'first' && nahtzuordnungMode !== 'second') {
+        if (
+          tool === 'select' &&
+          nahtzuordnungMode !== 'first' &&
+          nahtzuordnungMode !== 'second' &&
+          nahtzuordnungMode !== 'internal'
+        ) {
           const world = toWorld(e.clientX, e.clientY)
           for (let i = pieces.length - 1; i >= 0; i--) {
             const p = pieces[i]
@@ -5079,59 +5430,31 @@ export function WorkspaceCanvas() {
         const local = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'roundCorner' ? { ...d, currentLocal: local } : d))
       } else if (dragging.kind === 'notchMove') {
+        if (notchMoveDistanceEditorRef.current) return
         const piece = pieces.find((p) => p.id === dragging.pieceId)
-        if (!piece || piece.cutLine.length === 0) return
+        const moveNotch = piece?.notches.find((n) => n.id === dragging.notchId)
+        if (!piece || !moveNotch) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
+        if (isNotchOnInternalLine(moveNotch)) {
+          if (piece.internalLines.length === 0) return
+          const nearest = nearestCurveIndexAndPoint(local, piece.internalLines)
+          if (nearest && nearest.distance < 25) {
+            setNotchPreview(buildNotchMovePreview(piece, dragging.notchId, nearest.point))
+          } else {
+            setNotchPreview(null)
+          }
+          return
+        }
+        if (piece.cutLine.length === 0) return
         const hasSeam = piece.seamLine.length >= 3
         const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
         const useSeam = hasSeam && !solidIsCut
         const curves = useSeam ? piece.seamLine : piece.cutLine
         const nearest = nearestCurveIndexAndPoint(local, curves)
         if (nearest && nearest.distance < 25) {
-          // Commit richtet sich (bei `notchMove`) immer auf cutLine (storePos/storeAngle).
-          // Damit Vorschau und Commit konsistent sind, projizieren wir daher auch die
-          // Distanzlabels und die Preview-Pose auf die cutLine.
-          const tOnCurves = nearest.t ?? 0
-          const cutNearest = nearestCurveIndexAndPoint(nearest.point, piece.cutLine)
-          const cutT = cutNearest?.t ?? tOnCurves
-          const tNudged = cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
-          const cutCurveIndex = cutNearest?.curveIndex ?? nearest.curveIndex
-          const curve = piece.cutLine[cutCurveIndex]
-
-          let storePos: Point
-          let storeAngle: number
-          if (cutNearest) {
-            storePos = pointOnCurveAt(piece.cutLine[cutNearest.curveIndex], tNudged)
-            storeAngle = outwardNormalAngleAt(piece.cutLine, cutNearest.curveIndex, tNudged) + 180
-          } else {
-            // Fallback (sollte selten passieren): verwende cutLine-Indizierung wie vorhanden.
-            storePos = pointOnCurveAt(piece.cutLine[cutCurveIndex], tNudged)
-            storeAngle = outwardNormalAngleAt(piece.cutLine, cutCurveIndex, tNudged) + 180
-          }
-
-          const notchesOnSegment = piece.notches
-            .map((n) => {
-              if (n.id === dragging.notchId) return tNudged
-              const { position: notchPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
-              const nr = nearestCurveIndexAndPoint(notchPos, piece.cutLine)
-              return nr && nr.curveIndex === cutCurveIndex && nr.t != null ? nr.t : null
-            })
-            .filter((x): x is number => x != null)
-
-          const distanceMmLeft = distanceToPrevVertexOrNotch(curve, tNudged, notchesOnSegment)
-          const distanceMmRight = distanceToNextVertexOrNotch(curve, tNudged, notchesOnSegment)
-          setNotchPreview({
-            pieceId: dragging.pieceId,
-            position: storePos,
-            angle: storeAngle,
-            curveIndex: cutCurveIndex,
-            t: tNudged,
-            distanceMmLeft,
-            distanceMmRight,
-            storePos,
-            storeAngle,
-          })
+          const preview = buildNotchMovePreview(piece, dragging.notchId, nearest.point)
+          setNotchPreview(preview)
         } else {
           setNotchPreview(null)
         }
@@ -5423,6 +5746,43 @@ export function WorkspaceCanvas() {
         e.preventDefault()
         return
       }
+      if (
+        contourEditEnabled &&
+        !inInput &&
+        dragging?.kind === 'notchMove' &&
+        e.key === ' ' &&
+        !notchMoveDistanceEditor
+      ) {
+        e.preventDefault()
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const container = containerRef.current
+        if (!piece || !container) return
+        let preview =
+          notchPreview?.pieceId === dragging.pieceId ? notchPreview : null
+        if (!preview) {
+          preview = buildNotchMovePreview(piece, dragging.notchId)
+          if (preview) setNotchPreview(preview)
+        }
+        if (!preview) {
+          setToastMessage('warn: Kerbe konnte nicht auf der Schnittkontur projiziert werden.')
+          return
+        }
+        const notchWorld = pieceLocalToWorld(preview.position, piece)
+        const notchClient = worldToClientPoint(notchWorld, container, view, svgRef.current)
+        const side: 'left' | 'right' =
+          lastPointerClientRef.current.x < notchClient.x ? 'left' : 'right'
+        const editor = openNotchMoveDistanceEditorFromPreview(
+          piece,
+          dragging.notchId,
+          preview,
+          side,
+          lastPointerClientRef.current.x,
+          lastPointerClientRef.current.y,
+        )
+        notchMoveDistanceEditorRef.current = editor
+        setNotchMoveDistanceEditor(editor)
+        return
+      }
       // Eckenrundung: Spacebar während Drag → Eingabefenster für exakten Radius öffnen.
       if (
         !inInput &&
@@ -5503,46 +5863,6 @@ export function WorkspaceCanvas() {
           heightStr: ah >= 1 ? ah.toFixed(1) : '100',
         })
         return
-      }
-      if (contourEditEnabled && !inInput && dragging?.kind === 'notchMove' && notchPreview && e.key === ' ') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
-        const curve = piece?.cutLine[notchPreview.curveIndex]
-        if (piece && curve) {
-          e.preventDefault()
-          const otherNotchesOnCurve = piece.notches
-            .map((n) => {
-              if (n.id === dragging.notchId) return null
-              const { position } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
-              const nr = nearestCurveIndexAndPoint(position, piece.cutLine)
-              return nr && nr.curveIndex === notchPreview.curveIndex && nr.t != null ? nr.t : null
-            })
-            .filter((x): x is number => x != null)
-          const prevCandidates = otherNotchesOnCurve.filter((tN) => tN < notchPreview.t)
-          const nextCandidates = otherNotchesOnCurve.filter((tN) => tN > notchPreview.t)
-          const prevT = prevCandidates.length > 0 ? Math.max(...prevCandidates) : 0
-          const nextT = nextCandidates.length > 0 ? Math.min(...nextCandidates) : 1
-          const container = containerRef.current
-          if (!container) return
-          const notchWorld = pieceLocalToWorld(notchPreview.position, piece)
-          const notchClient = worldToClientPoint(notchWorld, container, view, svgRef.current)
-          const side: 'left' | 'right' = lastPointerClientRef.current.x < notchClient.x ? 'left' : 'right'
-          const value =
-            side === 'left'
-              ? notchPreview.distanceMmLeft.toFixed(1).replace('.', ',')
-              : notchPreview.distanceMmRight.toFixed(1).replace('.', ',')
-          setNotchMoveDistanceEditor({
-            pieceId: dragging.pieceId,
-            notchId: dragging.notchId,
-            curveIndex: notchPreview.curveIndex,
-            prevT,
-            nextT,
-            side,
-            value,
-            clientX: lastPointerClientRef.current.x,
-            clientY: lastPointerClientRef.current.y,
-          })
-          return
-        }
       }
       if (contourEditEnabled && !inInput && hoveredSeamAssignmentId && e.key === ' ') {
         e.preventDefault()
@@ -6106,7 +6426,11 @@ export function WorkspaceCanvas() {
       return
     }
     if (dragging?.kind === 'rectangle') {
-      if (rectangleSizeEditor) return
+      if (rectangleSizeEditorRef.current) {
+        setDragging(null)
+        setHoveredPieceId(null)
+        return
+      }
       const { start, current } = dragging
       const minX = Math.min(start.x, current.x)
       const minY = Math.min(start.y, current.y)
@@ -6129,7 +6453,7 @@ export function WorkspaceCanvas() {
       }
     } else if (dragging?.kind === 'line') {
       const { pieceId, start, current } = dragging
-      if (lineLengthEditor && lineLengthEditor.pieceId === pieceId) {
+      if (lineLengthEditorRef.current && lineLengthEditorRef.current.pieceId === pieceId) {
         setDragging(null)
         setHoveredPieceId(null)
         return
@@ -6154,9 +6478,24 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'notchMove') {
+      if (notchMoveDistanceEditorRef.current) {
+        setDragging(null)
+        setHoveredPieceId(null)
+        return
+      }
       if (notchPreview && notchPreview.pieceId === dragging.pieceId) {
         const movePiece = pieces.find((p) => p.id === dragging.pieceId)
-        if (movePiece && movePiece.cutLine.length > 0) {
+        if (movePiece && notchPreview.onInternalLine && movePiece.internalLines.length > 0) {
+          const L = pathLengthAt(movePiece.internalLines, notchPreview.curveIndex, notchPreview.t)
+          const total = totalPathLength(movePiece.internalLines)
+          updateNotch(dragging.pieceId, dragging.notchId, {
+            internalLineIndex: notchPreview.curveIndex,
+            internalSNormalized: total > 0 ? L / total : undefined,
+            internalArcLengthMm: total > 0 ? L : undefined,
+            position: notchPreview.storePos,
+            angle: notchPreview.storeAngle,
+          })
+        } else if (movePiece && movePiece.cutLine.length > 0) {
           const L = pathLengthAt(movePiece.cutLine, notchPreview.curveIndex, notchPreview.t)
           const total = totalPathLength(movePiece.cutLine)
           updateNotch(dragging.pieceId, dragging.notchId, {
@@ -6167,11 +6506,10 @@ export function WorkspaceCanvas() {
           })
         }
       }
-      setNotchMoveDistanceEditor(null)
       setNotchPreview(null)
       setDragging(null)
     } else if (dragging?.kind === 'notch') {
-      const { pieceId, position, current, curveIndex, t, useSeamLine } = dragging
+      const { pieceId, position, current, curveIndex, t, useSeamLine, onInternalLine } = dragging
       const piece = pieces.find((p) => p.id === pieceId)
       if (piece) {
         const dx = current.x - position.x
@@ -6188,6 +6526,43 @@ export function WorkspaceCanvas() {
         }
         const { type: notchModelType, depth: defaultDepth, width: defaultWidth } = modelFields
         const isDrag = dragDist >= DRAG_THRESHOLD
+        const id = 'n' + Math.random().toString(36).slice(2, 9)
+        if (onInternalLine && piece.internalLines.length > 0) {
+          const intCurves = piece.internalLines
+          let angle: number
+          if (notchModelType === 'single') {
+            angle = outwardNormalAngleAt(intCurves, curveIndex, t) + 180
+          } else if (isDrag) {
+            angle = (Math.atan2(dy, dx) * 180) / Math.PI
+          } else {
+            angle = outwardNormalAngleAt(intCurves, curveIndex, t) + 180
+          }
+          if (!isInternalNotchSpacingValid(piece, curveIndex, t)) {
+            setToastMessage(
+              'error: Zwischen zwei Kerben auf internen Linien müssen mindestens 4 mm Abstand liegen.'
+            )
+            setDragging(null)
+            setTool('notch')
+            return
+          }
+          const notchPos = nearestCurveIndexAndPoint(position, intCurves)?.point ?? position
+          const L = pathLengthAt(intCurves, curveIndex, t)
+          const total = totalPathLength(intCurves)
+          addNotch(pieceId, {
+            id,
+            position: notchPos,
+            angle,
+            type: notchModelType,
+            depth: defaultDepth,
+            width: defaultWidth,
+            internalLineIndex: curveIndex,
+            internalSNormalized: total > 0 ? L / total : undefined,
+            internalArcLengthMm: total > 0 ? L : undefined,
+          })
+          setDragging(null)
+          setHoveredPieceId(null)
+          return
+        }
         const curves = useSeamLine && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
         /** Strich-Kerbe: Tiefe immer senkrecht zur Schnittkontur (Innennormale), nie in Mausrichtung. */
         let angle: number
@@ -6208,7 +6583,6 @@ export function WorkspaceCanvas() {
         } else {
           angle = outwardNormalAngleAt(curves, curveIndex, t) + 180
         }
-        const id = 'n' + Math.random().toString(36).slice(2, 9)
         const rejectNotchSpacing = () => {
           setToastMessage(
             'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).'
@@ -6270,7 +6644,11 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'internalCircle') {
-      if (internalCircleRadiusEditor) return
+      if (internalCircleRadiusEditorRef.current) {
+        setDragging(null)
+        setHoveredPieceId(null)
+        return
+      }
       const { pieceId, center, current } = dragging
       const piece = pieces.find((p) => p.id === pieceId)
       if (piece) {
@@ -6281,7 +6659,11 @@ export function WorkspaceCanvas() {
         setTool('select')
       }
     } else if (dragging?.kind === 'roundCorner') {
-      if (cornerRoundEditor) return
+      if (cornerRoundEditorRef.current) {
+        setDragging(null)
+        setHoveredPieceId(null)
+        return
+      }
       const { pieceId, masterVertexIndex, cornerLocal, currentLocal } = dragging
       const r = Math.hypot(currentLocal.x - cornerLocal.x, currentLocal.y - cornerLocal.y)
       if (r >= ROUND_CORNER_MIN_RADIUS_MM) {
@@ -6395,7 +6777,9 @@ export function WorkspaceCanvas() {
         touchPanPointerIdRef.current = null
         setHoveredDeletablePoint(null)
         setHoveredDeletableNotch(null)
-        setNotchPreview(null)
+        if (!notchMoveDistanceEditorRef.current) {
+          setNotchPreview(null)
+        }
         setPointPreview(null)
         setHoveredSeamForNahtzuordnung(null)
         setHoveredSeamAssignmentId(null)
@@ -6461,7 +6845,7 @@ export function WorkspaceCanvas() {
                 borderRadius: 8,
                 boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
                 maxWidth: 'min(96vw, 640px)',
-                fontSize: 13,
+                fontSize: fs(13),
                 fontFamily: 'system-ui, sans-serif',
               }}
               onPointerDown={(e) => e.stopPropagation()}
@@ -6469,12 +6853,12 @@ export function WorkspaceCanvas() {
               onWheel={(e) => e.stopPropagation()}
             >
               <span style={{ fontWeight: 600, color: '#1565c0' }}>Kerbe bearbeiten</span>
-              <span style={{ fontSize: 11, color: '#666' }}>
+              <span style={{ fontSize: fs(11), color: '#666' }}>
                 ⌥/Alt+Klick oder ⌘+Klick (Mac), sonst E mit Cursor auf Kerbe
               </span>
               <span
                 style={{
-                  fontSize: 11,
+                  fontSize: fs(11),
                   color: '#6d4c41',
                   border: '1px solid #cfd8dc',
                   borderRadius: 999,
@@ -6508,7 +6892,7 @@ export function WorkspaceCanvas() {
                       width: f.width,
                     })
                   }}
-                  style={{ fontSize: 13, minWidth: 220, maxWidth: 360 }}
+                  style={{ fontSize: fs(13), minWidth: 220, maxWidth: 360 }}
                 >
                   {matchedPreset === null && (
                     <option value="">Preset aus Einstellungen wählen…</option>
@@ -6523,6 +6907,12 @@ export function WorkspaceCanvas() {
                   })}
                 </select>
               </label>
+              {isNotchOnInternalLine(editNotch) ? (
+                <span style={{ fontSize: fs(11), color: '#555', maxWidth: 280 }}>
+                  Interne Linie – Kerbe erscheint nicht im DXF-Schnitt. Rolle begrenzt Profilsegmente auf der
+                  internen Polylinie.
+                </span>
+              ) : null}
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
                 role="group"
@@ -6545,7 +6935,7 @@ export function WorkspaceCanvas() {
                         type="button"
                         className="sidebar-btn"
                         style={{
-                          fontSize: 12,
+                          fontSize: fs(12),
                           padding: '4px 10px',
                           border: selected ? '2px solid #1565c0' : '1px solid #bdbdbd',
                           background: selected ? 'rgba(21,101,192,0.08)' : '#fff',
@@ -6563,14 +6953,14 @@ export function WorkspaceCanvas() {
                 </div>
               </div>
               {matchedPreset === null && (
-                <span style={{ fontSize: 11, color: '#c62828', maxWidth: 280 }}>
+                <span style={{ fontSize: fs(11), color: '#c62828', maxWidth: 280 }}>
                   Kein exakter Treffer zu den 10 Einstellungen (z. B. Doppel-Kerbe). Bitte Preset wählen.
                 </span>
               )}
               <button
                 type="button"
                 className="sidebar-btn"
-                style={{ fontSize: 12, padding: '4px 10px' }}
+                style={{ fontSize: fs(12), padding: '4px 10px' }}
                 onClick={() => setNotchEditTarget(null)}
               >
                 Schließen
@@ -6599,7 +6989,7 @@ export function WorkspaceCanvas() {
             borderRadius: 8,
             boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
             maxWidth: 'min(96vw, 920px)',
-            fontSize: 13,
+            fontSize: fs(13),
             fontFamily: 'system-ui, sans-serif',
           }}
           onPointerDown={(e) => e.stopPropagation()}
@@ -6617,7 +7007,7 @@ export function WorkspaceCanvas() {
             <select
               value={batchSelectionFilter}
               onChange={(e) => setBatchSelectionFilter(e.currentTarget.value as BatchSelectionFilter)}
-              style={{ fontSize: 13 }}
+              style={{ fontSize: fs(13) }}
             >
               <option value="all">Alles</option>
               <option value="vertices">Eckpunkte (alle)</option>
@@ -6630,53 +7020,53 @@ export function WorkspaceCanvas() {
             </select>
           </label>
           <span style={{ color: '#999' }}>|</span>
-          <span style={{ fontSize: 12, color: '#666' }}>Markierung (nur Anzeige):</span>
+          <span style={{ fontSize: fs(12), color: '#666' }}>Markierung (nur Anzeige):</span>
           <button
             type="button"
-            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }}
             onClick={() => setBatchUiHighlightForFiltered('#ff9800')}
           >
             Orange
           </button>
           <button
             type="button"
-            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }}
             onClick={() => setBatchUiHighlightForFiltered('#e91e63')}
           >
             Magenta
           </button>
           <button
             type="button"
-            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }}
             onClick={() => setBatchUiHighlightForFiltered('#2e7d32')}
           >
             Grün
           </button>
-          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => clearBatchUiHighlight()}>
+          <button type="button" style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }} onClick={() => clearBatchUiHighlight()}>
             Markierung aus
           </button>
           <span style={{ color: '#999' }}>|</span>
-          <span style={{ fontSize: 12, color: '#666' }}>Eckpunkte:</span>
-          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => batchSetVerticesSoft(true)}>
+          <span style={{ fontSize: fs(12), color: '#666' }}>Eckpunkte:</span>
+          <button type="button" style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }} onClick={() => batchSetVerticesSoft(true)}>
             weich (blau)
           </button>
-          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => batchSetVerticesSoft(false)}>
+          <button type="button" style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }} onClick={() => batchSetVerticesSoft(false)}>
             fest (rot)
           </button>
           <span style={{ color: '#999' }}>|</span>
           <button
             type="button"
-            style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+            style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }}
             onClick={() => {
               if (window.confirm('Ausgewählte Elemente (gefiltert) wirklich löschen?')) batchDeleteFiltered()
             }}
           >
             Löschen
           </button>
-          <button type="button" style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer' }} onClick={() => clearBatchSelection()}>
+          <button type="button" style={{ padding: '4px 8px', fontSize: fs(12), cursor: 'pointer' }} onClick={() => clearBatchSelection()}>
             Auswahl aufheben
           </button>
-          <span style={{ fontSize: 11, color: '#888', width: '100%', marginTop: 2 }}>
+          <span style={{ fontSize: fs(11), color: '#888', width: '100%', marginTop: 2 }}>
             Shift+Fensterauswahl: zur bestehenden Auswahl hinzufügen · Entf: gefilterte löschen (inkl. komplette Teile) · Esc:
             Auswahl aufheben
           </span>
@@ -6708,7 +7098,7 @@ export function WorkspaceCanvas() {
                 padding: 10,
                 minWidth: 220,
                 maxWidth: 360,
-                fontSize: 13,
+                fontSize: fs(13),
                 fontFamily: 'system-ui, sans-serif',
               }}
             >
@@ -6735,7 +7125,7 @@ export function WorkspaceCanvas() {
                   className="workspace-note-delete-btn"
                   style={{
                     padding: '6px 12px',
-                    fontSize: 13,
+                    fontSize: fs(13),
                     cursor: 'pointer',
                     border: '1px solid #c62828',
                     borderRadius: 4,
@@ -6754,7 +7144,7 @@ export function WorkspaceCanvas() {
                   className="workspace-note-close-btn"
                   style={{
                     padding: '6px 12px',
-                    fontSize: 13,
+                    fontSize: fs(13),
                     cursor: 'pointer',
                     border: '1px solid #ccc',
                     borderRadius: 4,
@@ -6806,7 +7196,7 @@ export function WorkspaceCanvas() {
               boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
               minWidth: 180,
               padding: '4px 0',
-              fontSize: 13,
+              fontSize: fs(13),
               fontFamily: 'sans-serif',
             }}
           >
@@ -6820,7 +7210,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -6842,7 +7232,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -6864,7 +7254,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -6893,7 +7283,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -6932,7 +7322,7 @@ export function WorkspaceCanvas() {
               boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
               minWidth: 140,
               padding: '4px 0',
-              fontSize: 13,
+              fontSize: fs(13),
               fontFamily: 'sans-serif',
             }}
           >
@@ -6946,7 +7336,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -6967,7 +7357,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -6988,7 +7378,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -7031,14 +7421,14 @@ export function WorkspaceCanvas() {
             boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
             padding: '8px 0',
             minWidth: 160,
-            fontSize: 13,
+            fontSize: fs(13),
             fontFamily: 'sans-serif',
           }}
         >
           <div style={{ padding: '4px 12px', color: '#666', borderBottom: '1px solid #eee', marginBottom: 6 }}>
             Kante
             {segmentMenuPinned && (
-              <span style={{ marginLeft: 6, fontSize: 11, color: '#999' }}>· Leertaste zum Lösen</span>
+              <span style={{ marginLeft: 6, fontSize: fs(11), color: '#999' }}>· Leertaste zum Lösen</span>
             )}
           </div>
           <div style={{ padding: '4px 12px 8px', borderBottom: '1px solid #eee' }}>
@@ -7058,7 +7448,7 @@ export function WorkspaceCanvas() {
                 padding: '4px 6px',
                 border: '1px solid #ccc',
                 borderRadius: 4,
-                fontSize: 13,
+                fontSize: fs(13),
               }}
             />
           </div>
@@ -7260,6 +7650,7 @@ export function WorkspaceCanvas() {
               piece={piece}
               viewZoom={view.zoom}
               rotationUiScale={canvasRotationUiScale}
+              textUiScale={uiTextScale}
               isSelected={selectedPieceIds.includes(piece.id)}
               isDialogHovered={seamAdjustmentHoverPieceId === piece.id}
               isHovered={hoveredPieceId === piece.id}
@@ -7299,10 +7690,12 @@ export function WorkspaceCanvas() {
               isRotationHandleHovered={hoveredRotationHandlePieceId === piece.id}
               isRotationActive={dragging != null && dragging.kind === 'rotate' && dragging.pieceId === piece.id}
               notchIdBeingDragged={
-                dragging?.kind === 'notchMove' &&
-                dragging.pieceId === piece.id &&
                 notchPreview?.pieceId === piece.id
-                  ? dragging.notchId
+                  ? dragging?.kind === 'notchMove' && dragging.pieceId === piece.id
+                    ? dragging.notchId
+                    : notchMoveDistanceEditor?.pieceId === piece.id
+                      ? notchMoveDistanceEditor.notchId
+                      : null
                   : null
               }
               hoveredNotchId={
@@ -7364,6 +7757,74 @@ export function WorkspaceCanvas() {
             const width = previewFields?.width ?? 6
             const previewNotchType: ModelNotchType =
               previewFields?.type ?? (previewPreset.type === 'kerbe' ? 'v' : 'single')
+            if (notchPreview.onInternalLine && piece.internalLines.length > 0) {
+              const intNearest = nearestCurveIndexAndPoint(notchPreview.position, piece.internalLines)
+              const posOnInt = intNearest?.point ?? notchPreview.position
+              const intAnchor = intNearest
+                ? { curveIndex: intNearest.curveIndex, t: intNearest.t ?? 0 }
+                : { curveIndex: notchPreview.curveIndex, t: notchPreview.t }
+              const angleOnInt = intNearest
+                ? outwardNormalAngleAt(piece.internalLines, intNearest.curveIndex, intNearest.t ?? 0) + 180
+                : notchPreview.angle
+              const intCutPts = notchCutoutPoints(
+                posOnInt,
+                angleOnInt,
+                depth,
+                width,
+                piece.internalLines,
+                intAnchor,
+                previewNotchType
+              )
+              const intPaths = intCutPts
+                ? notchCutoutSvgPaths(intCutPts)
+                : (() => {
+                    const [a, b, c] = notchTriangleCorners(posOnInt, angleOnInt, depth, width)
+                    return {
+                      fillD: `M ${a.x} ${a.y} L ${b.x} ${b.y} L ${c.x} ${c.y} Z`,
+                      edgesD: `M ${a.x} ${a.y} L ${c.x} ${c.y} L ${b.x} ${b.y}`,
+                    }
+                  })()
+              const labelOffset = 14
+              const fontSize = ct(7)
+              return (
+                <g transform={tx} pointerEvents="none">
+                  {intPaths.fillD ? (
+                    <path d={intPaths.fillD} fill={T.notch.fill} fillOpacity={0.55} stroke="none" />
+                  ) : null}
+                  <path
+                    d={intPaths.edgesD}
+                    fill="none"
+                    stroke={NOTCH_STROKE}
+                    strokeWidth={0.75}
+                    strokeLinejoin="round"
+                  />
+                  <text
+                    x={posOnInt.x - labelOffset}
+                    y={posOnInt.y}
+                    textAnchor="end"
+                    dominantBaseline="middle"
+                    fontSize={fontSize}
+                    fill={NOTCH_STROKE}
+                    fontFamily="sans-serif"
+                    fontWeight="600"
+                  >
+                    {notchPreview.distanceMmLeft.toFixed(1)} mm
+                  </text>
+                  <text
+                    x={posOnInt.x + labelOffset}
+                    y={posOnInt.y}
+                    textAnchor="start"
+                    dominantBaseline="middle"
+                    fontSize={fontSize}
+                    fill={NOTCH_STROKE}
+                    fontFamily="sans-serif"
+                    fontWeight="600"
+                  >
+                    {notchPreview.distanceMmRight.toFixed(1)} mm
+                  </text>
+                </g>
+              )
+            }
             /** Kerben hängen an der cutLine; bei Seam-Ansicht sind curveIndex/t auf der Naht — immer auf Schnitt projizieren. */
             const cutNearest = nearestCurveIndexAndPoint(notchPreview.position, piece.cutLine)
             const posOnCut = cutNearest?.point ?? notchPreview.position
@@ -7430,7 +7891,7 @@ export function WorkspaceCanvas() {
                 : null
             const seamPreviewPaths = seamPreviewPts ? notchCutoutSvgPaths(seamPreviewPts) : null
             const labelOffset = 14
-            const fontSize = 7
+            const fontSize = ct(7)
             const previewIsLine = previewCutPts?.kind === 'line'
             return (
               <g transform={tx} pointerEvents="none">
@@ -7968,8 +8429,11 @@ export function WorkspaceCanvas() {
               if (t.kind === 'notch') {
                 const n = piece.notches.find((x) => x.id === t.notchId)
                 if (!n) return null
-                const cutPos = getNotchPositionAndAngleOnCutLine(n, piece.cutLine, piece.seamLine)
-                const w = pieceLocalToWorld(cutPos.position, piece)
+                const notchPos =
+                  isNotchOnInternalLine(n) && piece.internalLines.length > 0
+                    ? getNotchPositionAndAngleOnInternalLine(n, piece.internalLines)
+                    : getNotchPositionAndAngleOnCutLine(n, piece.cutLine, piece.seamLine)
+                const w = pieceLocalToWorld(notchPos?.position ?? n.position, piece)
                 return (
                   <circle
                     key={key}
@@ -8209,10 +8673,51 @@ export function WorkspaceCanvas() {
                   stroke={T.ruler.endpointStroke}
                   strokeWidth={POINT_SCREEN_STROKE * rps}
                 />
-                <text x={mx} y={my - 6} textAnchor="middle" fontSize={10} fill={T.ruler.text} fontWeight="600">
+                <text x={mx} y={my - 6} textAnchor="middle" fontSize={ct(10)} fill={T.ruler.text} fontWeight="600">
                   {len.toFixed(1)} mm
                 </text>
               </g>
+            )
+          })()}
+          {nahtzuordnungMode === 'internal' && hoveredInternalSeamForNahtzuordnung && (() => {
+            const piece = pieces.find((p) => p.id === hoveredInternalSeamForNahtzuordnung.pieceId)
+            if (!piece) return null
+            const hoverRange =
+              hoveredInternalSeamForNahtzuordnung.startNotchId || hoveredInternalSeamForNahtzuordnung.endNotchId
+                ? {
+                    startNotchId: hoveredInternalSeamForNahtzuordnung.startNotchId ?? '',
+                    endNotchId: hoveredInternalSeamForNahtzuordnung.endNotchId ?? '',
+                  }
+                : null
+            const curves = getInternalProfileCurvesInRange(
+              piece,
+              hoveredInternalSeamForNahtzuordnung.curveIndices,
+              hoverRange
+            )
+            let d = ''
+            for (const seg of curves) {
+              if (!seg) continue
+              const ws = pieceLocalToWorld(seg.start, piece)
+              const we = pieceLocalToWorld(seg.end, piece)
+              if (seg.type === 'line') {
+                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+              } else {
+                const wc1 = pieceLocalToWorld(seg.cp1, piece)
+                const wc2 = pieceLocalToWorld(seg.cp2, piece)
+                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+              }
+            }
+            if (!d) return null
+            return (
+              <path
+                key="nahtzuordnung-internal-hover"
+                d={d}
+                fill="none"
+                stroke={T.seamAssignment.hoverStroke}
+                strokeWidth={T.seamAssignment.hoverWidth}
+                strokeOpacity={0.9}
+                pointerEvents="none"
+              />
             )
           })()}
           {(nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') && hoveredSeamForNahtzuordnung && (() => {
@@ -8291,7 +8796,6 @@ export function WorkspaceCanvas() {
           {tool === 'profil' && hoveredProfileEdge && (() => {
             const piece = pieces.find((p) => p.id === hoveredProfileEdge.pieceId)
             if (!piece) return null
-            const masterK = getCurvesForSeamEdge(piece)
             const hoverRange =
               hoveredProfileEdge.startNotchId || hoveredProfileEdge.endNotchId
                 ? {
@@ -8299,7 +8803,14 @@ export function WorkspaceCanvas() {
                     endNotchId: hoveredProfileEdge.endNotchId,
                   }
                 : null
-            const curves = getEdgeCurvesInNotchRange(piece, hoveredProfileEdge.curveIndices, hoverRange, masterK)
+            const curves = hoveredProfileEdge.onInternalLine
+              ? getInternalProfileCurvesInRange(piece, hoveredProfileEdge.curveIndices, hoverRange)
+              : getEdgeCurvesInNotchRange(
+                  piece,
+                  hoveredProfileEdge.curveIndices,
+                  hoverRange,
+                  getCurvesForSeamEdge(piece)
+                )
             let d = ''
             for (const seg of curves) {
               if (!seg) continue
@@ -8547,19 +9058,15 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === pa.pieceId)
             if (!piece) return null
             const masterK = getCurvesForSeamEdge(piece)
-            const edges = enumerateEdges(piece)
-            const edge = edges.find((e) => e.edgeIndex === pa.edgeIndex)
-            if (!edge) return null
-            const profileRange =
-              pa.startNotchId || pa.endNotchId
-                ? { startNotchId: pa.startNotchId, endNotchId: pa.endNotchId }
-                : null
-            const curves = getEdgeCurvesInNotchRange(piece, edge.curveIndices, profileRange, masterK)
+            const curves = getProfileAssignmentDisplayCurves(piece, pa)
             if (curves.length === 0) return null
 
-            const PROFILE_LINE_OFFSET = 20
-            const area = signedAreaCurves(masterK)
-            const outSign = area >= 0 ? -1 : 1
+            const PROFILE_LINE_OFFSET = PROFILE_DISPLAY_OFFSET_MM
+            const outSign = pa.onInternalLine
+              ? 1
+              : signedAreaCurves(masterK) >= 0
+                ? -1
+                : 1
 
             let d = ''
             for (const seg of curves) {
@@ -8616,13 +9123,7 @@ export function WorkspaceCanvas() {
             const endW = pieceLocalToWorld(endL, piece)
             const angleDeg = (Math.atan2(endW.y - startW.y, endW.x - startW.x) * 180) / Math.PI
 
-            const lengthMm = edgeLengthInNotchRange(
-              piece,
-              edge.curveIndices,
-              pa.startNotchId || pa.endNotchId
-                ? { startNotchId: pa.startNotchId, endNotchId: pa.endNotchId }
-                : null
-            )
+            const lengthMm = profileAssignmentLengthMm(piece, pa)
             const labelParts: string[] = []
             if (pa.supplierNumber) labelParts.push(pa.supplierNumber)
             if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)
@@ -8646,7 +9147,7 @@ export function WorkspaceCanvas() {
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={profileStroke}
-                  fontSize={4.2}
+                  fontSize={ct(4.2)}
                   fontFamily="sans-serif"
                   fontWeight={700}
                   transform={`rotate(${angleDeg},${keyW.x},${keyW.y})`}
@@ -8659,7 +9160,7 @@ export function WorkspaceCanvas() {
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={profileStroke}
-                  fontSize={2.7}
+                  fontSize={ct(2.7)}
                   fontFamily="sans-serif"
                   fontWeight={400}
                   opacity={0.8}
@@ -8672,6 +9173,67 @@ export function WorkspaceCanvas() {
           })}
           {seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
+              if (isInternalSeamAssignment(a)) {
+                const pieceA = pieces.find((p) => p.id === a.pieceIdA)
+                if (!pieceA || pieceA.internalLines.length === 0) return null
+                const curves = getInternalSeamAssignmentCurves(pieceA, a)
+                if (curves.length === 0) return null
+                let d = ''
+                for (const seg of curves) {
+                  const ws = pieceLocalToWorld(seg.start, pieceA)
+                  const we = pieceLocalToWorld(seg.end, pieceA)
+                  if (seg.type === 'line') {
+                    d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+                  } else {
+                    const wc1 = pieceLocalToWorld(seg.cp1, pieceA)
+                    const wc2 = pieceLocalToWorld(seg.cp2, pieceA)
+                    d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+                  }
+                }
+                const len = curves.reduce((sum, s) => sum + curveSegmentArcLength(s, 0, 1), 0)
+                const midResult = pointAtPathLength(curves, len / 2)
+                const midLocal = midResult
+                  ? midResult.point
+                  : curveMidpoint(curves[Math.floor(curves.length / 2)])
+                const midW = pieceLocalToWorld(midLocal, pieceA)
+                const metaParts: string[] = []
+                if (a.orderNumber != null) metaParts.push(String(a.orderNumber))
+                if (a.seamKind) metaParts.push(SEAM_ASSIGNMENT_KIND_LABELS[a.seamKind])
+                const metaText = metaParts.join(' · ')
+                return (
+                  <g
+                    key={a.id}
+                    pointerEvents="stroke"
+                    onPointerEnter={() => setHoveredSeamAssignmentId(a.id)}
+                    onPointerLeave={() => setHoveredSeamAssignmentId(null)}
+                    style={{ cursor: hoveredSeamAssignmentId === a.id ? 'pointer' : 'default' }}
+                  >
+                    <title>Leertaste: Nummer und Nahtart · Backspace/Entf: Zuordnung löschen</title>
+                    <path
+                      d={d}
+                      fill="none"
+                      stroke={T.seamAssignment.connector}
+                      strokeWidth={T.seamAssignment.connectorWidth}
+                      strokeDasharray="4 3"
+                      pointerEvents="stroke"
+                    />
+                    {metaText && (
+                      <text
+                        x={midW.x}
+                        y={midW.y - 8}
+                        textAnchor="middle"
+                        fontSize={ct(8)}
+                        fill={T.seamAssignment.connector}
+                        fontWeight="600"
+                        fontFamily="sans-serif"
+                        pointerEvents="none"
+                      >
+                        {metaText}
+                      </text>
+                    )}
+                  </g>
+                )
+              }
               const pieceA = pieces.find((p) => p.id === a.pieceIdA)
               const pieceB = pieces.find((p) => p.id === a.pieceIdB)
               if (!pieceA?.cutLine?.length || !pieceB?.cutLine?.length) return null
@@ -8766,7 +9328,7 @@ export function WorkspaceCanvas() {
                       x={labelX}
                       y={labelY}
                       textAnchor="middle"
-                      fontSize={9}
+                      fontSize={ct(9)}
                       fill={T.accent.error}
                       fontWeight="600"
                       fontFamily="sans-serif"
@@ -8780,7 +9342,7 @@ export function WorkspaceCanvas() {
                       x={labelX}
                       y={labelY + (showLengthDiff ? 11 : 0)}
                       textAnchor="middle"
-                      fontSize={9}
+                      fontSize={ct(9)}
                       fill={T.accent.warning}
                       fontWeight="600"
                       fontFamily="sans-serif"
@@ -8798,7 +9360,7 @@ export function WorkspaceCanvas() {
                         (notchMismatch ? 11 : 0)
                       }
                       textAnchor="middle"
-                      fontSize={9}
+                      fontSize={ct(9)}
                       fill={T.accent.warning}
                       fontWeight="600"
                       fontFamily="sans-serif"
@@ -8812,7 +9374,7 @@ export function WorkspaceCanvas() {
                       x={labelX}
                       y={labelY + warnStack}
                       textAnchor="middle"
-                      fontSize={8}
+                      fontSize={ct(8)}
                       fill={T.seamAssignment.connector}
                       fontWeight="600"
                       fontFamily="sans-serif"
@@ -8828,8 +9390,8 @@ export function WorkspaceCanvas() {
                     const labelB = isMatch ? '✓' : `${sd.lenB.toFixed(1)}`
                     return (
                       <g key={`sub-${i}`} pointerEvents="none">
-                        <text x={sd.midA.x} y={sd.midA.y - 5} textAnchor="middle" fontSize={8} fill={color} fontWeight="600" fontFamily="sans-serif">{labelA}</text>
-                        <text x={sd.midB.x} y={sd.midB.y - 5} textAnchor="middle" fontSize={8} fill={color} fontWeight="600" fontFamily="sans-serif">{labelB}</text>
+                        <text x={sd.midA.x} y={sd.midA.y - 5} textAnchor="middle" fontSize={ct(8)} fill={color} fontWeight="600" fontFamily="sans-serif">{labelA}</text>
+                        <text x={sd.midB.x} y={sd.midB.y - 5} textAnchor="middle" fontSize={ct(8)} fill={color} fontWeight="600" fontFamily="sans-serif">{labelB}</text>
                       </g>
                     )
                   })}
@@ -8861,7 +9423,7 @@ export function WorkspaceCanvas() {
           color: '#fff',
           padding: '6px 10px',
           borderRadius: 6,
-          fontSize: 12,
+          fontSize: fs(12),
           fontWeight: 600,
           zIndex: 9998,
           pointerEvents: 'none',
@@ -8880,7 +9442,7 @@ export function WorkspaceCanvas() {
           color: '#fff',
           padding: '6px 10px',
           borderRadius: 6,
-          fontSize: 12,
+          fontSize: fs(12),
           fontWeight: 600,
           zIndex: 9998,
           pointerEvents: 'none',
@@ -8898,7 +9460,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '6px 10px',
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: fs(12),
             fontWeight: 600,
             zIndex: 9998,
             pointerEvents: 'none',
@@ -8917,7 +9479,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '6px 10px',
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: fs(12),
             fontWeight: 600,
             zIndex: 9998,
             pointerEvents: 'none',
@@ -8936,7 +9498,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '6px 10px',
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: fs(12),
             fontWeight: 600,
             zIndex: 9998,
             pointerEvents: 'none',
@@ -8955,7 +9517,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '6px 10px',
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: fs(12),
             fontWeight: 600,
             zIndex: 9998,
             pointerEvents: 'none',
@@ -8976,7 +9538,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '8px 10px',
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: fs(12),
             fontWeight: 600,
             zIndex: 10002,
             display: 'flex',
@@ -8999,7 +9561,7 @@ export function WorkspaceCanvas() {
               color: '#fff',
               borderRadius: 4,
               padding: '3px 8px',
-              fontSize: 12,
+              fontSize: fs(12),
               cursor: 'pointer',
             }}
           >
@@ -9027,13 +9589,13 @@ export function WorkspaceCanvas() {
             boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
             padding: '6px 0',
             minWidth: 220,
-            fontSize: 13,
+            fontSize: fs(13),
             fontFamily: 'sans-serif',
           }}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
         >
-          <div style={{ padding: '6px 12px', color: '#666', fontSize: 11, borderBottom: '1px solid #eee' }}>
+          <div style={{ padding: '6px 12px', color: '#666', fontSize: fs(11), borderBottom: '1px solid #eee' }}>
             Kerbe auf gerader Kante
           </div>
           <button
@@ -9057,7 +9619,7 @@ export function WorkspaceCanvas() {
               border: 'none',
               background: 'none',
               cursor: 'pointer',
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           >
             Eine Kerbe: Kantenmitte
@@ -9081,7 +9643,7 @@ export function WorkspaceCanvas() {
               border: 'none',
               background: 'none',
               cursor: 'pointer',
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           >
             Mehrere Kerben: gleichmäßig (Anzahl)…
@@ -9102,7 +9664,7 @@ export function WorkspaceCanvas() {
               borderTop: '1px solid #eee',
               background: '#fafafa',
               cursor: 'pointer',
-              fontSize: 12,
+              fontSize: fs(12),
               color: '#666',
             }}
           >
@@ -9143,7 +9705,7 @@ export function WorkspaceCanvas() {
           }}
           onPointerDown={(ev) => ev.stopPropagation()}
         >
-          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>
+          <span style={{ fontSize: fs(12), color: '#263238', fontWeight: 600 }}>
             Kerben auf Kante (1–{NOTCH_EDGE_LINE_MAX})
           </span>
           <input
@@ -9159,16 +9721,16 @@ export function WorkspaceCanvas() {
               padding: '4px 6px',
               border: '1px solid #90a4ae',
               borderRadius: 4,
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           />
-          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: fs(12) }}>
             OK
           </button>
           <button
             type="button"
             onClick={() => setNotchEdgeLineCountEditor(null)}
-            style={{ padding: '5px 9px', fontSize: 12 }}
+            style={{ padding: '5px 9px', fontSize: fs(12) }}
           >
             Abbrechen
           </button>
@@ -9184,7 +9746,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '6px 10px',
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: fs(12),
             fontWeight: 600,
             zIndex: 9998,
             pointerEvents: 'none',
@@ -9202,7 +9764,7 @@ export function WorkspaceCanvas() {
           color: '#fff',
           padding: '6px 10px',
           borderRadius: 6,
-          fontSize: 12,
+          fontSize: fs(12),
           fontWeight: 600,
           zIndex: 9998,
           pointerEvents: 'none',
@@ -9226,7 +9788,7 @@ export function WorkspaceCanvas() {
               color: '#fff',
               padding: '6px 10px',
               borderRadius: 6,
-              fontSize: 12,
+              fontSize: fs(12),
               fontWeight: 600,
               zIndex: 9998,
               pointerEvents: 'none',
@@ -9256,12 +9818,12 @@ export function WorkspaceCanvas() {
             boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
             padding: '4px 0',
             minWidth: 200,
-            fontSize: 13,
+            fontSize: fs(13),
             fontFamily: 'sans-serif',
           }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div style={{ padding: '6px 12px', color: '#666', fontSize: 11, borderBottom: '1px solid #eee' }}>
+          <div style={{ padding: '6px 12px', color: '#666', fontSize: fs(11), borderBottom: '1px solid #eee' }}>
             Hintergrundbild
           </div>
           {!imageDigitizeSession.locked ? (
@@ -9275,7 +9837,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -9297,7 +9859,7 @@ export function WorkspaceCanvas() {
                 border: 'none',
                 textAlign: 'left',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: fs(13),
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
@@ -9319,7 +9881,7 @@ export function WorkspaceCanvas() {
               border: 'none',
               textAlign: 'left',
               cursor: 'pointer',
-              fontSize: 13,
+              fontSize: fs(13),
               borderTop: '1px solid #eee',
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
@@ -9333,7 +9895,7 @@ export function WorkspaceCanvas() {
           </button>
         </div>
       )}
-      {rectangleSizeEditor && dragging?.kind === 'rectangle' && (
+      {rectangleSizeEditor && (
         <form
           onSubmit={(ev) => {
             ev.preventDefault()
@@ -9384,8 +9946,8 @@ export function WorkspaceCanvas() {
           }}
           onPointerDown={(ev) => ev.stopPropagation()}
         >
-          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Rechteck (mm)</span>
-          <label style={{ fontSize: 12, color: '#455a64', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: fs(12), color: '#263238', fontWeight: 600 }}>Rechteck (mm)</span>
+          <label style={{ fontSize: fs(12), color: '#455a64', display: 'flex', alignItems: 'center', gap: 4 }}>
             Breite
             <input
               ref={rectangleWidthInputRef}
@@ -9400,12 +9962,12 @@ export function WorkspaceCanvas() {
                 padding: '4px 6px',
                 border: '1px solid #90a4ae',
                 borderRadius: 4,
-                fontSize: 13,
+                fontSize: fs(13),
               }}
             />
           </label>
-          <span style={{ fontSize: 14, color: '#78909c' }}>×</span>
-          <label style={{ fontSize: 12, color: '#455a64', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: fs(14), color: '#78909c' }}>×</span>
+          <label style={{ fontSize: fs(12), color: '#455a64', display: 'flex', alignItems: 'center', gap: 4 }}>
             Hoehe
             <input
               type="text"
@@ -9419,11 +9981,11 @@ export function WorkspaceCanvas() {
                 padding: '4px 6px',
                 border: '1px solid #90a4ae',
                 borderRadius: 4,
-                fontSize: 13,
+                fontSize: fs(13),
               }}
             />
           </label>
-          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: fs(12) }}>
             OK
           </button>
           <button
@@ -9433,13 +9995,13 @@ export function WorkspaceCanvas() {
               setDragging(null)
               setTool('select')
             }}
-            style={{ padding: '5px 9px', fontSize: 12 }}
+            style={{ padding: '5px 9px', fontSize: fs(12) }}
           >
             Abbrechen
           </button>
         </form>
       )}
-      {cornerRoundEditor && dragging?.kind === 'roundCorner' && (
+      {cornerRoundEditor && (
         <form
           onSubmit={(ev) => {
             ev.preventDefault()
@@ -9471,7 +10033,7 @@ export function WorkspaceCanvas() {
           }}
           onPointerDown={(ev) => ev.stopPropagation()}
         >
-          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Radius (mm)</span>
+          <span style={{ fontSize: fs(12), color: '#263238', fontWeight: 600 }}>Radius (mm)</span>
           <input
             ref={cornerRoundInputRef}
             type="text"
@@ -9493,10 +10055,10 @@ export function WorkspaceCanvas() {
               padding: '4px 6px',
               border: '1px solid #90a4ae',
               borderRadius: 4,
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           />
-          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: fs(12) }}>
             OK
           </button>
           <button
@@ -9505,13 +10067,13 @@ export function WorkspaceCanvas() {
               setCornerRoundEditor(null)
               setDragging(null)
             }}
-            style={{ padding: '5px 9px', fontSize: 12 }}
+            style={{ padding: '5px 9px', fontSize: fs(12) }}
           >
             Abbrechen
           </button>
         </form>
       )}
-      {internalCircleRadiusEditor && dragging?.kind === 'internalCircle' && (
+      {internalCircleRadiusEditor && (
         <form
           onSubmit={(ev) => {
             ev.preventDefault()
@@ -9553,7 +10115,7 @@ export function WorkspaceCanvas() {
           }}
           onPointerDown={(ev) => ev.stopPropagation()}
         >
-          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Radius (mm)</span>
+          <span style={{ fontSize: fs(12), color: '#263238', fontWeight: 600 }}>Radius (mm)</span>
           <input
             ref={internalCircleRadiusInputRef}
             type="text"
@@ -9567,10 +10129,10 @@ export function WorkspaceCanvas() {
               padding: '4px 6px',
               border: '1px solid #90a4ae',
               borderRadius: 4,
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           />
-          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: fs(12) }}>
             OK
           </button>
           <button
@@ -9580,7 +10142,7 @@ export function WorkspaceCanvas() {
               setDragging(null)
               setTool('select')
             }}
-            style={{ padding: '5px 9px', fontSize: 12 }}
+            style={{ padding: '5px 9px', fontSize: fs(12) }}
           >
             Abbrechen
           </button>
@@ -9636,7 +10198,7 @@ export function WorkspaceCanvas() {
           }}
           onPointerDown={(ev) => ev.stopPropagation()}
         >
-          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Laenge (mm)</span>
+          <span style={{ fontSize: fs(12), color: '#263238', fontWeight: 600 }}>Laenge (mm)</span>
           <input
             ref={lineLengthInputRef}
             type="text"
@@ -9648,10 +10210,10 @@ export function WorkspaceCanvas() {
               padding: '4px 6px',
               border: '1px solid #90a4ae',
               borderRadius: 4,
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           />
-          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>OK</button>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: fs(12) }}>OK</button>
           <button
             type="button"
             onClick={() => {
@@ -9661,22 +10223,42 @@ export function WorkspaceCanvas() {
               }
               setLineLengthEditor(null)
             }}
-            style={{ padding: '5px 9px', fontSize: 12 }}
+            style={{ padding: '5px 9px', fontSize: fs(12) }}
           >
             Abbrechen
           </button>
         </form>
       )}
-      {notchMoveDistanceEditor && dragging?.kind === 'notchMove' && (
+      {notchMoveDistanceEditor && (
         <form
           onSubmit={(ev) => {
             ev.preventDefault()
             const mm = Number.parseFloat(notchMoveDistanceEditor.value.replace(',', '.'))
             if (!Number.isFinite(mm) || mm < 0) {
-              setToastMessage('error: Bitte ein gueltiges Mass in mm eingeben.')
+              setToastMessage('error: Bitte ein gültiges Maß in mm eingeben.')
               return
             }
+            const movePiece = pieces.find((p) => p.id === notchMoveDistanceEditor.pieceId)
+            const preview =
+              notchPreview?.pieceId === notchMoveDistanceEditor.pieceId
+                ? notchPreview
+                : movePiece
+                  ? buildNotchMovePreview(movePiece, notchMoveDistanceEditor.notchId)
+                  : null
+            if (movePiece && preview) {
+              const L = pathLengthAt(movePiece.cutLine, preview.curveIndex, preview.t)
+              const total = totalPathLength(movePiece.cutLine)
+              updateNotch(notchMoveDistanceEditor.pieceId, notchMoveDistanceEditor.notchId, {
+                sNormalized: total > 0 ? L / total : undefined,
+                arcLengthMm: total > 0 ? L : undefined,
+                position: preview.storePos,
+                angle: preview.storeAngle,
+              })
+            } else {
+              setToastMessage('error: Kerbe konnte nicht gesetzt werden.')
+            }
             setNotchMoveDistanceEditor(null)
+            setNotchPreview(null)
           }}
           style={{
             position: 'fixed',
@@ -9700,13 +10282,13 @@ export function WorkspaceCanvas() {
           }}
           onPointerDown={(ev) => ev.stopPropagation()}
         >
-          <span style={{ fontSize: 12, color: '#263238', fontWeight: 600 }}>Kerbenabstand</span>
+          <span style={{ fontSize: fs(12), color: '#263238', fontWeight: 600 }}>Kerbenabstand</span>
           <button
             type="button"
             onClick={() => setNotchMoveDistanceEditor((s) => (s ? { ...s, side: 'left' } : s))}
             style={{
               padding: '3px 8px',
-              fontSize: 12,
+              fontSize: fs(12),
               border: '1px solid #90a4ae',
               borderRadius: 4,
               background: notchMoveDistanceEditor.side === 'left' ? '#e3f2fd' : '#fff',
@@ -9719,7 +10301,7 @@ export function WorkspaceCanvas() {
             onClick={() => setNotchMoveDistanceEditor((s) => (s ? { ...s, side: 'right' } : s))}
             style={{
               padding: '3px 8px',
-              fontSize: 12,
+              fontSize: fs(12),
               border: '1px solid #90a4ae',
               borderRadius: 4,
               background: notchMoveDistanceEditor.side === 'right' ? '#e3f2fd' : '#fff',
@@ -9739,6 +10321,7 @@ export function WorkspaceCanvas() {
               if (ev.key === 'Escape') {
                 ev.preventDefault()
                 setNotchMoveDistanceEditor(null)
+                setNotchPreview(null)
               }
               ev.stopPropagation()
             }}
@@ -9747,15 +10330,18 @@ export function WorkspaceCanvas() {
               padding: '4px 6px',
               border: '1px solid #90a4ae',
               borderRadius: 4,
-              fontSize: 13,
+              fontSize: fs(13),
             }}
           />
-          <span style={{ fontSize: 12, color: '#455a64' }}>mm</span>
-          <button type="submit" style={{ padding: '5px 9px', fontSize: 12 }}>OK</button>
+          <span style={{ fontSize: fs(12), color: '#455a64' }}>mm</span>
+          <button type="submit" style={{ padding: '5px 9px', fontSize: fs(12) }}>OK</button>
           <button
             type="button"
-            onClick={() => setNotchMoveDistanceEditor(null)}
-            style={{ padding: '5px 9px', fontSize: 12 }}
+            onClick={() => {
+              setNotchMoveDistanceEditor(null)
+              setNotchPreview(null)
+            }}
+            style={{ padding: '5px 9px', fontSize: fs(12) }}
           >
             Abbrechen
           </button>
@@ -9775,7 +10361,7 @@ export function WorkspaceCanvas() {
           color: '#fff',
           padding: '8px 20px',
           borderRadius: 6,
-          fontSize: 13,
+          fontSize: fs(13),
           fontWeight: 500,
           boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
           zIndex: 9999,
@@ -9803,7 +10389,7 @@ export function WorkspaceCanvas() {
           color: '#fff',
           padding: '6px 18px',
           borderRadius: 6,
-          fontSize: 13,
+          fontSize: fs(13),
           fontFamily: 'sans-serif',
           zIndex: 3000,
           boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
@@ -9825,7 +10411,7 @@ export function WorkspaceCanvas() {
               padding: '2px 10px',
               borderRadius: 4,
               cursor: 'pointer',
-              fontSize: 12,
+              fontSize: fs(12),
             }}
           >
             Abbrechen
@@ -9842,7 +10428,7 @@ export function WorkspaceCanvas() {
           color: '#fff',
           padding: '6px 18px',
           borderRadius: 6,
-          fontSize: 13,
+          fontSize: fs(13),
           fontFamily: 'sans-serif',
           zIndex: 3000,
           boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
@@ -9864,7 +10450,7 @@ export function WorkspaceCanvas() {
               padding: '2px 10px',
               borderRadius: 4,
               cursor: 'pointer',
-              fontSize: 12,
+              fontSize: fs(12),
             }}
           >
             Abbrechen
@@ -9880,7 +10466,7 @@ export function WorkspaceCanvas() {
           padding: '4px 10px',
           borderRadius: 4,
           cursor: 'pointer',
-          fontSize: 12,
+          fontSize: fs(12),
         }
         return (
         <div
@@ -9893,7 +10479,7 @@ export function WorkspaceCanvas() {
             color: '#fff',
             padding: '6px 18px',
             borderRadius: 6,
-            fontSize: 13,
+            fontSize: fs(13),
             fontFamily: 'sans-serif',
             zIndex: 3000,
             boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
@@ -9981,7 +10567,7 @@ export function WorkspaceCanvas() {
               padding: '2px 10px',
               borderRadius: 4,
               cursor: 'pointer',
-              fontSize: 12,
+              fontSize: fs(12),
             }}
           >
             Abbrechen
@@ -10039,7 +10625,7 @@ function EdgeAllowancePopover({
         padding: '10px 14px',
         zIndex: 3000,
         fontFamily: 'sans-serif',
-        fontSize: 13,
+        fontSize: uiTextPx(13),
         minWidth: 160,
       }}
       onPointerDown={(e) => e.stopPropagation()}
@@ -10061,7 +10647,7 @@ function EdgeAllowancePopover({
         style={{
           width: '100%',
           padding: '4px 8px',
-          fontSize: 14,
+          fontSize: uiTextPx(14),
           border: '1px solid #bbb',
           borderRadius: 4,
           boxSizing: 'border-box',
@@ -10073,7 +10659,7 @@ function EdgeAllowancePopover({
           onClick={onCancel}
           style={{
             padding: '3px 10px',
-            fontSize: 12,
+            fontSize: uiTextPx(12),
             border: '1px solid #ccc',
             borderRadius: 4,
             background: '#f5f5f5',
@@ -10087,7 +10673,7 @@ function EdgeAllowancePopover({
           onClick={confirm}
           style={{
             padding: '3px 10px',
-            fontSize: 12,
+            fontSize: uiTextPx(12),
             border: 'none',
             borderRadius: 4,
             background: '#e65100',

@@ -1,6 +1,5 @@
 import type { ProfileAssignment, PatternPiece } from '../types/model'
-import { enumerateEdges } from '../geometry/edgeEnumeration'
-import { edgeTotalLength } from '../geometry/seamUtils'
+import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
 
 export type ProfileBomRow = {
   profileKey: string
@@ -25,9 +24,7 @@ export function aggregateProfileBom(
   for (const pa of assignments) {
     const piece = pieceById.get(pa.pieceId)
     if (!piece) continue
-    const edges = enumerateEdges(piece)
-    const edge = edges.find((e) => e.edgeIndex === pa.edgeIndex)
-    const lengthMm = edge ? edgeTotalLength(piece, edge.curveIndices) : 0
+    const lengthMm = profileAssignmentLengthMm(piece, pa)
 
     const groupKey = `${pa.profileKey}|||${pa.internalArticleNumber ?? ''}`
     const existing = map.get(groupKey)

@@ -14,6 +14,7 @@
  */
 
 import type { Curve, PatternPiece, Point, SeamAssignment } from '../types/model'
+import { isInternalSeamAssignment } from './internalSeamAssignment'
 import { bezierDerivativeAt, signedAreaCurves } from './curveToPath'
 import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 import { applySharpCornerPromotion } from './softVertexPromotion'
@@ -427,6 +428,7 @@ export function reapplySeamAssignmentCutTrimsForAllPieces(
   let next = pieces
   let changed = false
   for (const a of seamAssignments) {
+    if (isInternalSeamAssignment(a)) continue
     const pieceA = next.find((p) => p.id === a.pieceIdA)
     const pieceB = next.find((p) => p.id === a.pieceIdB)
     if (!pieceA || !pieceB) continue

@@ -1,7 +1,8 @@
 TrimTex: seamLine vs. cutLine — welche Logik wo greift
 ======================================================
-Stand: 2026-04-04. Kurzüberblick für Entwicklung; ergänzt die Regeln in
-`.cursor/rules/cutline-seamline-punkte.mdc` und `vertexMaster.ts`.
+Stand: 2026-05-17. Kurzüberblick für Entwicklung; ergänzt `vertexMaster.ts`.
+LOP-033 (Seam vs. Cut Gesamtbild): geklärt [✓] — siehe Detail in
+docs/ENTWICKLER-CODE-REVIEW-UNKLARHEITEN.txt.
 
 Kanonische Master-Entscheid (Bearbeitung + Nahtzuordnung): vertexMaster und
 getCurvesForSeamEdge / getEditingContour sind abgestimmt (eine Bedingung).
@@ -71,16 +72,12 @@ Kerben (Notches)
   cutLine.
 - KI-Platzierung (aiNotchPlacement): Projektion auf cutLine.
 
-Geometrie, die aus cutLine + Nahtzugabe „hochrechnet“, ohne die
-vertexMaster-Seam-Bearbeitung zu nutzen
-- Viele Pfade in removeNotch, removeNotchAnchor, toggleNotchAnchor:
-  mergen/splitten die cutLine und leiten seamLine per
-  offsetCurvesInwardForSeam ab (Cut-as-Master für diese Eingriffe).
-- toggleNotchAnchor „Frei → Verankert“: fügt auf cutLine ein.
-- updateNotch (verankerte Kerbe verschieben): der Block, der cutLine
-  geometrisch umbaut, läuft nur, wenn NICHT useSeamLineForVertexEditing
-  (seamIsMaster) — bei Seam-as-Master wird der Anker anders behandelt
-  (kein cutLine-Merge in diesem Zweig).
+Kerben-Store (Mai 2026)
+- removeNotch: entfernt nur den Notch-Eintrag (keine cutLine-Mutation).
+- removeNotchAnchor / toggleNotchAnchor: No-Ops (Anchor-System entfernt;
+  API-Kompatibilität, Tests: notchGeometryInvariant.test.ts).
+- updateNotch: Positions-/Typ-Updates ohne cutLine-Segment-Merge; Abstand
+  entlang cutLine (isNotchSpacingValid…).
 
 Export / Cutter / Außenkontur
 - DXF-Writer: Außenkontur (Natline) aus cutLine; Innenkontur aus seamLine

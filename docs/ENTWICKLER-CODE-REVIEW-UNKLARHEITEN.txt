@@ -4,11 +4,13 @@
 ================================================================================
   Erstellt: März 2025
   Umstrukturiert: März 2026 (Struktur der LOP-Punkte: bearbeitet vs. offen)
+  Zuletzt codebase-verifiziert: Mai 2026 (Status-Tabellen + Detailabschnitte
+  gegen aktuellen Stand in src/ abgeglichen)
 
   Bereiche der LOP-Punkte und Umgang mit Erweiterungen
   -----------------------------------------
   • LOP-009, LOP-010, LOP-014, LOP-016: Technik / Code-Review (konkrete
-    Codepfade, Doku-Lücken, Seam-as-Master vs. cutLine).
+    Codepfade, Doku-Lücken). LOP-033 (Seam vs. Cut Gesamtbild): geklärt [✓].
   • LOP-020–041: Produkt, UX, Import/Export-Roadmap, Vision.
   • LOP-042–057: Code-Qualität, Architektur, Performance, Tooling
     (aus systematischer Code-Review April 2026).
@@ -16,8 +18,9 @@
     Nahtzugabe, Geometrie, Import, Profile.
   • LOP-070: UX-Vision „Canvas-first / Intent statt Tool-Wüste“ (April 2026,
     Produktstrategie; kein Feature-Blocker).
+  • LOP-071: MCP-Server / Cloud-AI-Connector für Text→2D-Aktionen (geplant).
   Neue Funktionen, Erweiterungen und größere Refactorings: immer als **neuer**
-  LOP-Punkt mit der **nächsten freien ID** (nach 070 fortführen) eintragen;
+  LOP-Punkt mit der **nächsten freien ID** (nach 071 fortführen) eintragen;
   bei Überschneidung mit technischen LOP-Punkten **„Siehe auch LOP-xxx“** setzen.
 
   Legende
@@ -36,7 +39,7 @@
  LOP-009   NotchType: strich/kerbe vs. single/double/v  [~]
  LOP-010   Notch vertexIndex: cutLine vs. Master        [~]
  LOP-014   DXF-MASTER-SPEZ vs. AAMA/ASTM / Writer       [~]
- LOP-016   removeNotch/toggleNotch/addCurve, flipGrain  [~] [!]
+ LOP-016   addCurveToCutLine (Rest); flipGrain erledigt   [~]
 
 
 ================================================================================
@@ -56,14 +59,14 @@
   LOP-028   Funktion               Nahtlogik (Zuordnung, Längen)     [~]
   LOP-029   Funktion               Nahtsymbole auf Schablone         [ ]
   LOP-030   Import/Export          Exportformate (Gerber, AAMA/ASTM, CSV) [ ]
-  LOP-031   Import                 DXF-Import (über SVG)            [ ]
+  LOP-031   Import                 DXF-Import (dxfImporter, kein SVG) [~]
   LOP-032   System                 Export-Einstellungen / Profile   [ ]
-  LOP-033   Architektur            Seam vs. Cut – Gesamtbild         [~] [!]
+  LOP-033   Architektur            Seam vs. Cut – Gesamtbild         [✓] geklärt
   LOP-034   Funktion               Automatisierungen                 [ ]
-  LOP-035   Funktion               Erweiterte Tools (Stepp, RV, …)  [ ]
+  LOP-035   Funktion               Erweiterte Tools (Stepp, RV, …)  [~]
   LOP-036   Funktion               Kopierfunktionen                 [ ]
   LOP-037   Analyse                Analyse & Fehlerbericht          [ ]
-  LOP-038   Daten                  Materialdatenbank                 [ ]
+  LOP-038   Daten                  Materialdatenbank                 [~]
   LOP-039   Vision                 Produktionsintegration          [ ]
   LOP-040   Doku/Output            Batch-Ausgabe, vollst. Datensätze [ ]
   LOP-041   UX                     Detailverbesserungen (s. Detail)  [ ]
@@ -75,12 +78,12 @@
 
   ID        Kategorie              Kurztitel                           Status
   --------  ---------------------  ----------------------------------  ----------
-  LOP-043   Architektur            WorkspaceCanvas: 6300-Zeilen-Monolith [ ]
-  LOP-044   Architektur            useStore: 2620-Zeilen-Monolith      [ ]
-  LOP-045   Performance    [!]     Breite Store-Subscriptions, kein memo [~] [!]
+  LOP-043   Architektur            WorkspaceCanvas: ~10.200-Z.-Monolith [ ]
+  LOP-044   Architektur            useStore: ~3.850-Zeilen-Monolith     [ ]
+  LOP-045   Performance    [!]     Store-Subscriptions / useShallow    [~] [!]
   LOP-050   Qualität               Fehlende Tests für kritische Flows   [~]
-  LOP-051   Accessibility          A11y-Mängel (Modals, Sidebar, Canvas) [~]
-  LOP-052   Tooling                ESLint/Prettier einrichten           [~]
+  LOP-051   Accessibility          A11y (Focus-Trap teils; Rest offen)  [~]
+  LOP-052   Tooling                ESLint/Prettier einrichten           [✓]
   LOP-055   Performance            Batch-Actions: Mehrfach-set() statt gebündelt [~]
   LOP-057   Bug [!]                Harte Vertices → soft bei Seam-CutLine-Rebuild [✓]
 
@@ -106,29 +109,27 @@
 
 
 ================================================================================
-  LOP-PUNKTE – Übersicht UX-Vision / Canvas-first (ab LOP-070)
+  LOP-PUNKTE – Übersicht UX-Vision / KI-Integration (LOP-070–071)
 ================================================================================
 
   ID        Kategorie              Kurztitel                             Status
   --------  ---------------------  ------------------------------------  ----------
   LOP-070   UX / Vision            Canvas-first, 3 Modi, Kontext-UI, KI  [ ]
+  LOP-071   Integration / KI       MCP-Server, Cloud-AI, Text→2D-Canvas  [ ]
 
 
-  Erledigt (April 2026): LOP-042 (ErrorBoundary), LOP-046 (deletePiece),
-  LOP-047 (loadProject UI-Reset), LOP-048 (Geometry-Duplikate → geometryConstants.ts),
-  LOP-049 (Input-Guards), LOP-053 (Keyboard-Listener-Churn → Ref-Pattern),
-  LOP-054 (Epsilon-Konstanten zentralisiert),
-  LOP-056 (Viewbox-Konstanten, Popover-Key, Index-Keys geprüft, toter Code).
+  Erledigt (April–Mai 2026): LOP-042, 046–049, 053–054, 056, 052 (ESLint/Prettier),
+  LOP-058–068 (Tester-Runde), LOP-057 (soft-Vertices), siehe Detailabschnitte.
 
 
 ================================================================================
   OFFEN – Technik, nach Dringlichkeit sortiert
 ================================================================================
 
-  Priorität A (Seam-as-Master: weiterhin cutLine-zentriert, inkonsistent)
+  Priorität A (Seam-as-Master: Restarbeiten, Architektur LOP-033 ✓ geklärt)
   -----------------------------------------------------------------------
-  LOP-016 (u. a. flipPieceAlongGrain, Notch-Hooks, addCurveToCutLine)
-  (Übergeordnete Einordnung: LOP-033)
+  LOP-016 (nur noch addCurveToCutLine bei Digitalisierung; flipPieceAlongGrain ✓)
+  (Regelkatalog: LOP-033 / docs/SEAM-VS-CUT-ZUORDNUNG.txt)
 
   Priorität B (Modell/DXF/Doku)
   -----------------------------
@@ -145,7 +146,7 @@
   LOP-043 WorkspaceCanvas aufteilen
   LOP-044 useStore in Slices aufteilen
   LOP-050 Fehlende Tests (deletePiece, loadProject, Batch, …)
-  LOP-052 ESLint/Prettier einrichten (tsconfig + engines bereits erledigt)
+  LOP-052 ESLint/Prettier: Basis erledigt (npm run lint/format); Lint-Debt im Repo
   (Digitalisierung-Code: auch LOP-022)
 
   Priorität D (UX-Test / Accessibility / Kosmetik)
@@ -225,23 +226,18 @@
   Format“; LOP-020/030 (Roadmap Gerber/CSV). Technische Abgrenzung oben erledigt.
 
 
---- LOP-016 [~] [!] Weitere Store-Funktionen cutLine-zentriert ------------
+--- LOP-016 [~] Store-Funktionen cutLine-zentriert (Rest) -----------------
 
-  Aus Code-Verifizierung (noch nicht auf Seam-as-Master umgestellt):
-  - removeNotchAnchor, toggleNotchAnchor, addCurveToCutLine → cutLine
-  -   flipPieceAlongGrain: spiegelt cutLine, leitet seamLine aus cutLine ab
-    → bei Seam-as-Master: seamLine spiegeln, cutLine ableiten
-
-  Zwischenstand (April 2026, in Arbeit):
-  Teilweise Absicherung in angrenzenden Store-/Canvas-Pfaden umgesetzt
-  (u. a. Guards/Validierung bei Vertex-Operationen, Batch-Delete-softVertices,
-  Notch-Preview/Commit-Konsistenz).
-  ✓ flipPieceAlongGrain: Auf Seam-as-Master umgestellt (April 2026).
-    Bei Nahtzugabe wird die seamLine gespiegelt, cutLine per deriveCutLineForPiece
-    abgeleitet (statt umgekehrt). Notch-Resync über resyncNotchesAfterCutLineRebuilt.
-  ✓ removeNotchAnchor / toggleNotchAnchor: Sind No-Ops (Notch-Anchor-System entfernt).
-  Noch offen: addCurveToCutLine fügt direkt auf cutLine an (nur für Digitalisierung
-  relevant, wo noch keine NZ existiert – kein Bug in der Praxis).
+  Verifiziert Mai 2026:
+  ✓ flipPieceAlongGrain: Seam-as-Master (seamLine spiegeln, cutLine ableiten;
+    Tests: flipPieceAlongGrain.test.ts).
+  ✓ removeNotchAnchor / toggleNotchAnchor: No-Ops (Anchor-System entfernt;
+    Test: notchGeometryInvariant.test.ts).
+  Noch offen (bewusst niedrige Priorität):
+  • addCurveToCutLine schreibt direkt auf cutLine – nur Digitalisierung ohne NZ;
+    kein Produktions-Bug in der Praxis.
+  Hinweis: Canvas/Store sind seit April deutlich gewachsen (Features, kein Split);
+  siehe LOP-043/044.
 
 
 ================================================================================
@@ -342,14 +338,13 @@
   Siehe auch: LOP-014, LOP-020.
 
 
---- LOP-031 [ ] DXF-Import (über SVG) -------------------------------------
+--- LOP-031 [~] DXF-Import ------------------------------------------------
 
-  Pipeline DXF → SVG → bearbeitbares Modell.
-
-  Externer Tester (April 2026):
-  • Beim DXF-Import werden nicht alle Notches erkannt → robustere
-    Notch-Detection nötig.
-  Siehe auch LOP-068.
+  Ist (Mai 2026): Direkter Import über dxfParser + dxfImporter (Toolbar:
+  importDxfFromString, Optionen NZ/V-Notches/Layer); kein SVG-Zwischenschritt.
+  Offen: Roadmap-Pipeline „DXF → SVG“ war Planungsformulierung; Produktfragen
+  (UX, Open-Contour-Import, Qualitätssicherung).
+  Notch-Erkennung: LOP-068 (✓) adressiert; Randfälle weiter in LOP-021/031.
 
 
 --- LOP-032 [ ] Export-Einstellungen --------------------------------------
@@ -357,13 +352,60 @@
   Mehrere Exportprofile speicherbar (Layer, Maßstab, Formatvarianten).
 
 
---- LOP-033 [~] [!] Architektur: Seam vs. Cut (Gesamtbild) ------------------
+--- LOP-033 [✓] Architektur: Seam vs. Cut (Gesamtbild) — GEKLÄRT -----------
 
-  Entscheidung und Umsetzung: Seam-as-Master bei Nahtzugabe (Projektregel) vs.
-  verbleibende cutLine-zentrierte Pfade. Konkrete offene Arbeit: LOP-009–010
-  und LOP-016.
-  Empfehlung: keine parallele „zweite Wahrheit“ in UI und Store; Master-Kontur
-  überall dieselbe wie bei Hit-Tests.
+  Kategorie: Architektur / Datenmodell
+  Status: GEKLÄRT (Mai 2026) — Entscheidung und Pfadkatalog dokumentiert;
+  keine offene Architektur-Unklarheit mehr. Restarbeit nur in Unter-LOPs.
+  Übergeordnet zu: LOP-009, LOP-010, LOP-016 (technische Restarbeiten)
+  Referenz: docs/SEAM-VS-CUT-ZUORDNUNG.txt (Pfadkatalog, Mai 2026 abgeglichen)
+
+  Entscheidung (Projektregel, codebase-verifiziert Mai 2026):
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Nahtzugabe gesetzt UND seamLine geschlossen (length >= 3)                │
+  │   → Bearbeitungs-Master = seamLine (Seam-as-Master)                    │
+  │   → cutLine wird bei jeder Änderung vollständig per Offset neu erzeugt   │
+  │     (deriveCutLineForPiece); kein segmentweises seam↔cut-Mapping.      │
+  │ Sonst (keine NZ oder seamLine zu kurz)                                   │
+  │   → Bearbeitungs-Master = cutLine; seamLine ggf. aus cut abgeleitet.   │
+  └──────────────────────────────────────────────────────────────────────────┘
+  Eine Quelle der Wahrheit für die Bearbeitungs-Master-Entscheid:
+  useSeamLineForVertexEditing() in src/geometry/vertexMaster.ts
+  (identisch: getCurvesForSeamEdge / getEditingContour in seamUtils.ts).
+
+  UI / Hit-Tests (keine parallele Master-Kontur):
+  • WorkspaceCanvas: Vertices, Hover, Marquee, Kantenwerkzeuge →
+    useSeamLineForVertexEditing + getDisplayedMasterCurves (gerundete Bögen).
+  • Nahtzuordnung (SeamAssignment.curveIndices) → getCurvesForSeamEdge
+    (bei NZ = seamLine-Indizes).
+
+  Bewusst cutLine-zentriert (andere Domäne, kein Bearbeitungs-Bug):
+  • Kerben: vertexIndex, Abstand/Kollision, materialize/resync entlang cutLine
+    (notchOnCurve.ts, resyncNotchesAfterCutLineRebuilt nach jedem Cut-Rebuild).
+  • Export/Cutter: Außenkontur aus cutLine (DXF-MASTER, AAMA/ASTM Layer CUT).
+  • Fadenlauf-Snap, Bounds/pieceTransform: cutLine.
+  • Konturmaße: eigener Schalter useSeamLineForContourMeasurements
+    (contourMeasurements.ts) — nur wenn cutLine feiner tesselliert ist als
+    seamLine; absichtlich ≠ vertexMaster, damit Maßlabels nicht jedes
+    Clipper-Mikrosegment listen.
+
+  Umgesetzt (Auszug, siehe SEAM-VS-CUT-ZUORDNUNG.txt):
+  ✓ Store-Kern: updateVertex, updateCurvePoint, insertPointOnCutLine,
+    offsetSegment, replaceSegmentWithBezier, movePointOnCurve, convertBezier…,
+    applyOffset, recomputeSeamLine (Skip bei Seam-Master), scalePieceLocal,
+    flipPieceAlongGrain, applyPieceSymmetryToPiece.
+  ✓ LOP-057: softVertices/remap nach Cut-Rebuild (kein Index-Copy mehr).
+  ✓ removeNotch: nur Notch-Liste; removeNotchAnchor/toggleNotchAnchor No-Ops.
+
+  Restarbeit (nur noch in Unter-LOPs, nicht LOP-033):
+  • LOP-016: addCurveToCutLine schreibt nur cutLine (Digitalisierung ohne NZ).
+  • LOP-009/010: Notch-Typ-Mapping und cutLine-vertexIndex / Resync.
+  • LOP-021: Produkt (mehr Notch-Typen; ggf. Master-Index später).
+
+  Empfehlung für neue Features (Regel bleibt gültig):
+  Keine zweite Bearbeitungs-Wahrheit in UI und Store — dieselbe Master-Kontur
+  wie bei Hit-Tests (getDisplayedMasterCurves / getCurvesForSeamEdge).
+  cutLine-only Pfade nur dort, wo das Domänenmodell es verlangt (Kerben, Export).
 
 
 --- LOP-034 [ ] Automatisierungen -----------------------------------------
@@ -371,9 +413,11 @@
   z. B. Fächern, automatische Nahtecken, Kanten erkennen, Nahtzugabe ergänzen.
 
 
---- LOP-035 [ ] Erweiterte Tools ------------------------------------------
+--- LOP-035 [~] Erweiterte Tools ------------------------------------------
 
   Stepp-, Reißverschluss-, T-Shirt-Konfigurator (Vision/Phasen klar abgrenzen).
+  Teilweise (Mai 2026): Laser-Cut-Box-Konfigurator, Rock-Generator, Konfigurator-
+  Chat-Patches; Stepper/RV weiter offen.
 
 
 --- LOP-036 [ ] Kopierfunktionen ------------------------------------------
@@ -387,9 +431,12 @@
   ignorierbar.
 
 
---- LOP-038 [ ] Materialdatenbank -----------------------------------------
+--- LOP-038 [~] Materialdatenbank -----------------------------------------
 
   Eigenschaften (z. B. Dehnung); später ggf. Anpassung von Schnittteilen.
+  Teilweise (Mai 2026): MaterialCatalogModal, localStorage (materialCatalogStorage),
+  Stücklisten-/PDF-Kosten via materialCatalogCost.ts; keine zentrale Server-DB,
+  keine Dehnungs-Anpassung der Geometrie.
 
 
 --- LOP-039 [ ] Produktionsintegration (Vision) ----------------------------
@@ -480,6 +527,61 @@
 
   Stand April 2026: bewusst nur Doku/Epics – kein Produktcode bis Priorisierung
   mit LOP-027/041/043; Umsetzung Schritt für Schritt (Modi-Toggle, Kontextleiste).
+  Siehe auch LOP-071 (technische KI-Anbindung über MCP/Connector).
+
+
+--- LOP-071 [ ] MCP-Server: Cloud-AI-Connector, Texteingabe → 2D-Arbeitsfläche ----
+
+  Kategorie: Integration / KI / Architektur (geplant, später)
+  Status: OFFEN – bewusst **noch nicht umgesetzt**; als Roadmap-Punkt dokumentiert
+  (Mai 2026).
+
+  Ziel:
+  TrimTex später über einen **MCP-Server** (Model Context Protocol) mit **Cloud-KI**
+  verbinden, sodass Nutzer in der **2D-Arbeitsfläche** per **Texteingabe** agieren
+  und Geometrie/Objekte **erzeugen oder ändern** können – ohne jeden Schritt manuell
+  im Menü auszuwählen.
+
+  Geplante Rolle des MCP-Servers:
+  • TrimTex stellt (oder konsumiert) einen MCP-konformen **Connector** bereit, über
+    den ein Cloud-AI-Modell kontrolliert auf erlaubte Editor-Funktionen zugreift.
+  • Die KI erhält **strukturierten Kontext** der Arbeitsfläche (Teile, Kanten,
+    Selektion, Maßstab, ggf. Nahtzugabe) und liefert **Aktionsvorschläge** oder
+    **ausführbare Befehle** (z. B. Teil anlegen, Kerbe setzen, Naht zuordnen,
+    Maßstab anwenden, Konfigurator-Parameter).
+  • Nutzer formuliert Intent in natürlicher Sprache; das System mappt auf
+    **workspaceChatActions** / Store-Operationen mit Bestätigung oder Preview
+    (sicherheitskritisch: keine blinden Geometrie-Mutationen).
+
+  Abgrenzung zum Ist-Stand (Mai 2026):
+  • Bereits vorhanden: WorkspaceAiChatPanel, workspaceChatAi.ts (Proxy zu OpenAI),
+    applyWorkspaceChatProposal / workspaceChatActions – **direkter** Chat im Client,
+    kein MCP-Server, kein generischer Cloud-AI-Connector für externe Agenten.
+  • LOP-071 ergänzt die **Architektur-Ebene** (standardisierter MCP-Zugang), nicht
+    nur ein weiteres Chat-UI.
+
+  Offene Klärungen vor Umsetzung:
+  1. Deployment: MCP-Server **neben** TrimTex (lokal/Server) vs. eingebettet in
+     Hosting; Auth (API-Keys, Nutzer-Session, Rate-Limits).
+  2. Tool-Schema: welche MCP-Tools exponieren (read_workspace, create_piece,
+     add_notch, set_seam_allowance, …) – eng an bestehende Store-Actions koppeln.
+  3. Sicherheit: RLS-ähnliche Regeln im Connector (nur erlaubte Mutationen;
+     Logging; Human-in-the-loop für destruktive Aktionen).
+  4. UX: Texteingabe **in** oder **neben** der 2D-Ansicht (siehe LOP-070 Zielbild E);
+     Vorschau/Undo vor Commit.
+  5. Anbieter: Cloud-AI (OpenAI, Anthropic, …) über MCP-Client; TrimTex bleibt
+     Geometrie-Source-of-Truth (kein „SVG aus dem Modell raten“).
+
+  Empfohlene Phasen (wenn priorisiert):
+  Phase 0 – Doku & API-Inventar: alle sicheren Store-Actions für KI/MCP listen.
+  Phase 1 – Read-only MCP-Tools (Kontext lesen, Vorschläge ohne Schreiben).
+  Phase 2 – Schreib-Tools mit Preview + Nutzerbestätigung in der 2D-Ansicht.
+  Phase 3 – Externe Agenten (Cursor, Claude Desktop, eigene Cloud-Pipelines) über
+            denselben Connector.
+
+  Siehe auch: LOP-070 (Intent/Canvas-first), LOP-061 (KI-Panel standard aus),
+  LOP-024 (Online-Zugriff), LOP-023 (Validierung vor KI-Aktionen),
+  docs/TRIMTEX-FUNKTIONSBERICHT.md, src/workspace/workspaceChatActions.ts.
 
 
 ================================================================================
@@ -487,11 +589,11 @@
   (Quelle: Systematische Code-Review April 2026)
 ================================================================================
 
---- LOP-043 [ ] WorkspaceCanvas: 6.300-Zeilen-Monolith ---------------------
+--- LOP-043 [ ] WorkspaceCanvas: ~10.200-Zeilen-Monolith -------------------
 
   Kategorie: Architektur / Wartbarkeit
   Problem:
-  WorkspaceCanvas.tsx (~6.292 Zeilen) enthält: Domain-Mathematik, Hit-Testing,
+  WorkspaceCanvas.tsx (~10.218 Zeilen, Stand Mai 2026) enthält: Domain-Mathematik, Hit-Testing,
   Koordinaten-Transforms, komplette Editor-UX, SVG-Rendering, Pointer-Events,
   Keyboard-Handling, Overlays/Popover, PieceGroup-Komponente.
   • Testbarkeit nahezu null (keine Unit-Tests für Canvas-Logik)
@@ -506,11 +608,12 @@
   Aufwand: hoch. Impact: langfristig Wartbarkeit, Testbarkeit.
 
 
---- LOP-044 [ ] useStore: 2.620-Zeilen-Monolith ----------------------------
+--- LOP-044 [ ] useStore: ~3.850-Zeilen-Monolith ---------------------------
 
   Kategorie: Architektur / Wartbarkeit
   Problem:
-  Alle Actions, State-Felder, Hilfsfunktionen in einer Datei (~2.620 Zeilen).
+  Alle Actions, State-Felder, Hilfsfunktionen in einer Datei (~3.852 Zeilen,
+  Stand Mai 2026).
   Store-Interface (~Zeile 276–516), freie Helpers (~65–634), Implementierung
   (~636–2619).
 
@@ -526,14 +629,17 @@
 
   Kategorie: Performance
 
-  Erledigt (April 2026):
+  Erledigt (April 2026, erweitert Mai 2026):
   ✓ PieceGroup mit React.memo gewrapped (memo(function PieceGroup(...)))
+  ✓ useShallow-Selektoren u. a. in: WorkspaceCanvas, Toolbar, CanvasToolbar,
+    DesignBar, Sidebar, SettingsModal, StuecklisteModal, PiecePropertiesModal,
+    ProfileAssignmentDialog, HelpModal, ShortcutListModal, SeamAssignmentMetaModal,
+    MaterialCatalogModal
 
   Noch offen:
-  • WorkspaceCanvas (~1283–1385), Sidebar (~4), DesignBar (~4–15), Toolbar (~61+)
-    ziehen viele Felder ohne Selektoren aus dem Store (useStore() statt
-    useStore(s => s.field)). Jede Store-Änderung triggert Re-Renders dieser
-    großen Komponenten.
+  • Weitere Canvas-interne Subtrees ohne memo; große Dependency-Listen bei
+    Pointer-Callbacks.
+  • Einzelne Komponenten/Modals ohne useShallow (z. B. ältere Modals prüfen).
   • Inline-Handler in pieces.map erzeugen bei jedem Render neue Funktions-Instanzen.
   • handlePointerMove useCallback hat große Dependency-Liste, Identity wechselt
     häufig.
@@ -548,21 +654,16 @@
 
   Kategorie: Qualität / Vertrauen
 
-  Erledigt (April 2026):
-  ✓ deletePiece.test.ts (8 Tests: verwaiste seamAssignments, Notizen, Profile,
-    selectedPieceIds, Dialog-IDs)
-  ✓ loadProject.test.ts (10 Tests: configuratorModal, rockGenerator,
-    profileDialog, seamAdjustment, Modals, Toasts, Teile-Selektion)
-  ✓ exitAllModes.test.ts (5 Tests: tool, Dialog-IDs, Modals, Batch, UI-Flags)
-  ✓ updateVertex.test.ts (4 Tests: Vertex 0, innerer Vertex, unbekannte ID,
-    ungültiger Index)
-  ✓ applyMassstab.test.ts (4 Tests: Skalierung, Fehler bei ungültiger Länge,
-    kein Dialog, tool-Reset)
-  ✓ softVertexStability.test.ts (3 Tests: harte Vertices bleiben hart)
+  Erledigt (April–Mai 2026, Auswahl):
+  ✓ deletePiece, loadProject, exitAllModes, updateVertex, applyMassstab
+  ✓ softVertexStability (5 Tests), flipPieceAlongGrain, deriveCutLineForPiece
+  ✓ batchDeleteFiltered, applyPieceSymmetry, insertPointOnSeamLine
+  ✓ profileEdgeWarnings, notchPresetMapping, notchResyncCutLine, dxfImport
+  ✓ laserBoxConfigurator, materialCatalogStorage, u. a. (~50 *.test.ts in src/)
 
-  Noch nicht getestet:
+  Noch nicht / dünn getestet:
   • addSeamAssignment, checkSeamAdjustment, updateSeamAssignmentMeta
-  • batchDeleteMarqueeCompletePieces (Multi-Piece)
+  • batchDeleteMarqueeCompletePieces (Logik single-set, eigener Test fehlt)
 
   Empfehlung:
   SeamAssignment-Tests bei Bedarf ergänzen (derzeit geringeres Bug-Risiko).
@@ -572,43 +673,38 @@
 
   Kategorie: Accessibility / UX
 
-  Erledigt (April 2026):
+  Erledigt (April 2026, erweitert Mai 2026):
   ✓ Canvas SVG: role="img" + aria-label="Schnittmuster-Arbeitsfläche"
   ✓ Sidebar: <li> mit role="button", tabIndex={0}, onKeyDown (Enter/Space),
     aria-selected
-  ✓ Alle 8 Modals ohne role="dialog": jetzt konsistent role="dialog" +
-    aria-modal="true" + aria-label (SettingsModal, MassstabModal,
-    PiecePropertiesModal, StuecklisteModal, ConfiguratorModal,
-    RockGeneratorModal, SeamAssignmentMetaModal, SeamAdjustmentModal)
-
-  ✓ DesignBar: role="toolbar" + aria-label="Anzeige-Optionen" auf footer
-  ✓ Context-Menus: grainContextMenu und pieceContextMenu mit role="menu" +
-    aria-label; workspaceImageQuickMenu hatte role="menu" bereits
+  ✓ Modals: role="dialog" + aria-modal + aria-label (Settings, Massstab,
+    PieceProperties, Stückliste, Configurator, RockGenerator, SeamMeta, SeamAdjustment)
+  ✓ DesignBar: role="toolbar" + aria-label
+  ✓ Context-Menus: role="menu" + aria-label
+  ✓ Focus-Trap (useFocusTrap): Settings, PieceProperties, Stueckliste, Help,
+    ShortcutList, ProfileAssignmentDialog, SeamAssignmentMetaModal,
+    MaterialCatalogModal
 
   Noch offen:
-  • Focus-Trap in Modals (Tab-Reihenfolge bleibt aktuell nicht im Modal).
+  • Focus-Trap für weitere Modals (z. B. Massstab, Configurator, RockGenerator,
+    SeamAdjustment).
   • Pfeiltasten-Navigation innerhalb Context-Menus.
 
   Aufwand (Rest): mittel. Impact: Barrierefreiheit.
 
 
---- LOP-052 [~] Tooling: ESLint/Prettier einrichten ------------------------
+--- LOP-052 [✓] Tooling: ESLint/Prettier einrichten ------------------------ERLEDIGT
 
   Kategorie: Tooling / Developer Experience
+  Status: ERLEDIGT (Einrichtung; Mai 2026 verifiziert)
 
-  Erledigt (April 2026):
-  ✓ tsconfig.app.json entfernt (war identische Kopie, nirgends referenziert)
-  ✓ engines-Feld in package.json ergänzt (node >= 20)
+  ✓ eslint.config.js (typescript-eslint, react-hooks, prettier-kompatibel)
+  ✓ prettier in package.json; npm run lint, npm run format
+  ✓ tsconfig.app.json entfernt; engines node >= 20; Build: tsc (nicht tsc -b)
 
-  ✓ Build-Script: tsc -b → tsc korrigiert (kein composite/references vorhanden)
-
-  Noch offen:
-  1. Kein ESLint oder Prettier im Repo konfiguriert → Code-Style-Konsistenz
-     nicht erzwungen.
-
-  Empfehlung:
-  ESLint + Prettier einrichten (auch schrittweise mit wenigen Regeln).
-  Aufwand: gering–mittel.
+  Optional / Follow-up (kein LOP-Blocker):
+  • npm run lint meldet noch Verstöße im Bestandscode (z. B. irregular whitespace)
+  • CI-Hook „lint clean“ bei Bedarf separat planen
 
 
 --- LOP-053 [✓] Performance: Keyboard-useEffect + Listener-Churn -----ERLEDIGT
@@ -625,19 +721,17 @@
 
   Kategorie: Performance / Korrektheit
 
-  Erledigt (April 2026):
-  ✓ batchSetVerticesSoft: von N × get().setVertexSoft() zu einem einzigen
-    set()-Aufruf konsolidiert (alle Vertices pro Piece in einer Map sammeln,
-    dann einmalig pieces.map mit Set-Operationen). Kein Listener-Churn mehr.
-  ✓ rotatePiece90 / alignPieceToGrain: waren bereits single-set via
-    setPieceRotation-Delegation (kein Multi-set-Problem).
+  Erledigt (April 2026, erweitert Mai 2026):
+  ✓ batchSetVerticesSoft: ein set()-Aufruf pro Batch
+  ✓ batchDeleteMarqueeCompletePieces: ein set() inkl. pieces, notes,
+    profileAssignments, seamAssignments, UI-Selektion (useStore.ts ~1179–1211)
+  ✓ rotatePiece90 / alignPieceToGrain: single-set via Delegation
+  ✓ batchDeleteFiltered: Test batchDeleteFiltered.test.ts
 
   Noch offen:
-  • batchDeleteFiltered (~839–889): ruft deletePiece() pro Teil in Schleife;
-    konsolidierung aufwändiger (deletePiece bereinigt seamAssignments etc.)
-  • batchDeleteMarqueeCompletePieces (~892–915): analog
-  • snapSeamEdgeToMatch (~1401): mehrere set()-Aufrufe
-  • regenerateConfiguratorPart (~995–1023): mehrere set()-Aufrufe
+  • batchDeleteFiltered: deletePiece() weiterhin pro Teil in Schleife bei
+    Teile-Löschung (Konsolidierung aufwändig)
+  • snapSeamEdgeToMatch, regenerateConfiguratorPart: mehrere set()-Aufrufe
 
   Empfehlung:
   Zusammenfassende set()-Aufrufe wo möglich; oder Zustand batch-Middleware.
@@ -1063,12 +1157,13 @@
 ================================================================================
 
   Nächste sinnvolle Schritte (offen, nach Aufwand/Impact sortiert).
-  Stand: April 2026 – Punkte 0a–0d, 4–6, 9–10, 17–18 sind inzwischen in der
-  Hauptübersicht als [✓] bzw. im Anhang „Erledigt“ dokumentiert.
+  Stand: Mai 2026 – LOP-052, 057–068, Teile von 045/050/051/055/016 in Übersicht
+  und Detail aktualisiert; LOP-038/031/035 teilweise neu [~].
 
-  Kritisch / Blocker (Produkt + Seam-Modell):
+  Kritisch / Blocker (Produkt):
   A1. LOP-020 DXF-Export produktionsreif (Tests, Vollständigkeit)
-  A2. LOP-033 / LOP-016-Rest / LOP-009–010 (Seam-as-Master, addCurveToCutLine)
+  A2. LOP-016-Rest / LOP-009–010 (addCurveToCutLine; Notch-Modell)
+      — Seam-as-Master-Architektur: LOP-033 ✓ geklärt
 
   Mittlerer Aufwand, hoher Impact:
   B1. LOP-045 weiter: verbleibende Komponenten, Memo wo sinnvoll
@@ -1087,7 +1182,8 @@
 
   Feature-Erweiterungen:
   E1. LOP-069 Profile auf internen Linien
-  E2. LOP-030–032, LOP-034–040 je nach Roadmap
+  E2. LOP-071 MCP-Server / Cloud-AI-Connector (Text→2D, später)
+  E3. LOP-030–032, LOP-034–040 je nach Roadmap
 
   Erledigt / aktualisiert (klein–mittel, April 2026):
   • LOP-052: eslint.config.js, Prettier, npm run lint / format
@@ -1106,8 +1202,8 @@
   Blocker / kritisch
   ------------------
   • LOP-020 DXF-Export produktionsreif
-  • LOP-033 Seam vs. Cut (Restarbeit → LOP-009–010, LOP-016)
   • LOP-022 Digitalisierung stabil (weitere Produkt-/UX-Themen)
+  (LOP-033 Seam vs. Cut: Architektur geklärt [✓]; Rest → LOP-009/010/016)
   (Tester-Runde erledigt: LOP-058, 060, 062, 068 – siehe Übersicht [✓])
 
   Wichtig
@@ -1127,11 +1223,12 @@
   ------------------------------------------
   • LOP-043 WorkspaceCanvas aufteilen
   • LOP-044 useStore in Slices
-  • LOP-052 Tooling (ESLint/Prettier – Basis: npm run lint/format)
+  • LOP-052 Tooling [✓] (npm run lint/format; Lint-Debt optional bereinigen)
   • LOP-055 Batch-Actions gebündelt (Teil bereits umgesetzt)
 
   Erweiterung / später
   --------------------
+  • LOP-071 MCP-Server + Cloud-AI: Texteingabe steuert 2D-Arbeitsfläche (Connector)
   • LOP-034 Automatisierungen, LOP-035 Konfiguratoren
   • LOP-038 Materialdatenbank, LOP-039 Produktionsintegration
   • LOP-030–032, LOP-036–037, LOP-040–041 je nach Roadmap
@@ -1152,8 +1249,7 @@
     ENDPOINT_EPS_MM, POINT_EPS_MM in geometryConstants.ts)
   ✓ LOP-050 teilw. (Tests: deletePiece 8, loadProject 10, exitAllModes 5,
     updateVertex 4, applyMassstab 4, softVertexStability 3 = 34 neue Tests)
-  ✓ LOP-052 teilw. (tsconfig.app.json entfernt, engines in package.json,
-    tsc -b → tsc im Build-Script korrigiert)
+  ✓ LOP-052 (eslint.config.js, Prettier, npm run lint/format; Mai 2026 verifiziert)
   ✓ LOP-053 Keyboard-Handler: Ref-Pattern (kein Listener-Churn mehr)
   ✓ LOP-051 teilw. (role="dialog" für 8 Modals, Sidebar focusbar, Canvas aria,
     DesignBar role="toolbar", Context-Menus role="menu"+aria-label)
@@ -1181,18 +1277,23 @@
     syncSoftAfterSharpCornerPromotion nur Range-Check für softVerticesMaster,
     masterSoftVertexIndexSet ausschließlich softVerticesMaster für seam-as-master,
     insertPointOnCutLine nearestCutVertexIndex mit maxDist-Schwelle
+  ✓ LOP-033 (Mai 2026): Seam vs. Cut — Architekturentscheid dokumentiert,
+    vertexMaster + SEAM-VS-CUT-ZUORDNUNG.txt; Kerben bewusst cutLine-zentriert
   ✓ LOP-016 teilw. (flipPieceAlongGrain auf Seam-as-Master umgestellt;
     Notch-Spiegelung über materializeNotchAnchorsOnCutLine statt resync)
   ✓ LOP-045 teilw. (DesignBar + Sidebar; April 2026 +: WorkspaceCanvas, Toolbar,
     CanvasToolbar; modale Store-Slices Settings/Stückliste/Teil-Eigenschaften/Profil;
     Help-, Shortcut-, SeamAssignmentMeta-Modal)
-  ✓ LOP-055 teilw. (batchDeleteMarqueeCompletePieces zu single-set() konsolidiert)
+  ✓ LOP-055 teilw. (batchDeleteMarqueeCompletePieces single-set; batchDeleteFiltered-Test)
+  ✓ LOP-038 teilw. (Mai 2026): Materialkatalog localStorage + Stücklistenkosten
+  ✓ LOP-031 teilw. (Mai 2026): DXF-Import produktiv, ohne SVG-Zwischenschritt
+  ✓ LOP-035 teilw. (Mai 2026): Laser-Cut-Box u. a. Konfiguratoren
   ✓ LOP-051 teilw. (FocusTrap: Settings, PieceProperties, Stückliste; April 2026 +:
     HelpModal, ShortcutListModal, ProfileAssignmentDialog, SeamAssignmentMetaModal;
     useFocusTrap(active) damit Trap beim Öffnen des Modals greift)
   ✓ LOP-050 teilw. (flipPieceAlongGrain.test.ts; April 2026 +: deriveCutLineForPiece.test.ts)
-  ✓ LOP-052 teilw. (April 2026): eslint.config.js, eslint-config-prettier, Prettier,
-    npm-Skripte lint + format
+  ✓ LOP-052 (April/Mai 2026): eslint.config.js, eslint-config-prettier, Prettier,
+    npm-Skripte lint + format — Status in Übersicht [✓]
   ✓ LOP-014 teilw. (April 2026): Writer-/Menü-Matrix im Detailabschnitt LOP-014
   ✓ PROF-002 teilw. (April 2026): profileKey → HSL-Farbe (Canvas + Übersichts-SVG)
   ✓ PROF-008 teilw. (April 2026): Profil-Kanten-Warn-Toast bei updateVertex,
