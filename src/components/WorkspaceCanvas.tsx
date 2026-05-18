@@ -66,7 +66,6 @@ import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnume
 import {
   deriveInternalNotchRoleRangeAtArcLength,
   deriveInternalNotchRoleRangeOnPath,
-  getInternalProfileCurveIndices,
   getInternalProfileCurvesInRange,
   getProfileAssignmentDisplayCurves,
   hitProfileAssignment,
@@ -3226,17 +3225,26 @@ export function WorkspaceCanvas() {
       }
       if (!layoutOnly && tool === 'profil' && hoveredProfileEdge) {
         const sameProfileRange = (
-          pa: { startNotchId?: string; endNotchId?: string; onInternalLine?: boolean },
-          edge: { startNotchId?: string; endNotchId?: string; onInternalLine?: boolean }
+          pa: {
+            edgeIndex: number
+            startNotchId?: string
+            endNotchId?: string
+            onInternalLine?: boolean
+          },
+          edge: {
+            edgeIndex: number
+            startNotchId?: string
+            endNotchId?: string
+            onInternalLine?: boolean
+          }
         ) =>
+          pa.edgeIndex === edge.edgeIndex &&
           Boolean(pa.onInternalLine) === Boolean(edge.onInternalLine) &&
           (pa.startNotchId ?? null) === (edge.startNotchId ?? null) &&
           (pa.endNotchId ?? null) === (edge.endNotchId ?? null)
         const existing = profileAssignments.find(
           (pa) =>
-            pa.pieceId === hoveredProfileEdge.pieceId &&
-            pa.edgeIndex === hoveredProfileEdge.edgeIndex &&
-            sameProfileRange(pa, hoveredProfileEdge)
+            pa.pieceId === hoveredProfileEdge.pieceId && sameProfileRange(pa, hoveredProfileEdge)
         )
         if (existing) {
           setProfileDialogAssignmentId(existing.id)
@@ -4668,32 +4676,22 @@ export function WorkspaceCanvas() {
             if (p.internalLines.length > 0) {
               const nearestInt = nearestCurveIndexAndPoint(local, p.internalLines)
               if (nearestInt && nearestInt.distance < SEAM_HIT_MM) {
-                const curveIndices = getInternalProfileCurveIndices(p)
+                const curveIndices = [nearestInt.curveIndex]
                 let startNotchId: string | undefined
                 let endNotchId: string | undefined
-                const idxInPath = curveIndices.indexOf(nearestInt.curveIndex)
-                if (idxInPath >= 0) {
-                  const lengths = curveIndices.map((ci) => {
-                    const seg = p.internalLines[ci]
-                    return seg ? curveSegmentArcLength(seg, 0, 1) : 0
-                  })
-                  const prefix = lengths.slice(0, idxInPath).reduce((a, b) => a + b, 0)
-                  const segArc = curveSegmentArcLength(
-                    p.internalLines[nearestInt.curveIndex],
-                    0,
-                    nearestInt.t ?? 0
-                  )
-                  const arcOnPath = prefix + segArc
-                  const rangeAtClick =
-                    deriveInternalNotchRoleRangeAtArcLength(p, curveIndices, arcOnPath) ??
-                    deriveInternalNotchRoleRangeOnPath(p, curveIndices)
-                  startNotchId = rangeAtClick?.startNotchId
-                  endNotchId = rangeAtClick?.endNotchId
-                }
+                const seg = p.internalLines[nearestInt.curveIndex]
+                const arcOnPath = seg
+                  ? curveSegmentArcLength(seg, 0, nearestInt.t ?? 0)
+                  : 0
+                const rangeAtClick =
+                  deriveInternalNotchRoleRangeAtArcLength(p, curveIndices, arcOnPath) ??
+                  deriveInternalNotchRoleRangeOnPath(p, curveIndices)
+                startNotchId = rangeAtClick?.startNotchId
+                endNotchId = rangeAtClick?.endNotchId
                 if (!bestEdge || nearestInt.distance < bestEdge.distance) {
                   bestEdge = {
                     pieceId: p.id,
-                    edgeIndex: 0,
+                    edgeIndex: nearestInt.curveIndex,
                     curveIndices,
                     distance: nearestInt.distance,
                     startNotchId,

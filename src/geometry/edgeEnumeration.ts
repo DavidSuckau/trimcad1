@@ -205,11 +205,15 @@ export function remapProfileAssignmentsForPiece(
 
   const internalOnly = relevant.filter((pa) => pa.onInternalLine)
   if (internalOnly.length === relevant.length) {
-    return assignments.map((pa) => {
-      if (pa.pieceId !== pieceId || !pa.onInternalLine) return pa
-      if (newPiece.internalLines.length === 0) return pa
-      return { ...pa, edgeIndex: 0 }
-    })
+    return assignments
+      .filter((pa) => {
+        if (pa.pieceId !== pieceId || !pa.onInternalLine) return true
+        return pa.edgeIndex >= 0 && pa.edgeIndex < newPiece.internalLines.length
+      })
+      .map((pa) => {
+        if (pa.pieceId !== pieceId || !pa.onInternalLine) return pa
+        return pa
+      })
   }
 
   const oldEdges = enumerateEdges(oldPiece)

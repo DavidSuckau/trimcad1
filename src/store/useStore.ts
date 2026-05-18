@@ -72,6 +72,10 @@ import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
+import {
+  remapInternalSeamAssignmentsAfterInternalLineRemove,
+  remapProfileAssignmentsAfterInternalLineRemove,
+} from '../geometry/internalSeamAssignment'
 import type { TrimTexProjectFileV1 } from '../persistence/trimtexProjectJson'
 import type { ConfiguratorInstance, ConfiguratorKindId, ConfiguratorPartParams } from '../configurators/types'
 import { generateConfiguratorPartGeometry } from '../configurators/generators'
@@ -1450,7 +1454,7 @@ export const useStore = create<Store>()(
       return
     }
     const indices =
-      curveIndices.length > 0 ? curveIndices : piece.internalLines.map((_, i) => i)
+      curveIndices.length > 0 ? curveIndices : [clickedCurve]
     const notchRange = deriveInternalSeamNotchRangeAtClick(
       piece,
       indices,
@@ -1889,6 +1893,16 @@ export const useStore = create<Store>()(
           const notches = remapNotchesAfterInternalLineRemove(p.notches, curveIndex)
           return { ...p, internalLines, internalLineSoftJunctions, notches }
         }),
+        profileAssignments: remapProfileAssignmentsAfterInternalLineRemove(
+          s.workspace.profileAssignments ?? [],
+          pieceId,
+          curveIndex
+        ),
+        seamAssignments: remapInternalSeamAssignmentsAfterInternalLineRemove(
+          s.workspace.seamAssignments,
+          pieceId,
+          curveIndex
+        ),
       },
     })),
 

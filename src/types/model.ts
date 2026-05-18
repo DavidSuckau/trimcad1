@@ -237,7 +237,10 @@ export type ProfileAssignment = {
   pieceId: string
   /** 0-basierte Kantennummer (Ecke-zu-Ecke auf Master-Kontur, analog EdgeSeamAllowance). */
   edgeIndex: number
-  /** true: Profil auf interner Polylinie (`internalLines`); `edgeIndex` ist dann 0 (gesamte Polylinie). */
+  /**
+   * true: Profil auf einem Segment in `piece.internalLines` (Punkt→Punkt).
+   * Dann ist `edgeIndex` der Index dieses Segments in `internalLines`, nicht die Kontur-Kantennummer.
+   */
   onInternalLine?: boolean
   /** Optionaler Start-Notch für Teilsegment auf der Kante. */
   startNotchId?: string

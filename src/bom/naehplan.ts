@@ -145,7 +145,9 @@ export function buildProfilnahtRows(workspace: Workspace): ProfilnahtRow[] {
     if (isProfileSewnWithInternalSeam(pa) && internalSeamForProfile(workspace, pa)) continue
     const piece = byId.get(pa.pieceId)!
     const lengthMm = profileAssignmentLengthMm(piece, pa)
-    const where = pa.onInternalLine ? 'interne Linie' : `Kante ${pa.edgeIndex + 1}`
+    const where = pa.onInternalLine
+      ? `interne Linie ${pa.edgeIndex + 1}`
+      : `Kante ${pa.edgeIndex + 1}`
     const line = `${PROFILNAHT_KIND_LABEL} · ${pa.profileName} (${pa.profileKey}) · ${teilLabel(piece)}, ${where} · ${fmtLengthMm(lengthMm)} mm`
     rows.push({ line, lengthMm })
   }

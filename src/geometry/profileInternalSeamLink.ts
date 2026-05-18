@@ -3,8 +3,10 @@ import { isInternalSeamAssignment } from './internalSeamAssignment'
 import {
   getInternalProfileCurveIndices,
   getNotchesOnInternalProfilePath,
+  getProfileAssignmentInternalCurveIndices,
   internalProfileEdgeTotalLength,
 } from './internalLineProfile'
+import { getInternalSeamAssignmentCurveIndices } from './internalSeamAssignment'
 import type { NotchBoundaryRange } from './seamUtils'
 
 export type InternalPathArcInterval = { startArc: number; endArc: number }
@@ -60,12 +62,16 @@ export function profileOverlapsInternalSeam(
   if (seam.pieceIdA !== profile.pieceId) return false
   if (piece.internalLines.length === 0) return false
 
-  const indices =
-    seam.curveIndicesA.length > 0
-      ? seam.curveIndicesA
-      : getInternalProfileCurveIndices(piece)
-  const profileInterval = internalPathArcInterval(piece, profileNotchRange(profile))
-  const seamInterval = internalPathArcInterval(piece, seam.notchRangeA ?? null, indices)
+  const profileInterval = internalPathArcInterval(
+    piece,
+    profileNotchRange(profile),
+    getProfileAssignmentInternalCurveIndices(piece, profile)
+  )
+  const seamInterval = internalPathArcInterval(
+    piece,
+    seam.notchRangeA ?? null,
+    getInternalSeamAssignmentCurveIndices(piece, seam)
+  )
   return arcIntervalsOverlap(profileInterval, seamInterval)
 }
 
@@ -97,13 +103,17 @@ export function internalSeamForProfile(
   let bestOverlap = 0
   for (const seam of workspace.seamAssignments) {
     if (!profileOverlapsInternalSeam(piece, profile, seam)) continue
-    const indices =
-      seam.curveIndicesA.length > 0
-        ? seam.curveIndicesA
-        : getInternalProfileCurveIndices(piece)
     const len = arcIntervalOverlapLength(
-      internalPathArcInterval(piece, profileNotchRange(profile)),
-      internalPathArcInterval(piece, seam.notchRangeA ?? null, indices)
+      internalPathArcInterval(
+        piece,
+        profileNotchRange(profile),
+        getProfileAssignmentInternalCurveIndices(piece, profile)
+      ),
+      internalPathArcInterval(
+        piece,
+        seam.notchRangeA ?? null,
+        getInternalSeamAssignmentCurveIndices(piece, seam)
+      )
     )
     if (len > bestOverlap) {
       bestOverlap = len

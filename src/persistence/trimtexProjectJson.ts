@@ -13,6 +13,7 @@ import type {
   ProfileAssignment,
 } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS } from '../types/model'
+import { normalizeInternalSeamAssignmentCurveIndices } from '../geometry/internalSeamAssignment'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
 import {
@@ -429,13 +430,19 @@ function normalizeProfileAssignments(raw: unknown, pieces: PatternPiece[]): Prof
 
 export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
   const pieces = Array.isArray(w.pieces) ? w.pieces.map((p) => normalizePiece(p as PatternPiece)) : []
+  const pieceById = new Map(pieces.map((p) => [p.id, p]))
   const view = isViewState(w.view) ? w.view : { zoom: 1, panX: 0, panY: 0 }
+  const seamAssignments = normalizeSeamAssignments(w.seamAssignments).map((a) => {
+    if (!a.isInternalSingle) return a
+    const piece = pieceById.get(a.pieceIdA)
+    return piece ? normalizeInternalSeamAssignmentCurveIndices(piece, a) : a
+  })
   return {
     id: typeof w.id === 'string' ? w.id : 'ws1',
     name: typeof w.name === 'string' ? w.name : 'Arbeitsfläche',
     pieces,
     view,
-    seamAssignments: normalizeSeamAssignments(w.seamAssignments),
+    seamAssignments,
     autoAdjustSeamAssignmentCorners:
       (w as { autoAdjustSeamAssignmentCorners?: unknown }).autoAdjustSeamAssignmentCorners === false ? false : true,
     notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes, pieces),

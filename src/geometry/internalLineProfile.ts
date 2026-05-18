@@ -19,6 +19,22 @@ export function getInternalProfileCurveIndices(piece: PatternPiece): number[] {
   return piece.internalLines.map((_, i) => i)
 }
 
+/** Ein einzelnes Segment in `internalLines` (ein Eintrag = eine Linie Punkt→Punkt). */
+export function getSingleInternalLineCurveIndices(curveIndex: number): number[] {
+  return curveIndex >= 0 ? [curveIndex] : []
+}
+
+/** Curve-Indices für ein Profil auf interner Linie (genau ein Segment). */
+export function getProfileAssignmentInternalCurveIndices(
+  piece: PatternPiece,
+  pa: ProfileAssignment
+): number[] {
+  if (!pa.onInternalLine) return []
+  const ci = pa.edgeIndex
+  if (ci < 0 || ci >= piece.internalLines.length) return []
+  return [ci]
+}
+
 export function getNotchesOnInternalProfilePath(
   piece: PatternPiece,
   curveIndices: number[],
@@ -152,7 +168,7 @@ export function profileAssignmentLengthMm(piece: PatternPiece, pa: ProfileAssign
       ? { startNotchId: pa.startNotchId, endNotchId: pa.endNotchId }
       : null
   if (pa.onInternalLine) {
-    return internalProfileEdgeTotalLength(piece, getInternalProfileCurveIndices(piece), range)
+    return internalProfileEdgeTotalLength(piece, getProfileAssignmentInternalCurveIndices(piece, pa), range)
   }
   const edges = enumerateEdges(piece)
   const edge = edges.find((e) => e.edgeIndex === pa.edgeIndex)
@@ -170,7 +186,11 @@ export function getProfileAssignmentDisplayCurves(
       : null
 
   if (pa.onInternalLine) {
-    return getInternalProfileCurvesInRange(piece, getInternalProfileCurveIndices(piece), range)
+    return getInternalProfileCurvesInRange(
+      piece,
+      getProfileAssignmentInternalCurveIndices(piece, pa),
+      range
+    )
   }
 
   const masterK = getCurvesForSeamEdge(piece)

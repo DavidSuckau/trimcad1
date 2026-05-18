@@ -1,11 +1,11 @@
-import type { Curve, PatternPiece, Point, SeamAssignment } from '../types/model'
+import type { Curve, PatternPiece, Point, ProfileAssignment, SeamAssignment } from '../types/model'
 import { curveSegmentArcLength } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import {
   deriveInternalNotchRoleRangeAtArcLength,
   deriveInternalNotchRoleRangeOnPath,
-  getInternalProfileCurveIndices,
   getInternalProfileCurvesInRange,
+  getSingleInternalLineCurveIndices,
   internalProfileEdgeTotalLength,
 } from './internalLineProfile'
 import type { NotchBoundaryRange } from './seamUtils'
@@ -18,6 +18,26 @@ export function isPairSeamAssignment(a: SeamAssignment): boolean {
   return !isInternalSeamAssignment(a)
 }
 
+/** Genau ein Segment in `internalLines` für diese Zuordnung. */
+export function getInternalSeamAssignmentCurveIndices(
+  piece: PatternPiece,
+  assignment: SeamAssignment
+): number[] {
+  if (!isInternalSeamAssignment(assignment)) return []
+  const clicked = assignment.clickedCurveA
+  if (assignment.curveIndicesA.length === 1) {
+    return assignment.curveIndicesA
+  }
+  if (assignment.curveIndicesA.length > 1 && clicked >= 0 && clicked < piece.internalLines.length) {
+    return [clicked]
+  }
+  if (clicked >= 0 && clicked < piece.internalLines.length) {
+    return [clicked]
+  }
+  const first = assignment.curveIndicesA[0]
+  return first != null && first >= 0 ? [first] : []
+}
+
 export function getInternalSeamAssignmentCurves(
   piece: PatternPiece,
   assignment: SeamAssignment
@@ -27,10 +47,7 @@ export function getInternalSeamAssignmentCurves(
     assignment.notchRangeA?.startNotchId || assignment.notchRangeA?.endNotchId
       ? assignment.notchRangeA
       : null
-  const indices =
-    assignment.curveIndicesA.length > 0
-      ? assignment.curveIndicesA
-      : getInternalProfileCurveIndices(piece)
+  const indices = getInternalSeamAssignmentCurveIndices(piece, assignment)
   return getInternalProfileCurvesInRange(piece, indices, range)
 }
 
@@ -40,10 +57,7 @@ export function internalSeamAssignmentLengthMm(
 ): number {
   if (!isInternalSeamAssignment(assignment)) return 0
   const range = assignment.notchRangeA ?? null
-  const indices =
-    assignment.curveIndicesA.length > 0
-      ? assignment.curveIndicesA
-      : getInternalProfileCurveIndices(piece)
+  const indices = getInternalSeamAssignmentCurveIndices(piece, assignment)
   return internalProfileEdgeTotalLength(piece, indices, range)
 }
 
@@ -56,11 +70,59 @@ export function hitInternalLineForSeamAssignment(
   const nearest = nearestCurveIndexAndPoint(local, piece.internalLines)
   if (!nearest || nearest.distance >= hitMm) return null
   return {
-    curveIndices: getInternalProfileCurveIndices(piece),
+    curveIndices: getSingleInternalLineCurveIndices(nearest.curveIndex),
     curveIndex: nearest.curveIndex,
     t: nearest.t ?? 0.5,
     distance: nearest.distance,
   }
+}
+
+export function remapProfileAssignmentsAfterInternalLineRemove(
+  assignments: ProfileAssignment[],
+  pieceId: string,
+  removedCurveIndex: number
+): ProfileAssignment[] {
+  return assignments
+    .filter((pa) => {
+      if (pa.pieceId !== pieceId || !pa.onInternalLine) return true
+      return pa.edgeIndex !== removedCurveIndex
+    })
+    .map((pa) => {
+      if (pa.pieceId !== pieceId || !pa.onInternalLine) return pa
+      if (pa.edgeIndex > removedCurveIndex) return { ...pa, edgeIndex: pa.edgeIndex - 1 }
+      return pa
+    })
+}
+
+export function remapInternalSeamAssignmentsAfterInternalLineRemove(
+  assignments: SeamAssignment[],
+  pieceId: string,
+  removedCurveIndex: number
+): SeamAssignment[] {
+  return assignments.flatMap((a) => {
+    if (!isInternalSeamAssignment(a) || a.pieceIdA !== pieceId) return [a]
+    const ci = a.clickedCurveA
+    if (ci === removedCurveIndex) return []
+    const newCi = ci > removedCurveIndex ? ci - 1 : ci
+    return [{ ...a, curveIndicesA: [newCi], clickedCurveA: newCi }]
+  })
+}
+
+export function normalizeInternalSeamAssignmentCurveIndices(
+  piece: PatternPiece,
+  assignment: SeamAssignment
+): SeamAssignment {
+  if (!isInternalSeamAssignment(assignment)) return assignment
+  const indices = getInternalSeamAssignmentCurveIndices(piece, assignment)
+  const ci = indices[0] ?? assignment.clickedCurveA
+  if (
+    assignment.curveIndicesA.length === indices.length &&
+    assignment.curveIndicesA[0] === ci &&
+    assignment.clickedCurveA === ci
+  ) {
+    return assignment
+  }
+  return { ...assignment, curveIndicesA: indices, clickedCurveA: ci }
 }
 
 export function deriveInternalSeamNotchRangeAtClick(

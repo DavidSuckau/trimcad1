@@ -125,7 +125,7 @@ export function ProfileAssignmentDialog() {
       >
         <h3 id="profile-dialog-title" className="nahtzugabe-dialog-title">
           {assignment.onInternalLine
-            ? 'Profil – interne Linie'
+            ? `Profil – interne Linie ${assignment.edgeIndex + 1}`
             : `Profil – Kante ${assignment.edgeIndex + 1}`}
         </h3>
 

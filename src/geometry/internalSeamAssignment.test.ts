@@ -63,6 +63,7 @@ describe('internalSeamAssignment', () => {
       clickedCurveB: 0,
       isInternalSingle: true,
     }).length).toBeGreaterThan(0)
+    expect(hit!.curveIndices).toEqual([0])
     expect(internalSeamAssignmentLengthMm(p, {
       id: 's1',
       pieceIdA: 'p1',
@@ -72,7 +73,17 @@ describe('internalSeamAssignment', () => {
       curveIndicesB: [],
       clickedCurveB: 0,
       isInternalSingle: true,
-    })).toBeCloseTo(150, 0)
+    })).toBeCloseTo(100, 0)
+    expect(internalSeamAssignmentLengthMm(p, {
+      id: 's2',
+      pieceIdA: 'p1',
+      curveIndicesA: [0, 1],
+      clickedCurveA: 1,
+      pieceIdB: 'p1',
+      curveIndicesB: [],
+      clickedCurveB: 0,
+      isInternalSingle: true,
+    })).toBeCloseTo(50, 0)
   })
 
   it('appears in Nähplan as internal line row', () => {
