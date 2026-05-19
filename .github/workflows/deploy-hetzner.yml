@@ -12,25 +12,42 @@ concurrency:
   group: deploy-hetzner-production
   cancel-in-progress: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
+      - name: Prüfen ob Hetzner-Secrets gesetzt sind
+        id: hetzner_secrets
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          if [ -z "$HETZNER_SSH_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::HETZNER_SSH_KEY fehlt in den Repository-Secrets – Hetzner-Deploy wird übersprungen."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build production bundle for root domain
+        if: steps.hetzner_secrets.outputs.configured == 'true'
         run: |
           npm ci
           VITE_APP_BASE=/ npm run build
           tar -czf dist.tar.gz -C dist .
 
       - name: Upload bundle to server
+        if: steps.hetzner_secrets.outputs.configured == 'true'
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.HETZNER_HOST }}
@@ -41,6 +58,7 @@ jobs:
           target: /tmp
 
       - name: Extract bundle on server
+        if: steps.hetzner_secrets.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.HETZNER_HOST }}
