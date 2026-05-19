@@ -1,9 +1,8 @@
 name: Deploy to Hetzner
 
+# Nur manuell – Push deployt ausschließlich über deploy.yml (GitHub Pages).
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
