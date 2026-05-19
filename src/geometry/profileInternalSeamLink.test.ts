@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { Curve, PatternPiece, ProfileAssignment, SeamAssignment, Workspace } from '../types/model'
 import {
   arcIntervalsOverlap,
-  internalPathArcInterval,
   internalSeamForProfile,
   profileOverlapsInternalSeam,
   profilesForInternalSeam,
@@ -27,7 +26,7 @@ function pieceWithInternalLine(id: string): PatternPiece {
         type: 'single',
         depth: 4,
         width: 6,
-        internalCurveIndex: 0,
+        internalLineIndex: 0,
         internalSNormalized: 0.25,
       },
       {
@@ -37,7 +36,7 @@ function pieceWithInternalLine(id: string): PatternPiece {
         type: 'single',
         depth: 4,
         width: 6,
-        internalCurveIndex: 0,
+        internalLineIndex: 0,
         internalSNormalized: 0.75,
       },
     ],

@@ -132,6 +132,7 @@ describe('buildNaehplanRows', () => {
       name: 'Test',
       pieces: [p1],
       view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [],
       profileAssignments: [pa],
     }
     const rows = buildProfilnahtRows(ws)
