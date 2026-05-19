@@ -768,4 +768,106 @@ EOF
     const with0 = importDxfFromString(dxf, { extraCutLayers: parseExtraCutLayers('0') })
     expect(with0.pieces.length).toBe(1)
   })
+
+  it('ordnet innere Kontur dem äußeren Teil als interne Linie zu (kein zweites Teil)', () => {
+    const outer = closedRectPolylineOffset('CUT', 0, 0)
+    const inner = `0
+POLYLINE
+8
+CUT
+66
+1
+70
+1
+0
+VERTEX
+8
+CUT
+10
+2
+20
+2
+0
+VERTEX
+8
+CUT
+10
+8
+20
+2
+0
+VERTEX
+8
+CUT
+10
+8
+20
+8
+0
+VERTEX
+8
+CUT
+10
+2
+20
+8
+0
+SEQEND
+`
+    const dxf = DXF_HEADER + outer + inner + DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].internalLines.length).toBeGreaterThan(0)
+    expect(r.warnings?.some((w) => /innere Kontur/i.test(w))).toBe(true)
+  })
+
+  it('importiert Kreis auf Layer 8 innerhalb der Schnittkontur als internen Kreis', () => {
+    const dxf =
+      DXF_HEADER +
+      closedRectPolyline('CUT') +
+      `0
+CIRCLE
+8
+8
+10
+5
+20
+5
+40
+1.5
+` +
+      DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].internalCircles.length).toBe(1)
+    expect(r.pieces[0].internalCircles[0].radius).toBeCloseTo(1.5, 3)
+  })
+
+  it('liest ASTM POINT-Kerbe mit Tiefe/Breite/Winkel', () => {
+    const dxf =
+      DXF_HEADER +
+      closedRectPolyline('CUT') +
+      `0
+POINT
+8
+4
+10
+5
+20
+0
+30
+4
+39
+6
+50
+90
+` +
+      DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].notches.length).toBeGreaterThanOrEqual(1)
+    const n = r.pieces[0].notches.find((x) => x.depth >= 3.5)
+    expect(n).toBeDefined()
+    expect(n?.width).toBeGreaterThanOrEqual(5)
+  })
 })

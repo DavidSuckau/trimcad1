@@ -19,23 +19,20 @@ export function isPairSeamAssignment(a: SeamAssignment): boolean {
 }
 
 /** Genau ein Segment in `internalLines` für diese Zuordnung. */
+/** Genau ein `internalLines`-Segment — keine Polylinie über mehrere Einträge. */
 export function getInternalSeamAssignmentCurveIndices(
   piece: PatternPiece,
   assignment: SeamAssignment
 ): number[] {
   if (!isInternalSeamAssignment(assignment)) return []
   const clicked = assignment.clickedCurveA
-  if (assignment.curveIndicesA.length === 1) {
-    return assignment.curveIndicesA
-  }
-  if (assignment.curveIndicesA.length > 1 && clicked >= 0 && clicked < piece.internalLines.length) {
-    return [clicked]
-  }
   if (clicked >= 0 && clicked < piece.internalLines.length) {
-    return [clicked]
+    return getSingleInternalLineCurveIndices(clicked)
   }
   const first = assignment.curveIndicesA[0]
-  return first != null && first >= 0 ? [first] : []
+  return first != null && first >= 0 && first < piece.internalLines.length
+    ? getSingleInternalLineCurveIndices(first)
+    : []
 }
 
 export function getInternalSeamAssignmentCurves(
@@ -127,17 +124,12 @@ export function normalizeInternalSeamAssignmentCurveIndices(
 
 export function deriveInternalSeamNotchRangeAtClick(
   piece: PatternPiece,
-  curveIndices: number[],
   curveIndex: number,
   t: number
 ): NotchBoundaryRange | undefined {
-  const lengths = curveIndices.map((ci) => {
-    const seg = piece.internalLines[ci]
-    return seg ? curveSegmentArcLength(seg, 0, 1) : 0
-  })
-  const prefix = lengths.slice(0, curveIndices.indexOf(curveIndex)).reduce((a, b) => a + b, 0)
+  const curveIndices = getSingleInternalLineCurveIndices(curveIndex)
   const seg = piece.internalLines[curveIndex]
-  const arcOnPath = prefix + (seg ? curveSegmentArcLength(seg, 0, t) : 0)
+  const arcOnPath = seg ? curveSegmentArcLength(seg, 0, t) : 0
   return (
     deriveInternalNotchRoleRangeAtArcLength(piece, curveIndices, arcOnPath) ??
     deriveInternalNotchRoleRangeOnPath(piece, curveIndices) ??

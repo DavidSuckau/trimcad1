@@ -1,7 +1,6 @@
 import type { PatternPiece, ProfileAssignment, SeamAssignment, Workspace } from '../types/model'
 import { isInternalSeamAssignment } from './internalSeamAssignment'
 import {
-  getInternalProfileCurveIndices,
   getNotchesOnInternalProfilePath,
   getProfileAssignmentInternalCurveIndices,
   internalProfileEdgeTotalLength,
@@ -22,7 +21,8 @@ export function internalPathArcInterval(
   range?: NotchBoundaryRange | null,
   curveIndices?: number[]
 ): InternalPathArcInterval {
-  const indices = curveIndices ?? getInternalProfileCurveIndices(piece)
+  if (!curveIndices || curveIndices.length === 0) return { startArc: 0, endArc: 0 }
+  const indices = curveIndices
   const total = internalProfileEdgeTotalLength(piece, indices, null)
   if (total <= 0) return { startArc: 0, endArc: 0 }
   if (!range?.startNotchId && !range?.endNotchId) {
@@ -61,6 +61,16 @@ export function profileOverlapsInternalSeam(
   if (!profile.onInternalLine || !isInternalSeamAssignment(seam)) return false
   if (seam.pieceIdA !== profile.pieceId) return false
   if (piece.internalLines.length === 0) return false
+
+  const profileIndices = getProfileAssignmentInternalCurveIndices(piece, profile)
+  const seamIndices = getInternalSeamAssignmentCurveIndices(piece, seam)
+  if (
+    profileIndices.length !== 1 ||
+    seamIndices.length !== 1 ||
+    profileIndices[0] !== seamIndices[0]
+  ) {
+    return false
+  }
 
   const profileInterval = internalPathArcInterval(
     piece,

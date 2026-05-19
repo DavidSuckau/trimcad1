@@ -178,10 +178,18 @@ export function workspaceExtents(workspace: Workspace, scale: number): { minX: n
 export function dxfPolyline(layer: string, points: Pt[], closed: boolean): string {
   if (points.length < 2) return ''
   let pts = [...points]
-  if (closed) pts = closeContour(pts)
+  if (closed) {
+    // Geschlossen per Flag 70=1 ohne doppelten Schlusspunkt (Gerber/AccuMark).
+    const first = pts[0]
+    const last = pts[pts.length - 1]
+    if (isDuplicate(first, last) && pts.length > 2) {
+      pts = pts.slice(0, -1)
+    }
+  }
 
   const lines: string[] = []
-  lines.push('0' + EOL + 'POLYLINE' + EOL + '8' + EOL + layer + EOL + '66' + EOL + '1' + EOL + '70' + EOL + '0' + EOL)
+  const polyClosedFlag = closed ? '1' : '0'
+  lines.push('0' + EOL + 'POLYLINE' + EOL + '8' + EOL + layer + EOL + '66' + EOL + '1' + EOL + '70' + EOL + polyClosedFlag + EOL)
   for (const p of pts) {
     lines.push('0' + EOL + 'VERTEX' + EOL + '8' + EOL + layer + EOL + '10' + EOL + fmt(p.x) + EOL + '20' + EOL + fmt(p.y) + EOL)
   }
@@ -203,8 +211,9 @@ export function dxfAstmNotchPoint(
   depthFileUnits: number,
   widthFileUnits: number,
   angleDegFromPositiveX: number,
+  layer = '4',
 ): string {
-  return '0' + EOL + 'POINT' + EOL + '8' + EOL + '4' + EOL
+  return '0' + EOL + 'POINT' + EOL + '8' + EOL + layer + EOL
     + '10' + EOL + fmt(x) + EOL + '20' + EOL + fmt(y) + EOL
     + '30' + EOL + fmt(depthFileUnits) + EOL
     + '39' + EOL + fmt(widthFileUnits) + EOL

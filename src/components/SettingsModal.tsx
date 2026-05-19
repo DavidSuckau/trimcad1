@@ -244,7 +244,7 @@ export function SettingsModal() {
               <h3 style={{ margin: '20px 0 12px', fontSize: '14px' }}>Darstellung</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
                 <label style={{ fontSize: '13px', display: 'block', marginBottom: '6px' }}>
-                  Textgröße (Oberfläche und Beschriftungen auf der Arbeitsfläche)
+                  Textgröße (Beschriftungen auf den Teilen)
                 </label>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <input
@@ -262,7 +262,7 @@ export function SettingsModal() {
                   </span>
                 </div>
                 <p style={{ fontSize: '11px', color: '#999', margin: '6px 0 0' }}>
-                  Menüs, Seitenleiste und Teilnamen, Maße sowie Nahtbeschriftungen skalieren gemeinsam. Wird mit dem Projekt gespeichert.
+                  Gilt für Teilnamen, Profil-, Naht- und Maßbeschriftungen auf der Arbeitsfläche – nicht für Menüs und Seitenleiste. Wird mit dem Projekt gespeichert.
                 </p>
               </div>
 

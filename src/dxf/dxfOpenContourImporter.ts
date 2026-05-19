@@ -16,11 +16,11 @@ import {
 } from './dxfCollectCutDrafts'
 import type { ImportDxfOptions, ImportDxfResult } from './dxfImporter'
 import {
-  extractStandaloneNotches,
   extractStandaloneDrills,
   extractStandaloneGrain,
 } from './dxfImporter'
-import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
+import { enrichPiecesFromParsedDxf, type PieceCutRing } from './dxfImportEnrichment'
+import { draftInternalsToPieceFields } from './dxfCollectCutDrafts'
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 12)
@@ -126,6 +126,7 @@ export function importDxfOpenContoursFromString(
 
     const pieces: PatternPiece[] = []
     const cutBounds: BBox[] = []
+    const cutRings: PieceCutRing[] = []
 
     for (const draft of openDrafts) {
       const vertices = draft.cutVertices
@@ -135,6 +136,7 @@ export function importDxfOpenContoursFromString(
       const b = boundsOfDxfPoints(vertices)
       const id = generateId()
       const number = String(pieces.length + 1).padStart(3, '0')
+      const { internalLines, internalCircles } = draftInternalsToPieceFields(draft)
       const piece: PatternPiece = {
         id,
         number,
@@ -145,8 +147,8 @@ export function importDxfOpenContoursFromString(
         notches: [...draft.notchesFromLayers],
         drills: [...draft.drillsFromLayers],
         grainLine: draft.grainLine,
-        internalLines: [],
-        internalCircles: [],
+        internalLines,
+        internalCircles,
         layer: 'CUT_VORLAGE',
         transform: { x: 0, y: 0, rotation: 0, mirrored: false },
         softVertices: [],
@@ -155,6 +157,7 @@ export function importDxfOpenContoursFromString(
       }
       pieces.push(piece)
       cutBounds.push(b)
+      cutRings.push(null)
     }
 
     if (pieces.length === 0) {
@@ -165,16 +168,11 @@ export function importDxfOpenContoursFromString(
       }
     }
 
-    const standaloneNotches = extractStandaloneNotches(parsed.entities, cutBounds, scale)
-    const standaloneDrills = extractStandaloneDrills(parsed.entities, cutBounds, scale)
-    const standaloneGrain = extractStandaloneGrain(parsed.entities, cutBounds, scale)
+    enrichPiecesFromParsedDxf(pieces, cutRings, cutBounds, parsed, scale, extraCutLayers)
 
-    for (const [idx, notchList] of standaloneNotches) {
-      if (pieces[idx]) {
-        const merged = [...(pieces[idx].notches ?? []), ...notchList]
-        pieces[idx].notches = resyncNotchesAfterCutLineRebuilt(merged, pieces[idx].cutLine, pieces[idx].cutLine)
-      }
-    }
+    const standaloneDrills = extractStandaloneDrills(parsed.entities, cutBounds, cutRings, scale)
+    const standaloneGrain = extractStandaloneGrain(parsed.entities, cutBounds, cutRings, scale)
+
     for (const [idx, drillList] of standaloneDrills) {
       if (pieces[idx]) {
         pieces[idx].drills = [...pieces[idx].drills, ...drillList]

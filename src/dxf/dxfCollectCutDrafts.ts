@@ -2,7 +2,8 @@
  * Sammelt und dedupliziert Schnitt-/Naht-Entwürfe aus geparstem DXF (gemeinsam für Standard- und Vorlagen-Import).
  */
 
-import type { Notch, Drill, Line, Point, Curve } from '../types/model'
+import type { Notch, Drill, Line, Point, Curve, InternalCircle } from '../types/model'
+import { isPointInPolygon } from '../geometry/pointInPolygon'
 import type { DxfEntity, DxfPoint, DxfBlock } from './dxfParser'
 import { dist } from './dxfShared'
 import {
@@ -13,6 +14,8 @@ import {
   isDrillLayer,
   isGrainLayer,
   isExcludedLayerFallback,
+  isInternalLayer,
+  isAuxDxfLayer,
 } from './dxfImportLayers'
 
 export const DUPLICATE_THRESHOLD_DXF = 0.01
@@ -39,7 +42,7 @@ export function boundsOfDxfPoints(pts: DxfPoint[]): BBox {
   return { minX, minY, maxX, maxY }
 }
 
-function polygonArea(pts: DxfPoint[]): number {
+export function polygonArea(pts: DxfPoint[]): number {
   if (pts.length < 3) return 0
   let a = 0
   for (let i = 0; i < pts.length; i++) {
@@ -99,6 +102,9 @@ export type PieceDraft = {
   drillsFromLayers: Drill[]
   grainLine: Line | null
   importSource: 'block' | 'modelspace' | 'fallback'
+  /** Offene/geschlossene interne Polylines (Layer 8 o. ä.), noch nicht als Curves. */
+  internalPolylines?: Array<{ vertices: DxfPoint[]; closed: boolean }>
+  internalCircles?: Array<{ center: DxfPoint; radius: number }>
 }
 
 const CONTOUR_HASH_DECIMALS = 2
@@ -181,7 +187,7 @@ function dedupePieceDraftsByCutContour(drafts: PieceDraft[]): { drafts: PieceDra
   return { drafts: out, removed }
 }
 
-function closedRingPointsRaw(vertices: DxfPoint[], closed: boolean): DxfPoint[] | null {
+export function closedRingPointsRaw(vertices: DxfPoint[], closed: boolean): DxfPoint[] | null {
   if (vertices.length < 3) return null
   const pts: DxfPoint[] = []
   for (const p of vertices) {
@@ -215,7 +221,7 @@ function bboxIntersectionAreaMm2(a: BBox, b: BBox): number {
   return Math.max(0, ix1 - ix0) * Math.max(0, iy1 - iy0)
 }
 
-function polygonCentroidClosed(pts: DxfPoint[]): DxfPoint | null {
+export function polygonCentroidClosed(pts: DxfPoint[]): DxfPoint | null {
   const n = pts.length
   if (n < 3) return null
   let cx = 0
@@ -354,9 +360,15 @@ function extractNotchesFromBlock(
       const n = lineToNotchDxf(p1.x, p1.y, p2.x, p2.y, e.layer, 1)
       if (n) notches.push(n)
     }
-    if (e.type === 'POINT' && isNotchLineLayer(e.layer)) {
+    if (e.type === 'POINT' && isNotchLineLayer(e.layer) && !isAuxDxfLayer(e.layer)) {
       const p = transformDxfInsertPoint({ x: e.x, y: e.y }, insert, unitScale)
-      notches.push(pointToNotchDxf(p.x, p.y, e.layer, 1))
+      notches.push(
+        pointToNotchDxf(p.x, p.y, e.layer, 1, {
+          depth: e.notchDepth,
+          width: e.notchWidth,
+          angle: e.notchAngle,
+        }),
+      )
     }
   }
   return notches
@@ -411,16 +423,146 @@ function extractGrainFromBlock(
   return best
 }
 
-export function pointToNotchDxf(px: number, py: number, layer: string, coordScale: number): Notch {
+export function pointToNotchDxf(
+  px: number,
+  py: number,
+  layer: string,
+  coordScale: number,
+  attrs?: { depth?: number; width?: number; angle?: number },
+): Notch {
   const type = notchTypeForLayer(layer)
+  const depthRaw = attrs?.depth
+  const depth =
+    depthRaw != null && Number.isFinite(depthRaw) && depthRaw > 0
+      ? depthRaw * coordScale
+      : 4
+  const width =
+    attrs?.width != null && Number.isFinite(attrs.width) && attrs.width > 0
+      ? attrs.width * coordScale
+      : 6
+  const angle =
+    attrs?.angle != null && Number.isFinite(attrs.angle) ? attrs.angle : 90
   return {
     id: generateId(),
     position: { x: px * coordScale, y: py * coordScale },
-    angle: 90,
+    angle,
     type,
-    depth: 4,
-    width: 6,
+    depth: Math.max(1, depth),
+    width: Math.max(1, width),
   }
+}
+
+const NESTED_MAX_AREA_RATIO = 0.92
+const NESTED_MIN_PARENT_AREA_RATIO = 1.08
+const NESTED_VERTEX_INSIDE_FRAC = 0.88
+
+function isDraftInsideParent(inner: PieceDraft, outer: PieceDraft): boolean {
+  const innerRing = closedRingPointsRaw(inner.cutVertices, inner.closed)
+  const outerRing = closedRingPointsRaw(outer.cutVertices, outer.closed)
+  if (!innerRing || !outerRing || innerRing.length < 3 || outerRing.length < 3) return false
+
+  const areaInner = polygonArea(innerRing)
+  const areaOuter = polygonArea(outerRing)
+  if (areaInner < 0.5 || areaOuter < areaInner * NESTED_MIN_PARENT_AREA_RATIO) return false
+  if (areaInner >= areaOuter * NESTED_MAX_AREA_RATIO) return false
+
+  const centroid = polygonCentroidClosed(innerRing)
+  if (!centroid || !isPointInPolygon(centroid, outerRing)) return false
+
+  let insideVerts = 0
+  for (const v of innerRing) {
+    if (isPointInPolygon(v, outerRing)) insideVerts++
+  }
+  return insideVerts / innerRing.length >= NESTED_VERTEX_INSIDE_FRAC
+}
+
+function mergeInnerDraftIntoParent(parent: PieceDraft, inner: PieceDraft): void {
+  if (!parent.internalPolylines) parent.internalPolylines = []
+  if (!parent.internalCircles) parent.internalCircles = []
+  parent.internalPolylines.push({
+    vertices: inner.cutVertices.map((p) => ({ x: p.x, y: p.y })),
+    closed: inner.closed || true,
+  })
+  for (const pl of inner.internalPolylines ?? []) {
+    parent.internalPolylines.push(pl)
+  }
+  for (const c of inner.internalCircles ?? []) {
+    parent.internalCircles.push(c)
+  }
+  parent.notchesFromLayers.push(...inner.notchesFromLayers)
+  parent.drillsFromLayers.push(...inner.drillsFromLayers)
+}
+
+/** Innere geschlossene Konturen werden dem äußeren Teil als interne Linien zugeordnet. */
+export function absorbNestedPieceDrafts(drafts: PieceDraft[]): { drafts: PieceDraft[]; absorbed: number } {
+  if (drafts.length < 2) return { drafts, absorbed: 0 }
+
+  const areas = drafts.map((d) => {
+    const r = closedRingPointsRaw(d.cutVertices, d.closed)
+    return r ? polygonArea(r) : 0
+  })
+  const absorbedIdx = new Set<number>()
+
+  for (let j = 0; j < drafts.length; j++) {
+    let bestParent = -1
+    let bestParentArea = Infinity
+    for (let i = 0; i < drafts.length; i++) {
+      if (i === j || absorbedIdx.has(i)) continue
+      if (areas[i] <= areas[j]) continue
+      if (!isDraftInsideParent(drafts[j], drafts[i])) continue
+      if (areas[i] < bestParentArea) {
+        bestParentArea = areas[i]
+        bestParent = i
+      }
+    }
+    if (bestParent >= 0) {
+      mergeInnerDraftIntoParent(drafts[bestParent], drafts[j])
+      absorbedIdx.add(j)
+    }
+  }
+
+  if (absorbedIdx.size === 0) return { drafts, absorbed: 0 }
+  return { drafts: drafts.filter((_, i) => !absorbedIdx.has(i)), absorbed: absorbedIdx.size }
+}
+
+function collectInternalsInBlockForBounds(
+  blockEntities: DxfEntity[],
+  insert: { x: number; y: number; scaleX: number; scaleY: number; rotation: number },
+  unitScale: number,
+  cutBounds: BBox,
+): {
+  polylines: Array<{ vertices: DxfPoint[]; closed: boolean }>
+  circles: Array<{ center: DxfPoint; radius: number }>
+} {
+  const polylines: Array<{ vertices: DxfPoint[]; closed: boolean }> = []
+  const circles: Array<{ center: DxfPoint; radius: number }> = []
+
+  for (const be of blockEntities) {
+    if (isAuxDxfLayer(be.layer)) continue
+    if (be.type === 'CIRCLE' && isInternalLayer(be.layer)) {
+      const c = transformDxfInsertPoint({ x: be.cx, y: be.cy }, insert, unitScale)
+      const r = be.radius * Math.abs(insert.scaleX) * unitScale
+      if (
+        c.x >= cutBounds.minX &&
+        c.x <= cutBounds.maxX &&
+        c.y >= cutBounds.minY &&
+        c.y <= cutBounds.maxY
+      ) {
+        circles.push({ center: c, radius: Math.max(0.1, r) })
+      }
+      continue
+    }
+    const pl = polylineFromEntity(be)
+    if (!pl || !isInternalLayer(pl.layer)) continue
+    const pts = pl.vertices.map((p) => transformDxfInsertPoint(p, insert, unitScale) as DxfPoint)
+    if (pts.length < 2) continue
+    const mx = pts.reduce((s, p) => s + p.x, 0) / pts.length
+    const my = pts.reduce((s, p) => s + p.y, 0) / pts.length
+    if (mx >= cutBounds.minX && mx <= cutBounds.maxX && my >= cutBounds.minY && my <= cutBounds.maxY) {
+      polylines.push({ vertices: pts, closed: pl.closed })
+    }
+  }
+  return { polylines, circles }
 }
 
 function extractPieceDrafts(
@@ -459,6 +601,7 @@ function extractPieceDrafts(
       const cutB = boundsOfDxfPoints(cut.vertices)
       const seam = pickSeamForCut(cutB, seams)
       const grainLine = extractGrainFromBlock(blk.entities, e, unitScale, cutB)
+      const blockInternals = collectInternalsInBlockForBounds(blk.entities, e, unitScale, cutB)
       drafts.push({
         cutVertices: cut.vertices,
         closed: cut.closed,
@@ -468,6 +611,8 @@ function extractPieceDrafts(
         drillsFromLayers: [...drillsFromLayers],
         grainLine,
         importSource: 'block',
+        internalPolylines: blockInternals.polylines,
+        internalCircles: blockInternals.circles,
       })
     }
   }
@@ -559,6 +704,23 @@ function extractFallbackCutDrafts(
   return drafts
 }
 
+export function draftInternalsToPieceFields(draft: PieceDraft): {
+  internalLines: Curve[]
+  internalCircles: InternalCircle[]
+} {
+  const internalLines: Curve[] = []
+  for (const pl of draft.internalPolylines ?? []) {
+    if (pl.vertices.length < 2) continue
+    internalLines.push(...dxfVerticesToLineCurves(pl.vertices, pl.closed))
+  }
+  const internalCircles: InternalCircle[] = (draft.internalCircles ?? []).map((c) => ({
+    id: generateId(),
+    center: { x: c.center.x, y: c.center.y },
+    radius: Math.max(0.1, c.radius),
+  }))
+  return { internalLines, internalCircles }
+}
+
 export function dxfVerticesToLineCurves(vertices: DxfPoint[], closed: boolean): Curve[] {
   if (vertices.length < 2) return []
   const curves: Curve[] = []
@@ -610,6 +772,7 @@ export function collectDedupedPieceDrafts(
   usedFallback: boolean
   removedExactDupes: number
   removedNearDupes: number
+  absorbedNested: number
 } {
   let drafts = extractPieceDrafts(parsed, extraCutLayers, importScale)
   let usedFallback = false
@@ -621,10 +784,15 @@ export function collectDedupedPieceDrafts(
   drafts = dedupExact.drafts
   const dedupNear = dedupeNearDuplicatePieceDrafts(drafts)
   drafts = dedupNear.drafts
+
+  const nested = absorbNestedPieceDrafts(drafts)
+  drafts = nested.drafts
+
   return {
     drafts,
     usedFallback,
     removedExactDupes: dedupExact.removed,
     removedNearDupes: dedupNear.removed,
+    absorbedNested: nested.absorbed,
   }
 }

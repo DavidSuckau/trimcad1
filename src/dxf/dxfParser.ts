@@ -66,6 +66,12 @@ export type DxfPointEntity = {
   layer: string
   x: number
   y: number
+  /** ASTM Kerbe: Tiefe (Gruppe 30, mm in Datei-Einheiten). */
+  notchDepth?: number
+  /** ASTM Kerbe: Breite (Gruppe 39). */
+  notchWidth?: number
+  /** ASTM Kerbe: Winkel in Grad (Gruppe 50). */
+  notchAngle?: number
 }
 
 export type DxfEntity =
@@ -246,7 +252,14 @@ function parseEntitiesSection(
         const layer = getValue(slice, 8) ?? '0'
         const x = getNum(slice, 10) ?? 0
         const y = getNum(slice, 20) ?? 0
-        list.push({ type: 'POINT', layer, x, y })
+        const z30 = getNum(slice, 30)
+        const w39 = getNum(slice, 39)
+        const a50 = getNum(slice, 50)
+        const ent: DxfPointEntity = { type: 'POINT', layer, x, y }
+        if (z30 != null && Number.isFinite(z30)) ent.notchDepth = z30
+        if (w39 != null && Number.isFinite(w39)) ent.notchWidth = w39
+        if (a50 != null && Number.isFinite(a50)) ent.notchAngle = a50
+        list.push(ent)
         i = nextEntityIndex(groups, i)
         continue
       }
@@ -546,7 +559,14 @@ function parseEntitiesFromSlice(groups: Array<{ code: number; value: string }>):
         const layer = getValue(slice, 8) ?? '0'
         const x = getNum(slice, 10) ?? 0
         const y = getNum(slice, 20) ?? 0
-        list.push({ type: 'POINT', layer, x, y })
+        const z30 = getNum(slice, 30)
+        const w39 = getNum(slice, 39)
+        const a50 = getNum(slice, 50)
+        const ent: DxfPointEntity = { type: 'POINT', layer, x, y }
+        if (z30 != null && Number.isFinite(z30)) ent.notchDepth = z30
+        if (w39 != null && Number.isFinite(w39)) ent.notchWidth = w39
+        if (a50 != null && Number.isFinite(a50)) ent.notchAngle = a50
+        list.push(ent)
         i = nextEntityIndex(groups, i)
         continue
       }

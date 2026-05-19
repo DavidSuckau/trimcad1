@@ -28,7 +28,7 @@ describe('notchOnInternalLine', () => {
     const m = materializeNotchAnchorsOnInternalLine(raw, internalLines)!
     expect(isNotchOnInternalLine(m)).toBe(true)
     expect(m.sNormalized).toBeUndefined()
-    expect(m.internalSNormalized).toBeCloseTo(50 / 150, 3)
+    expect(m.internalSNormalized).toBeCloseTo(0.5, 3)
     const a = resolveNotchInternalLineAnchor(m, internalLines)!
     expect(a.curveIndex).toBe(0)
     expect(a.t).toBeCloseTo(0.5, 3)
@@ -89,8 +89,9 @@ describe('notchOnInternalLine', () => {
       layer: 'default',
       transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     }
-    expect(isInternalNotchSpacingValid(piece, 0, 0.17)).toBe(false)
+    expect(isInternalNotchSpacingValid(piece, 0, 0.12)).toBe(false)
     expect(isInternalNotchSpacingValid(piece, 0, 0.5)).toBe(true)
+    expect(isInternalNotchSpacingValid(piece, 1, 0.12)).toBe(true)
   })
 
   it('internal notches do not cut or anchor on cutLine', () => {

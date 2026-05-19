@@ -5,6 +5,7 @@ import {
   resolveNotchCutLineAnchor,
 } from '../geometry/notchOnCurve'
 import { isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
+import { getPieceGrainLine } from '../geometry/grainArrowLayout'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
@@ -23,8 +24,8 @@ import {
  * - BLOCK-Flag **70 = 64** (wie Gerber-Referenzdatei).
  * - Schnitt **Layer 1** + identische Kopie **Layer 84**; Naht **14** + Kopie **87**.
  * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
- * - Kerbe: **LINE Layer 4** (+ 7 + 5): Strich = eine Linie; **V / Doppel** = zwei Linien zur Spitze
- *   (wie `notchCutoutPoints`), optional **POINT Layer 4** mit 30/39/50 nur bei Strich-Kerbe.
+ * - Kerbe: **LINE Layer 4** (+ Duplikat **5**); **POINT Layer 4** (ggf. **82** bei V) mit 30/39/50.
+ *   **Layer 7** = Fadenlauf (LINE), nicht mehr für Kerben-Duplikate.
  * - Schnitt/Naht-POLYLINE: **glatte** `cutLine` / `seamLine` **ohne** Kerb-Vertices — sonst mappt Gerber
  *   V-Kerben nur auf die Außenkontur. Kerb-Geometrie nur über LINEs (4/7/5) + Hilfs-POINTs.
  *
@@ -42,13 +43,16 @@ const ASTM_LAYER = {
   DRILL: '13',
   SEW: '14',
   SEW_DUP: '87',
+  GRAIN: '7',
   TEXT: '15',
 } as const
 
-/** ASTM D6673: Notches (Slit / V-Notch) — AccuMark/DCU erwartet Kerben typischerweise hier. */
+/** ASTM D6673: Notches (Slit / V-Notch). */
 const ASTM_NOTCH_LAYER = '4'
-const GERBER_NOTCH_PRIMARY = '5'
-const GERBER_NOTCH_DUP = '7'
+/** Zusätzliche Kerben-LINES in manchen AccuMark-Exports (ohne Layer 7 — dort ist Grain). */
+const GERBER_NOTCH_ALT = '5'
+/** ASTM D6673: Check-Notch (V-förmig). */
+const ASTM_V_NOTCH_LAYER = '82'
 
 const NOTCH_DEPTH_MIN_MM = 2.54
 const NOTCH_DEPTH_MAX_MM = 10.16
@@ -147,11 +151,14 @@ function inwardNormalDegFromEdgeTowardInterior(a: Pt, b: Pt, polygonOpen: Pt[]):
   return dot1 >= dot2 ? (Math.atan2(ny1, nx1) * 180) / Math.PI : (Math.atan2(ny2, nx2) * 180) / Math.PI
 }
 
-/** Dieselbe Geometrie auf 4 / 7 / 5 (ASTM + Gerber-Beispiel). */
-function emitNotchLineTriple(x1: number, y1: number, x2: number, y2: number): string {
+/** Kerben-LINE auf ASTM Layer 4 + AccuMark-Duplikat Layer 5. */
+function emitNotchLinePair(x1: number, y1: number, x2: number, y2: number): string {
   return dxfLine(ASTM_NOTCH_LAYER, x1, y1, x2, y2)
-    + dxfLine(GERBER_NOTCH_DUP, x1, y1, x2, y2)
-    + dxfLine(GERBER_NOTCH_PRIMARY, x1, y1, x2, y2)
+    + dxfLine(GERBER_NOTCH_ALT, x1, y1, x2, y2)
+}
+
+function astmNotchPointLayerForType(type: Notch['type']): string {
+  return type === 'v' ? ASTM_V_NOTCH_LAYER : ASTM_NOTCH_LAYER
 }
 
 function emitGerberNotchPackLocal(
@@ -190,13 +197,25 @@ function emitGerberNotchPackLocal(
     const ty = geom.tip.y * fileScale
     if (![lx, ly, rx, ry, tx, ty].every(Number.isFinite)) return ''
 
+    const depthLeft = Math.hypot(tx - lx, ty - ly)
+    const depthRight = Math.hypot(tx - rx, ty - ry)
+    const angleLeftDeg = (Math.atan2(ty - ly, tx - lx) * 180) / Math.PI
+    const widthF = Math.max(0, widthMm * fileScale)
+    const notchLayer = astmNotchPointLayerForType(notch.type)
+
     const parts = [
-      emitNotchLineTriple(lx, ly, tx, ty),
-      emitNotchLineTriple(rx, ry, tx, ty),
+      emitNotchLinePair(lx, ly, tx, ty),
+      emitNotchLinePair(rx, ry, tx, ty),
+      dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, notchLayer),
+      dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, ASTM_NOTCH_LAYER),
       dxfPoint(ASTM_LAYER.POINT_AUX, lx, ly),
       dxfPoint(ASTM_LAYER.POINT_AUX, rx, ry),
       dxfPoint(ASTM_LAYER.POINT_AUX, tx, ty),
     ]
+    if (notch.type === 'double') {
+      const angleRightDeg = (Math.atan2(ty - ry, tx - rx) * 180) / Math.PI
+      parts.push(dxfAstmNotchPoint(rx, ry, depthRight, widthF, angleRightDeg, '81'))
+    }
     return parts.join('')
   }
 
@@ -235,7 +254,7 @@ function emitGerberNotchPackLocal(
   const widthF = Math.max(0, widthMm * fileScale)
 
   const parts = [
-    emitNotchLineTriple(x1, y1, x2, y2),
+    emitNotchLinePair(x1, y1, x2, y2),
     dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX),
     dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1),
     dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2),
@@ -294,6 +313,17 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     const r = drill.radius * fileScale
     if (![cx, cy, r].every(Number.isFinite)) continue
     out.push(dxfCircle(ASTM_LAYER.DRILL, cx, cy, r))
+  }
+
+  if (polygonOpen.length >= 3) {
+    const grain = getPieceGrainLine(piece)
+    const gx1 = grain.start.x * fileScale
+    const gy1 = grain.start.y * fileScale
+    const gx2 = grain.end.x * fileScale
+    const gy2 = grain.end.y * fileScale
+    if ([gx1, gy1, gx2, gy2].every(Number.isFinite)) {
+      out.push(dxfLine(ASTM_LAYER.GRAIN, gx1, gy1, gx2, gy2))
+    }
   }
 
   if (piece.internalLines.length > 0) {

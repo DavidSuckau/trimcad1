@@ -11,16 +11,21 @@ import {
   offsetCurvesInwardForSeam,
   SEAM_FROM_CUT_SIMPLIFY_IMPORT_MM,
 } from '../geometry/offset'
-import { isNotchLineLayer, isDrillLayer, isGrainLayer } from './dxfImportLayers'
+import { isDrillLayer, isGrainLayer } from './dxfImportLayers'
 import {
   collectDedupedPieceDrafts,
   dxfVertexRingClosed,
   dxfVerticesToLineCurves,
-  lineToNotchDxf,
-  pointToNotchDxf,
+  closedRingPointsRaw,
+  draftInternalsToPieceFields,
   NEAR_DUPE_REL_TOL,
   type BBox,
 } from './dxfCollectCutDrafts'
+import {
+  assignDxfPointToPiece,
+  enrichPiecesFromParsedDxf,
+  type PieceCutRing,
+} from './dxfImportEnrichment'
 import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { isBinaryDxf, scanUnsupportedEntityHints } from './dxfBinaryHints'
@@ -75,79 +80,28 @@ function estimateSeamAllowanceMm(seamPts: DxfPoint[], cutCurves: Curve[]): numbe
   return d0 != null && d0 > 0.05 && d0 < 500 ? d0 : null
 }
 
-export function assignToPieceForDxfImport(mx: number, my: number, cutBounds: BBox[]): number {
-  let bestPiece = -1
-  let bestDist = Infinity
-  for (let i = 0; i < cutBounds.length; i++) {
-    const b = cutBounds[i]
-    if (mx >= b.minX - 50 && mx <= b.maxX + 50 && my >= b.minY - 50 && my <= b.maxY + 50) {
-      const d = Math.max(0, b.minX - mx, mx - b.maxX, b.minY - my, my - b.maxY)
-      if (d < bestDist) {
-        bestDist = d
-        bestPiece = i
-      }
-    }
-  }
-  return bestPiece
-}
-
-export function extractStandaloneNotches(
-  entities: DxfEntity[],
+/** @deprecated Nutze {@link assignDxfPointToPiece} mit Schnitt-Polygonen. */
+export function assignToPieceForDxfImport(
+  mx: number,
+  my: number,
   cutBounds: BBox[],
-  unitScale: number
-): Map<number, Notch[]> {
-  const byPiece = new Map<number, Notch[]>()
-  for (const e of entities) {
-    if (e.type === 'LINE' && isNotchLineLayer(e.layer)) {
-      const mx = ((e.x1 + e.x2) / 2) * unitScale
-      const my = ((e.y1 + e.y2) / 2) * unitScale
-      const bestPiece = assignToPieceForDxfImport(mx, my, cutBounds)
-      if (bestPiece >= 0) {
-        const n = lineToNotchDxf(e.x1, e.y1, e.x2, e.y2, e.layer, unitScale)
-        if (n) {
-          const list = byPiece.get(bestPiece) ?? []
-          list.push(n)
-          byPiece.set(bestPiece, list)
-        }
-      }
-    }
-    if (e.type === 'POINT' && isNotchLineLayer(e.layer)) {
-      const mx = e.x * unitScale
-      const my = e.y * unitScale
-      const bestPiece = assignToPieceForDxfImport(mx, my, cutBounds)
-      if (bestPiece >= 0) {
-        const n = pointToNotchDxf(e.x, e.y, e.layer, unitScale)
-        const list = byPiece.get(bestPiece) ?? []
-        list.push(n)
-        byPiece.set(bestPiece, list)
-      }
-    }
-  }
-  return byPiece
+  cutRings: PieceCutRing[] = [],
+): number {
+  return assignDxfPointToPiece(mx, my, cutRings, cutBounds)
 }
 
 export function extractStandaloneDrills(
   entities: DxfEntity[],
   cutBounds: BBox[],
-  unitScale: number
+  cutRings: PieceCutRing[],
+  unitScale: number,
 ): Map<number, Drill[]> {
   const byPiece = new Map<number, Drill[]>()
   for (const e of entities) {
     if (e.type === 'CIRCLE' && isDrillLayer(e.layer)) {
       const mx = e.cx * unitScale
       const my = e.cy * unitScale
-      let bestPiece = -1
-      let bestDist = Infinity
-      for (let i = 0; i < cutBounds.length; i++) {
-        const b = cutBounds[i]
-        if (mx >= b.minX - 50 && mx <= b.maxX + 50 && my >= b.minY - 50 && my <= b.maxY + 50) {
-          const d = Math.max(0, b.minX - mx, mx - b.maxX, b.minY - my, my - b.maxY)
-          if (d < bestDist) {
-            bestDist = d
-            bestPiece = i
-          }
-        }
-      }
+      const bestPiece = assignDxfPointToPiece(mx, my, cutRings, cutBounds)
       if (bestPiece >= 0) {
         const r = e.radius * unitScale
         const list = byPiece.get(bestPiece) ?? []
@@ -166,7 +120,8 @@ export function extractStandaloneDrills(
 export function extractStandaloneGrain(
   entities: DxfEntity[],
   cutBounds: BBox[],
-  unitScale: number
+  cutRings: PieceCutRing[],
+  unitScale: number,
 ): Map<number, Line> {
   const byPiece = new Map<number, Line>()
   for (const e of entities) {
@@ -175,18 +130,8 @@ export function extractStandaloneGrain(
       const p2 = { x: e.x2 * unitScale, y: e.y2 * unitScale }
       const mx = (p1.x + p2.x) / 2
       const my = (p1.y + p2.y) / 2
-      let bestPiece = -1
-      let bestScore = Infinity
-      for (let i = 0; i < cutBounds.length; i++) {
-        const b = cutBounds[i]
-        const inside = mx >= b.minX && mx <= b.maxX && my >= b.minY && my <= b.maxY
-        const d = inside ? 0 : Math.max(b.minX - mx, mx - b.maxX, b.minY - my, my - b.maxY)
-        if (d < bestScore) {
-          bestScore = d
-          bestPiece = i
-        }
-      }
-      if (bestPiece >= 0 && bestScore < 800) {
+      const bestPiece = assignDxfPointToPiece(mx, my, cutRings, cutBounds)
+      if (bestPiece >= 0) {
         byPiece.set(bestPiece, { start: p1, end: p2 })
       }
     }
@@ -306,6 +251,11 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
         `${collected.removedNearDupes} nahezu identische Schnittkontur(en) entfernt (Größe/Fläche je ±${Math.round(NEAR_DUPE_REL_TOL * 100)} %, hohe Bounding-Box-Überlappung, nahe Schwerpunkte). Block-Entwürfe haben Vorrang vor später in der Liste stehenden Quellen.`
       )
     }
+    if (collected.absorbedNested > 0) {
+      warnings.push(
+        `${collected.absorbedNested} innere Kontur(en) innerhalb eines Schnittteils erkannt und als interne Linien zugeordnet (kein separates Teil).`
+      )
+    }
 
     if (drafts.length === 0) {
       return {
@@ -318,6 +268,7 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
 
     const pieces: PatternPiece[] = []
     const cutBounds: BBox[] = []
+    const cutRings: PieceCutRing[] = []
 
     for (let d = 0; d < drafts.length; d++) {
       const draft = drafts[d]
@@ -429,6 +380,7 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
 
       const id = generateId()
       const number = String(pieces.length + 1).padStart(3, '0')
+      const { internalLines, internalCircles } = draftInternalsToPieceFields(draft)
       const piece: PatternPiece = {
         id,
         number,
@@ -439,8 +391,8 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
         notches: allNotches,
         drills: [...draft.drillsFromLayers],
         grainLine: draft.grainLine,
-        internalLines: [],
-        internalCircles: [],
+        internalLines,
+        internalCircles,
         layer: 'CUT',
         transform: { x: 0, y: 0, rotation: 0, mirrored: false },
         softVertices: [],
@@ -449,18 +401,14 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       }
       pieces.push(piece)
       cutBounds.push({ minX, minY, maxX, maxY })
+      cutRings.push(closedRingPointsRaw(cleanedVertices, isContourClosed))
     }
 
-    const standaloneNotches = extractStandaloneNotches(parsed.entities, cutBounds, scale)
-    const standaloneDrills = extractStandaloneDrills(parsed.entities, cutBounds, scale)
-    const standaloneGrain = extractStandaloneGrain(parsed.entities, cutBounds, scale)
+    enrichPiecesFromParsedDxf(pieces, cutRings, cutBounds, parsed, scale, extraCutLayers)
 
-    for (const [idx, notchList] of standaloneNotches) {
-      if (pieces[idx]) {
-        const merged = [...(pieces[idx].notches ?? []), ...notchList]
-        pieces[idx].notches = resyncNotchesAfterCutLineRebuilt(merged, pieces[idx].cutLine, pieces[idx].cutLine)
-      }
-    }
+    const standaloneDrills = extractStandaloneDrills(parsed.entities, cutBounds, cutRings, scale)
+    const standaloneGrain = extractStandaloneGrain(parsed.entities, cutBounds, cutRings, scale)
+
     for (const [idx, drillList] of standaloneDrills) {
       if (pieces[idx]) {
         pieces[idx].drills = [...pieces[idx].drills, ...drillList]

@@ -71,6 +71,7 @@ import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '..
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
+import { withDefaultGrainLine } from '../geometry/grainArrowLayout'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
 import {
   remapInternalSeamAssignmentsAfterInternalLineRemove,
@@ -94,6 +95,8 @@ import {
   remapSoftJunctionsAfterSplitCurve,
 } from '../geometry/internalLineJunctions'
 import { clampUiTextScale } from '../ui/uiTextScale'
+import type { NestingPlan, NestingWorkerStatus } from '../nesting/nestingTypes'
+import { piecesForMaterial } from '../nesting/nestingMaterial'
 
 export type { PieceSymmetryPhase, PieceSymmetryUiState } from '../symmetry/types'
 
@@ -387,6 +390,12 @@ type Store = {
   showWorkspaceNotes: boolean
   /** Ausgewählte Teile: vorherige Kontur(en) aus Undo-Verlauf halbtransparent unterlegen. */
   showContourChangePreview: boolean
+  /** Live-Anzeige Stückliste (Fläche, Materialkosten) unten rechts auf der Arbeitsfläche. */
+  showLiveBomCost: boolean
+  /**
+   * Nahtzuordnungen auf der Arbeitsfläche: Verbinder, Längen-Δ, Kerben-Warnung, grüne ✓ bei Übereinstimmung.
+   */
+  showSeamPruefanzeigen: boolean
   /** Linke Teileliste ein-/ausklappen (mehr Platz für die Arbeitsfläche). */
   sidebarCollapsed: boolean
   /**
@@ -418,6 +427,15 @@ type Store = {
   showSettingsModal: boolean
   showStuecklisteModal: boolean
   showMaterialCatalogModal: boolean
+  showNestingModal: boolean
+  nestingSelectedMaterialKey: string | null
+  /** Stückzahl pro Teil nur für Nesting (pieceId → qty). */
+  nestingInputs: Record<string, number>
+  nestingSpacingMm: number
+  nestingMaxRollLengthMm: number | null
+  nestingPlan: NestingPlan | null
+  nestingStatus: NestingWorkerStatus
+  nestingError: string | null
   showHelpModal: boolean
   /** Kompakte Tastenkürzel-Übersicht (Hilfe-Menü). */
   showShortcutListModal: boolean
@@ -435,7 +453,7 @@ type Store = {
   canvasRotationUiScale: number
   canvasDigitizeUiScale: number
   canvasVertexPointUiScale: number
-  /** 0.75–1.75: Schriftgröße in Oberfläche und auf der Arbeitsfläche. */
+  /** 0.75–1.75: Schriftgröße für Beschriftungen auf Teilen (Profil, Nähte, Namen, Maße). */
   uiTextScale: number
   showPivotRotationUi: boolean
   notchSettings: NotchSetting[]
@@ -477,6 +495,8 @@ type Store = {
   setShowContourMeasurements: (v: boolean) => void
   setShowWorkspaceNotes: (v: boolean) => void
   setShowContourChangePreview: (v: boolean) => void
+  setShowLiveBomCost: (v: boolean) => void
+  setShowSeamPruefanzeigen: (v: boolean) => void
   setSidebarCollapsed: (v: boolean) => void
   setContourEditEnabled: (v: boolean) => void
   setRulerMode: (v: boolean) => void
@@ -492,6 +512,15 @@ type Store = {
   setShowSettingsModal: (v: boolean) => void
   setShowStuecklisteModal: (v: boolean) => void
   setShowMaterialCatalogModal: (v: boolean) => void
+  setShowNestingModal: (v: boolean) => void
+  setNestingSelectedMaterialKey: (key: string | null) => void
+  setNestingInputQuantity: (pieceId: string, quantity: number) => void
+  importNestingQuantitiesFromBom: () => void
+  setNestingSpacingMm: (mm: number) => void
+  setNestingMaxRollLengthMm: (mm: number | null) => void
+  setNestingPlan: (plan: NestingPlan | null) => void
+  setNestingStatus: (status: NestingWorkerStatus) => void
+  setNestingError: (msg: string | null) => void
   setShowHelpModal: (v: boolean) => void
   setShowShortcutListModal: (v: boolean) => void
   setShowConfiguratorModal: (v: boolean) => void
@@ -648,6 +677,8 @@ type Store = {
   setPiecePivot: (pieceId: string, pivotLocal: Point | null) => void
   /** Laufrichtungslinie (Fadenlauf) setzen. */
   setGrainLine: (pieceId: string, line: Line) => void
+  /** Einmalige Standard-Laufrichtung für Teile ohne gespeicherte `grainLine`. */
+  materializeMissingGrainLines: () => void
   /** Teil so drehen, dass der Laufrichtungspfeil senkrecht ausgerichtet ist. */
   alignPieceToGrain: (pieceId: string) => void
   /**
@@ -889,6 +920,8 @@ export const useStore = create<Store>()(
   showContourMeasurements: false,
   showWorkspaceNotes: true,
   showContourChangePreview: false,
+  showLiveBomCost: false,
+  showSeamPruefanzeigen: true,
   sidebarCollapsed: false,
   contourEditEnabled: true,
   rulerMode: false,
@@ -907,6 +940,14 @@ export const useStore = create<Store>()(
   showSettingsModal: false,
   showStuecklisteModal: false,
   showMaterialCatalogModal: false,
+  showNestingModal: false,
+  nestingSelectedMaterialKey: null,
+  nestingInputs: {},
+  nestingSpacingMm: 4,
+  nestingMaxRollLengthMm: null,
+  nestingPlan: null,
+  nestingStatus: 'idle',
+  nestingError: null,
   showHelpModal: false,
   showShortcutListModal: false,
   dxfExportScale: 1,
@@ -952,7 +993,9 @@ export const useStore = create<Store>()(
   addPiece: (piece) => {
     const id = piece?.id ?? generateId()
     const number = piece?.number ?? String(get().workspace.pieces.length + 1).padStart(3, '0')
-    const newPiece = applySharpCornerPromotion({ ...createDefaultPiece(id, number), ...piece, id, number })
+    const newPiece = withDefaultGrainLine(
+      applySharpCornerPromotion({ ...createDefaultPiece(id, number), ...piece, id, number }),
+    )
     set((s) => ({
       workspace: { ...s.workspace, pieces: [...s.workspace.pieces, newPiece] },
       selectedPieceIds: [id],
@@ -1260,6 +1303,8 @@ export const useStore = create<Store>()(
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
   setShowContourChangePreview: (v) => set({ showContourChangePreview: v }),
+  setShowLiveBomCost: (v) => set({ showLiveBomCost: v }),
+  setShowSeamPruefanzeigen: (v) => set({ showSeamPruefanzeigen: v }),
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   setContourEditEnabled: (v) => set({ contourEditEnabled: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
@@ -1279,6 +1324,27 @@ export const useStore = create<Store>()(
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
   setShowStuecklisteModal: (v) => set({ showStuecklisteModal: v }),
   setShowMaterialCatalogModal: (v) => set({ showMaterialCatalogModal: v }),
+  setShowNestingModal: (v) => set({ showNestingModal: v }),
+  setNestingSelectedMaterialKey: (key) => set({ nestingSelectedMaterialKey: key, nestingPlan: null, nestingStatus: 'idle', nestingError: null }),
+  setNestingInputQuantity: (pieceId, quantity) =>
+    set((s) => ({
+      nestingInputs: { ...s.nestingInputs, [pieceId]: Math.max(0, Math.floor(quantity) || 0) },
+    })),
+  importNestingQuantitiesFromBom: () =>
+    set((s) => {
+      const key = s.nestingSelectedMaterialKey
+      if (!key) return s
+      const next = { ...s.nestingInputs }
+      for (const p of piecesForMaterial(s.workspace.pieces, key)) {
+        next[p.id] = Math.max(1, Math.floor(Number(p.bomQuantity)) || 1)
+      }
+      return { nestingInputs: next }
+    }),
+  setNestingSpacingMm: (mm) => set({ nestingSpacingMm: Math.max(0, mm) }),
+  setNestingMaxRollLengthMm: (mm) => set({ nestingMaxRollLengthMm: mm }),
+  setNestingPlan: (plan) => set({ nestingPlan: plan }),
+  setNestingStatus: (status) => set({ nestingStatus: status }),
+  setNestingError: (msg) => set({ nestingError: msg }),
   setShowHelpModal: (v) => set({ showHelpModal: v }),
   setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
   setShowConfiguratorModal: (v) => set({ configuratorModalOpen: v }),
@@ -1453,14 +1519,11 @@ export const useStore = create<Store>()(
       set({ toastMessage: 'error:Keine internen Linien am Teil – zuerst interne Linie anlegen.' })
       return
     }
-    const indices =
-      curveIndices.length > 0 ? curveIndices : [clickedCurve]
-    const notchRange = deriveInternalSeamNotchRangeAtClick(
-      piece,
-      indices,
-      clickedCurve,
-      tOnCurve
-    )
+    const ci =
+      clickedCurve >= 0 && clickedCurve < piece.internalLines.length
+        ? clickedCurve
+        : curveIndices[0] ?? 0
+    const notchRange = deriveInternalSeamNotchRangeAtClick(piece, ci, tOnCurve)
     const notchRangeA =
       notchRange?.startNotchId && notchRange?.endNotchId
         ? { startNotchId: notchRange.startNotchId, endNotchId: notchRange.endNotchId }
@@ -1473,8 +1536,8 @@ export const useStore = create<Store>()(
           {
             id: newId,
             pieceIdA: pieceId,
-            curveIndicesA: indices,
-            clickedCurveA: clickedCurve,
+            curveIndicesA: [ci],
+            clickedCurveA: ci,
             pieceIdB: pieceId,
             curveIndicesB: [],
             clickedCurveB: 0,
@@ -2874,7 +2937,8 @@ export const useStore = create<Store>()(
         cutLine[curveIndex] = bezier
         const seamLine =
           p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
-        return applySharpCornerPromotion({ ...p, cutLine, seamLine })
+        const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
+        return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
       })
       const profileList = s.workspace.profileAssignments ?? []
       const oldP = s.workspace.pieces.find((x) => x.id === pieceId)
@@ -2952,11 +3016,10 @@ export const useStore = create<Store>()(
         const seamLine = skipSeamRecalc
           ? p.seamLine
           : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
-        if (baseline) {
-          const notches = resyncNotchesAfterCutLineRebuilt(baseline.notches, baseline.cutLine, cutLine)
-          return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
-        }
-        return applySharpCornerPromotion({ ...p, cutLine, seamLine })
+        const oldN = baseline ? baseline.notches : p.notches
+        const oldC = baseline ? baseline.cutLine : p.cutLine
+        const notches = resyncNotchesAfterCutLineRebuilt(oldN, oldC, cutLine)
+        return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
       })
       const profileListMove = s.workspace.profileAssignments ?? []
       const oldPmove = s.workspace.pieces.find((x) => x.id === pieceId)
@@ -3617,6 +3680,18 @@ export const useStore = create<Store>()(
       },
     })),
 
+  materializeMissingGrainLines: () =>
+    set((s) => {
+      let changed = false
+      const pieces = s.workspace.pieces.map((p) => {
+        if (p.grainLine != null || p.cutLine.length < 3) return p
+        changed = true
+        return withDefaultGrainLine(p)
+      })
+      if (!changed) return s
+      return { workspace: { ...s.workspace, pieces } }
+    }),
+
   alignPieceToGrain: (pieceId) => {
     const piece = get().workspace.pieces.find((p) => p.id === pieceId)
     if (!piece || piece.cutLine.length < 3) return
@@ -3742,6 +3817,7 @@ export const useStore = create<Store>()(
       showSettingsModal: false,
       showStuecklisteModal: false,
       showMaterialCatalogModal: false,
+      showNestingModal: false,
       workspaceImageSelected: false,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
@@ -3766,11 +3842,13 @@ export const useStore = create<Store>()(
     const softVertices = s.digitizeState.nodes
       .map((node, i) => node.handleOut != null ? i : -1)
       .filter((i) => i >= 0)
-    const newPiece: PatternPiece = applySharpCornerPromotion({
-      ...createDefaultPiece(id, number),
-      cutLine: curves,
-      softVertices,
-    })
+    const newPiece: PatternPiece = withDefaultGrainLine(
+      applySharpCornerPromotion({
+        ...createDefaultPiece(id, number),
+        cutLine: curves,
+        softVertices,
+      }),
+    )
     set((st) => ({
       workspace: { ...st.workspace, pieces: [...st.workspace.pieces, newPiece] },
       selectedPieceIds: [id],
@@ -3876,7 +3954,12 @@ export const useStore = create<Store>()(
         ? { ...project.workspace, projectFileName: opts.projectFileName }
         : project.workspace
     set({
-      workspace: { ...ws, notes: ws.notes ?? [], profileAssignments: ws.profileAssignments ?? [] },
+      workspace: {
+        ...ws,
+        notes: ws.notes ?? [],
+        profileAssignments: ws.profileAssignments ?? [],
+        pieces: ws.pieces.map((p) => withDefaultGrainLine(p)),
+      },
       dxfExportScale: project.dxfExportScale,
       dxfImportExtraCutLayers: project.dxfImportExtraCutLayers,
       dxfImportScale: project.dxfImportScale,
@@ -3924,6 +4007,10 @@ export const useStore = create<Store>()(
       showSettingsModal: false,
       showStuecklisteModal: false,
       showMaterialCatalogModal: false,
+      showNestingModal: false,
+      nestingPlan: null,
+      nestingStatus: 'idle',
+      nestingError: null,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
       toastMessage: null,

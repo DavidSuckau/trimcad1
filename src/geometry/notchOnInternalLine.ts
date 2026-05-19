@@ -1,16 +1,43 @@
 import type { Curve, Notch, Point } from '../types/model'
-import {
-  bezierAt,
-  pathLengthAt,
-  totalPathLength,
-  pointAtPathLength,
-  outwardNormalAngleAt,
-} from './curveToPath'
+import { bezierAt, curveSegmentArcLength, outwardNormalAngleAt } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
 export function isNotchOnInternalLine(notch: Notch): boolean {
   const idx = notch.internalLineIndex
   return idx != null && Number.isFinite(idx) && idx >= 0
+}
+
+/** Bogenlänge auf genau einem Segment `curveIndex` (nicht über die ganze internalLines-Liste). */
+export function internalLineSegmentPathLength(
+  internalLines: Curve[],
+  curveIndex: number,
+  t: number
+): number {
+  const seg = internalLines[curveIndex]
+  if (!seg) return 0
+  return curveSegmentArcLength(seg, 0, Math.max(0, Math.min(1, t)))
+}
+
+export function internalLineSegmentTotalLength(internalLines: Curve[], curveIndex: number): number {
+  const seg = internalLines[curveIndex]
+  if (!seg) return 0
+  return curveSegmentArcLength(seg, 0, 1)
+}
+
+function tOnInternalLineSegment(seg: Curve, arcLenFromStart: number): number {
+  const segLen = curveSegmentArcLength(seg, 0, 1)
+  if (segLen <= 1e-12) return 0
+  const target = Math.max(0, Math.min(segLen, arcLenFromStart))
+  if (seg.type === 'line') return target / segLen
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    const len = curveSegmentArcLength(seg, 0, mid)
+    if (len < target) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
 }
 
 function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point | null {
@@ -37,28 +64,29 @@ export function resolveNotchInternalLineAnchor(
 ): { curveIndex: number; t: number } | null {
   if (!isNotchOnInternalLine(notch) || internalLines.length === 0) return null
 
-  const total = totalPathLength(internalLines)
-  if (total <= 0) return null
+  const idx =
+    notch.internalLineIndex != null &&
+    notch.internalLineIndex >= 0 &&
+    notch.internalLineIndex < internalLines.length
+      ? notch.internalLineIndex
+      : null
 
-  const sn = notch.internalSNormalized
-  if (sn != null && Number.isFinite(sn)) {
-    const L = Math.max(0, Math.min(1, sn)) * total
-    const pt = pointAtPathLength(internalLines, L)
-    if (!pt) return null
-    return { curveIndex: pt.curveIndex, t: pt.t }
-  }
-
-  const al = notch.internalArcLengthMm
-  if (al != null && Number.isFinite(al)) {
-    const L = Math.max(0, Math.min(total, al))
-    const pt = pointAtPathLength(internalLines, L)
-    if (!pt) return null
-    return { curveIndex: pt.curveIndex, t: pt.t }
-  }
-
-  const idx = notch.internalLineIndex!
-  if (idx >= 0 && idx < internalLines.length) {
-    const r = nearestCurveIndexAndPoint(notch.position, [internalLines[idx]])
+  if (idx != null) {
+    const seg = internalLines[idx]
+    const segLen = seg ? curveSegmentArcLength(seg, 0, 1) : 0
+    if (segLen > 0) {
+      const sn = notch.internalSNormalized
+      if (sn != null && Number.isFinite(sn)) {
+        const L = Math.max(0, Math.min(1, sn)) * segLen
+        return { curveIndex: idx, t: tOnInternalLineSegment(seg, L) }
+      }
+      const al = notch.internalArcLengthMm
+      if (al != null && Number.isFinite(al)) {
+        const L = Math.max(0, Math.min(segLen, al))
+        return { curveIndex: idx, t: tOnInternalLineSegment(seg, L) }
+      }
+    }
+    const r = nearestCurveIndexAndPoint(notch.position, [seg])
     if (r) return { curveIndex: idx, t: r.t ?? 0 }
   }
 
@@ -89,12 +117,12 @@ export function materializeNotchAnchorsOnInternalLine(
   internalLines: Curve[]
 ): Notch | null {
   if (!isNotchOnInternalLine(notch) || internalLines.length === 0) return null
-  const total = totalPathLength(internalLines)
-  if (total <= 0) return null
 
   const anchor = resolveNotchInternalLineAnchor(notch, internalLines)
   if (!anchor) return null
-  const L = pathLengthAt(internalLines, anchor.curveIndex, anchor.t)
+  const segLen = internalLineSegmentTotalLength(internalLines, anchor.curveIndex)
+  if (segLen <= 0) return null
+  const L = internalLineSegmentPathLength(internalLines, anchor.curveIndex, anchor.t)
   const position = pointOnCurveAt(internalLines, anchor.curveIndex, anchor.t)
   if (!position) return null
   const angle = inwardNormalOnInternalLine(internalLines, anchor.curveIndex, anchor.t)
@@ -104,7 +132,7 @@ export function materializeNotchAnchorsOnInternalLine(
     arcLengthMm: undefined,
     vertexIndex: undefined,
     internalLineIndex: anchor.curveIndex,
-    internalSNormalized: L / total,
+    internalSNormalized: L / segLen,
     internalArcLengthMm: L,
     position,
     angle,

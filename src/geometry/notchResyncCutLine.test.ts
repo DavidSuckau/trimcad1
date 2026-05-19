@@ -163,6 +163,33 @@ describe('resyncNotchesAfterCutLineRebuilt: position-first', () => {
   })
 })
 
+describe('resync: begrenzte Sprünge', () => {
+  it('bevorzugt sNormalized wenn globale Projektion zu weit springen wuerde', () => {
+    const oldCutLine = square(100)
+    const newCutLine: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 200, y: 0 } },
+      { type: 'line', start: { x: 200, y: 0 }, end: { x: 200, y: 100 } },
+      { type: 'line', start: { x: 200, y: 100 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 0, y: 0 } },
+    ]
+    const notch: Notch = {
+      id: 'n-sn',
+      position: { x: 50, y: 0 },
+      angle: 90,
+      type: 'single',
+      depth: 4,
+      sNormalized: 0.125,
+      arcLengthMm: 50,
+    }
+    const [resynced] = resyncNotchesAfterCutLineRebuilt([notch], oldCutLine, newCutLine)
+    const pos = getNotchPositionAndAngle(resynced, newCutLine).position
+    const oldCanon = getNotchPositionAndAngle(notch, oldCutLine).position
+    expect(Math.hypot(pos.x - oldCanon.x, pos.y - oldCanon.y)).toBeLessThan(2)
+    expect(pos.x).toBeCloseTo(50, 1)
+    expect(pos.y).toBeCloseTo(0, 1)
+  })
+})
+
 describe('resyncNotchesViaSeamAnchor: Naht Linie→Bezier (Kurvenpunkt auf Linie)', () => {
   it('haelt Kerben auf der Schnittkontur, wenn nur die Nahtkante line→degenerierte bezier wechselt', () => {
     const s = 100

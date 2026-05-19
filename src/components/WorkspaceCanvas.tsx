@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { useStore as useZustandStore } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { useStore, undoAction, redoAction } from '../store/useStore'
-import { canvasTextSize, uiTextPx } from '../ui/uiTextScale'
+import { canvasTextSize } from '../ui/uiTextScale'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import { CanvasToolbar } from './CanvasToolbar'
 import {
@@ -18,7 +18,13 @@ import {
   pointAtPathLength,
   pathLengthAt,
   totalPathLength,
+  cutLineFormsClosedLoop,
 } from '../geometry/curveToPath'
+import {
+  getCutLineNotchMeasurementDistances,
+  getNotchMeasurementDistancesOnContour,
+  targetArcLengthForNotchDistanceEdit,
+} from '../geometry/measurementStations'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { internalLineEndpointsTouch } from '../geometry/internalLineJunctions'
 import { offsetSegmentPoints } from '../geometry/offset'
@@ -36,6 +42,8 @@ import {
   isNotchOnInternalLine,
   getNotchPositionAndAngleOnInternalLine,
   resolveNotchInternalLineAnchor,
+  internalLineSegmentPathLength,
+  internalLineSegmentTotalLength,
 } from '../geometry/notchOnInternalLine'
 import {
   evenlySpacedTsOnLineSegment,
@@ -59,7 +67,12 @@ import {
   bestSeamSubSegmentPairing,
   masterSoftVertexIndexSet,
 } from '../geometry/seamUtils'
-import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing, getDisplayedMasterCurves } from '../geometry/vertexMaster'
+import {
+  useSeamLineForVertexEditing,
+  useSeamLineForPointCurveEditing,
+  getDisplayedMasterCurves,
+  getSharpMasterCurves,
+} from '../geometry/vertexMaster'
 import { vertexPositionOnClosedMaster, validateCornerRound, ROUND_CORNER_MIN_RADIUS_MM, ROUND_CORNER_MAX_RADIUS_MM, applyCornerRoundings } from '../geometry/cornerRounding'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
@@ -96,6 +109,7 @@ import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasT
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
+import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 
 let T: CanvasTheme = canvasTheme
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
@@ -290,6 +304,102 @@ function getMasterContourVertexLocal(piece: PatternPiece, vertexIndex: number): 
   return vertexIndex === 0 ? { ...curves[0].start } : { ...curves[vertexIndex - 1].end }
 }
 
+type NotchContourSnap = { point: Point; curveIndex: number; t: number }
+
+/** Eck- oder Bézier-Mittelpunkt auf der Master-Kontur → Anker auf der Kerben-Projektionskontur. */
+function snapPointToPlacementCurves(
+  vertexPos: Point,
+  placementCurves: Curve[],
+  sharpMaster: Curve[],
+  preferredCurveIndex?: number,
+  preferredT?: number,
+): NotchContourSnap | null {
+  if (
+    placementCurves === sharpMaster &&
+    preferredCurveIndex != null &&
+    preferredT != null &&
+    preferredCurveIndex >= 0 &&
+    preferredCurveIndex < placementCurves.length
+  ) {
+    return { point: { ...vertexPos }, curveIndex: preferredCurveIndex, t: preferredT }
+  }
+  const nr = nearestCurveIndexAndPoint(vertexPos, placementCurves)
+  if (!nr) return null
+  return { point: nr.point, curveIndex: nr.curveIndex, t: nr.t ?? 0 }
+}
+
+/**
+ * Kerben-Werkzeug: gleiche Treffer wie bei „Punkte anzeigen“ (blaue Eckpunkte, grüne Bézier-Mitte),
+ * damit Kerben exakt auf weichen Punkten und Kurvenpunkten gesetzt werden können.
+ */
+function findNotchContourSnapOnPiece(
+  piece: PatternPiece,
+  local: Point,
+  placementCurves: Curve[],
+  vertexHitMm: number,
+  vertexSeamHitMm: number,
+  curveMidHitMm: number,
+): NotchContourSnap | null {
+  if (placementCurves.length === 0) return null
+  const displayed = getDisplayedMasterCurves(piece).curves
+  if (displayed.length === 0) return null
+  const useSeamMaster = useSeamLineForVertexEditing(piece)
+  const vertexHitR = useSeamMaster ? vertexSeamHitMm : vertexHitMm
+  const sharpMaster = getSharpMasterCurves(piece)
+
+  let bestVertex: { dist: number; vi: number } | null = null
+  if (displayed.length > 3) {
+    for (let vi = 0; vi < displayed.length; vi++) {
+      const vertexPos = vi === 0 ? displayed[0].start : displayed[vi - 1].end
+      const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
+      if (d < vertexHitR && (!bestVertex || d < bestVertex.dist)) {
+        bestVertex = { dist: d, vi }
+      }
+    }
+  }
+
+  let bestCurve: { dist: number; ci: number; point: Point } | null = null
+  for (let ci = 0; ci < displayed.length; ci++) {
+    const c = displayed[ci]
+    if (c.type !== 'bezier') continue
+    const pt = bezierAt(c, 0.5)
+    const d = Math.hypot(local.x - pt.x, local.y - pt.y)
+    if (d < curveMidHitMm && (!bestCurve || d < bestCurve.dist)) {
+      bestCurve = { dist: d, ci, point: pt }
+    }
+  }
+
+  if (bestCurve && bestVertex) {
+    if (bestCurve.dist <= bestVertex.dist) bestVertex = null
+    else bestCurve = null
+  }
+
+  if (bestCurve) {
+    const c = sharpMaster[bestCurve.ci]
+    if (c?.type === 'bezier') {
+      const onSharp = snapPointToPlacementCurves(
+        bezierAt(c, 0.5),
+        placementCurves,
+        sharpMaster,
+        bestCurve.ci,
+        0.5,
+      )
+      if (onSharp) return onSharp
+    }
+    return snapPointToPlacementCurves(bestCurve.point, placementCurves, sharpMaster)
+  }
+
+  if (bestVertex) {
+    const vi = bestVertex.vi
+    const vertexPos = vi === 0 ? displayed[0].start : displayed[vi - 1].end
+    const ci = vi === 0 ? 0 : vi - 1
+    const t = vi === 0 ? 0 : 1
+    return snapPointToPlacementCurves(vertexPos, placementCurves, sharpMaster, ci, t)
+  }
+
+  return null
+}
+
 function isWorldInsideWorkspaceImage(
   world: Point,
   session: { imagePosition: Point; imageSizePx: { width: number; height: number } | null; renderMmPerPixel: number }
@@ -448,40 +558,6 @@ function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
   return false
 }
 
-/** Verschiebt die Laufrichtungslinie parallel; skaliert den Vektor so, dass beide Enden in der Bounding-Box der Kontur bleiben. */
-function clampGrainLineParallelTranslation(
-  line: Line,
-  dx: number,
-  dy: number,
-  b: { minX: number; maxX: number; minY: number; maxY: number }
-): Line {
-  const inBox = (x: number, y: number) =>
-    x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY
-  const ax = line.start.x + dx
-  const ay = line.start.y + dy
-  const bx = line.end.x + dx
-  const by = line.end.y + dy
-  if (inBox(ax, ay) && inBox(bx, by)) {
-    return { start: { x: ax, y: ay }, end: { x: bx, y: by } }
-  }
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 28; i++) {
-    const m = (lo + hi) / 2
-    const sx = line.start.x + dx * m
-    const sy = line.start.y + dy * m
-    const ex = line.end.x + dx * m
-    const ey = line.end.y + dy * m
-    if (inBox(sx, sy) && inBox(ex, ey)) lo = m
-    else hi = m
-  }
-  const s = lo
-  return {
-    start: { x: line.start.x + dx * s, y: line.start.y + dy * s },
-    end: { x: line.end.x + dx * s, y: line.end.y + dy * s },
-  }
-}
-
 /** Kürzeste Winkel-Differenz in Grad (−180 … 180). */
 function smallestAngleDiffDeg(a: number, b: number): number {
   return ((((a - b) % 360) + 540) % 360) - 180
@@ -521,38 +597,6 @@ function alignGrainLineToContourTangent(line: Line, tangentDeg: number): Line {
   return {
     start: { x: mx - ux * half, y: my - uy * half },
     end: { x: mx + ux * half, y: my + uy * half },
-  }
-}
-
-/** Streckt oder staucht die Strecke vom Mittelpunkt aus, bis beide Enden in der AABB liegen. */
-function clampLineSegmentInAabb(
-  line: Line,
-  b: { minX: number; maxX: number; minY: number; maxY: number }
-): Line {
-  const inBox = (x: number, y: number) =>
-    x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY
-  const mx = (line.start.x + line.end.x) / 2
-  const my = (line.start.y + line.end.y) / 2
-  const vx = line.end.x - line.start.x
-  const vy = line.end.y - line.start.y
-  const L = Math.hypot(vx, vy) || 1
-  const ux = vx / L
-  const uy = vy / L
-  const half = L / 2
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 28; i++) {
-    const m = (lo + hi) / 2
-    const h = half * m
-    const s = { x: mx - ux * h, y: my - uy * h }
-    const e = { x: mx + ux * h, y: my + uy * h }
-    if (inBox(s.x, s.y) && inBox(e.x, e.y)) lo = m
-    else hi = m
-  }
-  const h = half * lo
-  return {
-    start: { x: mx - ux * h, y: my - uy * h },
-    end: { x: mx + ux * h, y: my + uy * h },
   }
 }
 
@@ -960,58 +1004,6 @@ function getVertexColors() {
   }
 }
 
-/** Distanz in mm entlang des Segments von t bis zum nächsten Eckpunkt oder nächsten Notch (falls auf diesem Segment). Immer entlang der Kurve (Bogenlänge). */
-function distanceToNextVertexOrNotch(
-  curve: Curve,
-  t: number,
-  notchesOnSegment: number[]
-): number {
-  const notchesAhead = notchesOnSegment.filter((tN) => tN > t && tN <= 1)
-  const endT = notchesAhead.length > 0 ? Math.min(...notchesAhead) : 1
-  return curveSegmentArcLength(curve, Math.max(0, t), Math.min(1, endT))
-}
-
-/** Distanz in mm entlang des Segments vom vorherigen Eckpunkt bzw. letzten Notch bis t. Immer entlang der Kurve (Bogenlänge). */
-function distanceToPrevVertexOrNotch(
-  curve: Curve,
-  t: number,
-  notchesOnSegment: number[]
-): number {
-  const notchesBehind = notchesOnSegment.filter((tN) => tN >= 0 && tN < t)
-  const startT = notchesBehind.length > 0 ? Math.max(...notchesBehind) : 0
-  return curveSegmentArcLength(curve, Math.max(0, startT), Math.min(1, t))
-}
-
-function tAtArcDistanceFromStart(curve: Curve, startT: number, distanceMm: number): number {
-  if (!Number.isFinite(distanceMm) || distanceMm <= 0) return Math.max(0, Math.min(1, startT))
-  const maxLen = curveSegmentArcLength(curve, startT, 1)
-  if (distanceMm >= maxLen) return 1
-  let lo = Math.max(0, Math.min(1, startT))
-  let hi = 1
-  for (let i = 0; i < 20; i++) {
-    const mid = (lo + hi) / 2
-    const len = curveSegmentArcLength(curve, startT, mid)
-    if (len < distanceMm) lo = mid
-    else hi = mid
-  }
-  return (lo + hi) / 2
-}
-
-function tAtArcDistanceFromEnd(curve: Curve, endT: number, distanceMm: number): number {
-  if (!Number.isFinite(distanceMm) || distanceMm <= 0) return Math.max(0, Math.min(1, endT))
-  const maxLen = curveSegmentArcLength(curve, 0, endT)
-  if (distanceMm >= maxLen) return 0
-  let lo = 0
-  let hi = Math.max(0, Math.min(1, endT))
-  for (let i = 0; i < 20; i++) {
-    const mid = (lo + hi) / 2
-    const len = curveSegmentArcLength(curve, mid, endT)
-    if (len > distanceMm) lo = mid
-    else hi = mid
-  }
-  return (lo + hi) / 2
-}
-
 type NotchMovePreviewState = {
   pieceId: string
   position: Point
@@ -1043,23 +1035,21 @@ function buildNotchMovePreview(
     const curve = piece.internalLines[nearest.curveIndex]
     const storePos = pointOnCurveAt(curve, tNudged)
     const storeAngle = outwardNormalAngleAt(piece.internalLines, nearest.curveIndex, tNudged) + 180
-    const notchesOnSegment = piece.notches
-      .map((n) => {
-        if (n.id === notchId || !isNotchOnInternalLine(n)) return null
-        const p = getNotchPositionAndAngleOnInternalLine(n, piece.internalLines)?.position
-        if (!p) return null
-        const nr = nearestCurveIndexAndPoint(p, piece.internalLines)
-        return nr && nr.curveIndex === nearest.curveIndex && nr.t != null ? nr.t : null
-      })
-      .filter((x): x is number => x != null)
+    const dist = getNotchMeasurementDistancesOnContour(
+      piece,
+      piece.internalLines,
+      nearest.curveIndex,
+      tNudged,
+      { excludeNotchId: notchId, onInternalLine: true },
+    )
     return {
       pieceId: piece.id,
       position: storePos,
       angle: storeAngle,
       curveIndex: nearest.curveIndex,
       t: tNudged,
-      distanceMmLeft: distanceToPrevVertexOrNotch(curve, tNudged, notchesOnSegment),
-      distanceMmRight: distanceToNextVertexOrNotch(curve, tNudged, notchesOnSegment),
+      distanceMmLeft: dist.distanceMmLeft,
+      distanceMmRight: dist.distanceMmRight,
       storePos,
       storeAngle,
       onInternalLine: true,
@@ -1073,25 +1063,17 @@ function buildNotchMovePreview(
   const tNudged =
     cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
   const cutCurveIndex = cutNearest.curveIndex
-  const curve = piece.cutLine[cutCurveIndex]
   const storePos = pointOnCurveAt(piece.cutLine[cutCurveIndex], tNudged)
   const storeAngle = outwardNormalAngleAt(piece.cutLine, cutCurveIndex, tNudged) + 180
-  const notchesOnSegment = piece.notches
-    .map((n) => {
-      if (n.id === notchId) return tNudged
-      const { position: nPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
-      const nr = nearestCurveIndexAndPoint(nPos, piece.cutLine)
-      return nr && nr.curveIndex === cutCurveIndex && nr.t != null ? nr.t : null
-    })
-    .filter((x): x is number => x != null)
+  const dist = getCutLineNotchMeasurementDistances(piece, cutCurveIndex, tNudged, notchId)
   return {
     pieceId: piece.id,
     position: storePos,
     angle: storeAngle,
     curveIndex: cutCurveIndex,
     t: tNudged,
-    distanceMmLeft: distanceToPrevVertexOrNotch(curve, tNudged, notchesOnSegment),
-    distanceMmRight: distanceToNextVertexOrNotch(curve, tNudged, notchesOnSegment),
+    distanceMmLeft: dist.distanceMmLeft,
+    distanceMmRight: dist.distanceMmRight,
     storePos,
     storeAngle,
   }
@@ -1108,25 +1090,24 @@ function openNotchMoveDistanceEditorFromPreview(
   pieceId: string
   notchId: string
   curveIndex: number
-  prevT: number
-  nextT: number
+  anchorS: number
+  boundPrevS: number
+  boundNextS: number
+  onInternalLine?: boolean
   side: 'left' | 'right'
   value: string
   clientX: number
   clientY: number
 } {
-  const otherNotchesOnCurve = piece.notches
-    .map((n) => {
-      if (n.id === notchId) return null
-      const { position } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
-      const nr = nearestCurveIndexAndPoint(position, piece.cutLine)
-      return nr && nr.curveIndex === preview.curveIndex && nr.t != null ? nr.t : null
-    })
-    .filter((x): x is number => x != null)
-  const prevCandidates = otherNotchesOnCurve.filter((tN) => tN < preview.t)
-  const nextCandidates = otherNotchesOnCurve.filter((tN) => tN > preview.t)
-  const prevT = prevCandidates.length > 0 ? Math.max(...prevCandidates) : 0
-  const nextT = nextCandidates.length > 0 ? Math.min(...nextCandidates) : 1
+  const onInternalLine = preview.onInternalLine ?? false
+  const contours = onInternalLine ? piece.internalLines : piece.cutLine
+  const bounds = getNotchMeasurementDistancesOnContour(
+    piece,
+    contours,
+    preview.curveIndex,
+    preview.t,
+    { excludeNotchId: notchId, onInternalLine },
+  )
   const value =
     side === 'left'
       ? preview.distanceMmLeft.toFixed(1).replace('.', ',')
@@ -1135,8 +1116,10 @@ function openNotchMoveDistanceEditorFromPreview(
     pieceId: piece.id,
     notchId,
     curveIndex: preview.curveIndex,
-    prevT,
-    nextT,
+    anchorS: bounds.anchorS,
+    boundPrevS: bounds.boundPrevS,
+    boundNextS: bounds.boundNextS,
+    onInternalLine,
     side,
     value,
     clientX,
@@ -1898,6 +1881,7 @@ export function WorkspaceCanvas() {
     showContourMeasurements,
     showWorkspaceNotes,
     showContourChangePreview,
+    showSeamPruefanzeigen,
     contourEditEnabled,
     rulerMode,
     setRulerMode,
@@ -1963,6 +1947,7 @@ export function WorkspaceCanvas() {
     setPieceRotation,
     setPiecePivot,
     setGrainLine,
+    materializeMissingGrainLines,
     alignPieceToGrain,
     toastMessage,
     setToastMessage,
@@ -2031,6 +2016,7 @@ export function WorkspaceCanvas() {
       showContourMeasurements: s.showContourMeasurements,
       showWorkspaceNotes: s.showWorkspaceNotes,
       showContourChangePreview: s.showContourChangePreview,
+      showSeamPruefanzeigen: s.showSeamPruefanzeigen,
       contourEditEnabled: s.contourEditEnabled,
       rulerMode: s.rulerMode,
       setRulerMode: s.setRulerMode,
@@ -2096,6 +2082,7 @@ export function WorkspaceCanvas() {
       setPieceRotation: s.setPieceRotation,
       setPiecePivot: s.setPiecePivot,
       setGrainLine: s.setGrainLine,
+      materializeMissingGrainLines: s.materializeMissingGrainLines,
       alignPieceToGrain: s.alignPieceToGrain,
       toastMessage: s.toastMessage,
       setToastMessage: s.setToastMessage,
@@ -2150,7 +2137,7 @@ export function WorkspaceCanvas() {
       showPivotRotationUi: s.showPivotRotationUi,
     })),
   )
-  const fs = uiTextPx
+  const fs = (px: number) => `${px}px`
   const ct = (base: number) => canvasTextSize(base, uiTextScale)
   T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
   const { COLOR_ECKPUNKT, COLOR_SOFT_PUNKT, COLOR_PUNKT_AUF_KURVE, NOTCH_STROKE } = getVertexColors()
@@ -2301,8 +2288,10 @@ export function WorkspaceCanvas() {
     pieceId: string
     notchId: string
     curveIndex: number
-    prevT: number
-    nextT: number
+    anchorS: number
+    boundPrevS: number
+    boundNextS: number
+    onInternalLine?: boolean
     side: 'left' | 'right'
     value: string
     clientX: number
@@ -2535,46 +2524,45 @@ export function WorkspaceCanvas() {
   useEffect(() => {
     if (!notchMoveDistanceEditor) return
     const piece = pieces.find((p) => p.id === notchMoveDistanceEditor.pieceId)
-    if (!piece || piece.cutLine.length === 0) return
-    const curve = piece.cutLine[notchMoveDistanceEditor.curveIndex]
-    if (!curve) return
+    if (!piece) return
+    const onInternal = notchMoveDistanceEditor.onInternalLine ?? false
+    const contours = onInternal ? piece.internalLines : piece.cutLine
+    if (contours.length === 0) return
     const raw = Number.parseFloat(notchMoveDistanceEditor.value.replace(',', '.'))
     if (!Number.isFinite(raw) || raw < 0) return
-    const segmentMax = curveSegmentArcLength(
-      curve,
-      notchMoveDistanceEditor.prevT,
-      notchMoveDistanceEditor.nextT,
+    const closed = !onInternal && cutLineFormsClosedLoop(piece.cutLine)
+    const total = totalPathLength(contours)
+    const targetS = targetArcLengthForNotchDistanceEdit(
+      notchMoveDistanceEditor.anchorS,
+      notchMoveDistanceEditor.boundPrevS,
+      notchMoveDistanceEditor.boundNextS,
+      notchMoveDistanceEditor.side,
+      raw,
+      closed,
+      total,
     )
-    const mm = Math.max(0, Math.min(segmentMax, raw))
-    const nextT =
-      notchMoveDistanceEditor.side === 'left'
-        ? tAtArcDistanceFromStart(curve, notchMoveDistanceEditor.prevT, mm)
-        : tAtArcDistanceFromEnd(curve, notchMoveDistanceEditor.nextT, mm)
-    const tClamped =
-      nextT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : nextT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : nextT
-    const storePos = pointOnCurveAt(piece.cutLine[notchMoveDistanceEditor.curveIndex], tClamped)
-    const storeAngle = outwardNormalAngleAt(piece.cutLine, notchMoveDistanceEditor.curveIndex, tClamped) + 180
-    const notchId = notchMoveDistanceEditor.notchId
-    const notchesOnSegment = piece.notches
-      .map((n) => {
-        if (n.id === notchId) return tClamped
-        const { position: notchPos } = getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine)
-        const nr = nearestCurveIndexAndPoint(notchPos, piece.cutLine)
-        return nr && nr.curveIndex === notchMoveDistanceEditor.curveIndex && nr.t != null ? nr.t : null
-      })
-      .filter((x): x is number => x != null)
-    const distanceMmLeft = distanceToPrevVertexOrNotch(curve, tClamped, notchesOnSegment)
-    const distanceMmRight = distanceToNextVertexOrNotch(curve, tClamped, notchesOnSegment)
+    const pr = pointAtPathLength(contours, targetS)
+    if (!pr) return
+    let tClamped = pr.t
+    tClamped =
+      tClamped <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : tClamped >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : tClamped
+    const storePos = pointOnCurveAt(contours[pr.curveIndex], tClamped)
+    const storeAngle = outwardNormalAngleAt(contours, pr.curveIndex, tClamped) + 180
+    const dist = getNotchMeasurementDistancesOnContour(piece, contours, pr.curveIndex, tClamped, {
+      excludeNotchId: notchMoveDistanceEditor.notchId,
+      onInternalLine: onInternal,
+    })
     setNotchPreview({
       pieceId: piece.id,
       position: storePos,
       angle: storeAngle,
-      curveIndex: notchMoveDistanceEditor.curveIndex,
+      curveIndex: pr.curveIndex,
       t: tClamped,
-      distanceMmLeft,
-      distanceMmRight,
+      distanceMmLeft: dist.distanceMmLeft,
+      distanceMmRight: dist.distanceMmRight,
       storePos,
       storeAngle,
+      onInternalLine: onInternal,
     })
   }, [notchMoveDistanceEditor, pieces])
 
@@ -2787,6 +2775,10 @@ export function WorkspaceCanvas() {
       setTool('select')
     }
   }, [contourEditEnabled, tool, setTool])
+
+  useEffect(() => {
+    materializeMissingGrainLines()
+  }, [materializeMissingGrainLines, pieces])
 
   const prevDraggingRef = useRef(dragging)
   useEffect(() => {
@@ -4034,8 +4026,26 @@ export function WorkspaceCanvas() {
           setTool('select')
           return
         }
-        const nearest = curves.length > 0 ? nearestCurveIndexAndPoint(local, curves) : null
-        const contourOk = nearest != null && nearest.distance <= maxSnapDistance
+        const contourSnap = findNotchContourSnapOnPiece(
+          piece,
+          local,
+          curves,
+          vHitWorld,
+          vHitSeamWorld,
+          pocHitWorld,
+        )
+        const nearestRaw = curves.length > 0 ? nearestCurveIndexAndPoint(local, curves) : null
+        const nearest =
+          contourSnap != null
+            ? {
+                curveIndex: contourSnap.curveIndex,
+                point: contourSnap.point,
+                t: contourSnap.t,
+                distance: 0,
+              }
+            : nearestRaw
+        const contourOk =
+          contourSnap != null || (nearestRaw != null && nearestRaw.distance <= maxSnapDistance)
         const internalOk = nearestInternal != null && nearestInternal.distance <= maxSnapDistance
         if (!contourOk && !internalOk) {
           if (notchEdgeMidMode) {
@@ -4580,7 +4590,7 @@ export function WorkspaceCanvas() {
             const local = worldToPieceLocal(world, p)
             const hit = hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
             if (hit && (!bestHover || hit.distance < bestHover.distance)) {
-              const range = deriveInternalSeamNotchRangeAtClick(p, hit.curveIndices, hit.curveIndex, hit.t)
+              const range = deriveInternalSeamNotchRangeAtClick(p, hit.curveIndex, hit.t)
               bestHover = {
                 pieceId: p.id,
                 curveIndices: hit.curveIndices,
@@ -5089,7 +5099,22 @@ export function WorkspaceCanvas() {
             const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
             const curves = hasSeam && !solidIsCut ? piece.seamLine : piece.cutLine
             if (curves.length === 0) continue
-            const r = nearestCurveIndexAndPoint(local, curves)
+            const snap = findNotchContourSnapOnPiece(
+              piece,
+              local,
+              curves,
+              hoverVertexHitMm,
+              hoverVertexSeamHitMm,
+              hoverCurveMidHitMm,
+            )
+            const r = snap
+              ? {
+                  curveIndex: snap.curveIndex,
+                  point: snap.point,
+                  t: snap.t,
+                  distance: 0,
+                }
+              : nearestCurveIndexAndPoint(local, curves)
             if (!r || r.distance > 20) continue
             const t = r.t ?? 0
             if (!best || r.distance < best.distance) {
@@ -5108,35 +5133,17 @@ export function WorkspaceCanvas() {
             const { piece, r, curves, onInternalLine } = best
             const outwardAngle = outwardNormalAngleAt(curves, r.curveIndex, r.t)
             const angle = outwardAngle + 180
-            const notchesOnSegment = piece.notches
-              .map((n) => {
-                if (onInternalLine) {
-                  if (!isNotchOnInternalLine(n)) return null
-                  const p = getNotchPositionAndAngleOnInternalLine(n, piece.internalLines)?.position
-                  if (!p) return null
-                  const nr = nearestCurveIndexAndPoint(p, piece.internalLines)
-                  return nr && nr.curveIndex === r.curveIndex && nr.t != null ? nr.t : null
-                }
-                const pos =
-                  curves === piece.seamLine && piece.seamLine.length > 0
-                    ? (getNotchPositionAndAngleOnSeamLine(n, piece.cutLine, piece.seamLine)?.position ??
-                       getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine).position)
-                    : getNotchPositionAndAngle(n, piece.cutLine, piece.seamLine).position
-                const nr = nearestCurveIndexAndPoint(pos, curves)
-                return nr && nr.curveIndex === r.curveIndex && nr.t != null ? nr.t : null
-              })
-              .filter((x): x is number => x != null)
-            const curve = curves[r.curveIndex]
-            const distanceMmLeft = distanceToPrevVertexOrNotch(curve, r.t, notchesOnSegment)
-            const distanceMmRight = distanceToNextVertexOrNotch(curve, r.t, notchesOnSegment)
+            const dist = getNotchMeasurementDistancesOnContour(piece, curves, r.curveIndex, r.t, {
+              onInternalLine,
+            })
             setNotchPreview({
               pieceId: piece.id,
               position: r.point,
               angle,
               curveIndex: r.curveIndex,
               t: r.t,
-              distanceMmLeft,
-              distanceMmRight,
+              distanceMmLeft: dist.distanceMmLeft,
+              distanceMmRight: dist.distanceMmRight,
               storePos: r.point,
               storeAngle: angle,
               onInternalLine,
@@ -5303,14 +5310,8 @@ export function WorkspaceCanvas() {
       } else if (dragging.kind === 'grainPoint') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
-        const bounds = curvesBounds(piece.cutLine)
-        if (!bounds) return
         const world = toWorld(e.clientX, e.clientY)
-        let local = worldToPieceLocal(world, piece)
-        local = {
-          x: Math.max(bounds.minX, Math.min(bounds.maxX, local.x)),
-          y: Math.max(bounds.minY, Math.min(bounds.maxY, local.y)),
-        }
+        const local = worldToPieceLocal(world, piece)
         const currentLine = piece.grainLine ?? getPieceGrainLine(piece)
         setGrainLine(dragging.pieceId, {
           ...currentLine,
@@ -5319,14 +5320,15 @@ export function WorkspaceCanvas() {
       } else if (dragging.kind === 'grainLine') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
-        const bounds = curvesBounds(piece.cutLine)
-        if (!bounds) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
         const dx = local.x - dragging.startLocal.x
         const dy = local.y - dragging.startLocal.y
-        const newLine = clampGrainLineParallelTranslation(dragging.lineAtPointerDown, dx, dy, bounds)
-        setGrainLine(dragging.pieceId, newLine)
+        const base = dragging.lineAtPointerDown
+        setGrainLine(dragging.pieceId, {
+          start: { x: base.start.x + dx, y: base.start.y + dy },
+          end: { x: base.end.x + dx, y: base.end.y + dy },
+        })
       } else if (dragging.kind === 'rectangle') {
         if (rectangleSizeEditor) return
         const current = toWorld(e.clientX, e.clientY)
@@ -6484,12 +6486,16 @@ export function WorkspaceCanvas() {
       if (notchPreview && notchPreview.pieceId === dragging.pieceId) {
         const movePiece = pieces.find((p) => p.id === dragging.pieceId)
         if (movePiece && notchPreview.onInternalLine && movePiece.internalLines.length > 0) {
-          const L = pathLengthAt(movePiece.internalLines, notchPreview.curveIndex, notchPreview.t)
-          const total = totalPathLength(movePiece.internalLines)
+          const L = internalLineSegmentPathLength(
+            movePiece.internalLines,
+            notchPreview.curveIndex,
+            notchPreview.t,
+          )
+          const segLen = internalLineSegmentTotalLength(movePiece.internalLines, notchPreview.curveIndex)
           updateNotch(dragging.pieceId, dragging.notchId, {
             internalLineIndex: notchPreview.curveIndex,
-            internalSNormalized: total > 0 ? L / total : undefined,
-            internalArcLengthMm: total > 0 ? L : undefined,
+            internalSNormalized: segLen > 0 ? L / segLen : undefined,
+            internalArcLengthMm: segLen > 0 ? L : undefined,
             position: notchPreview.storePos,
             angle: notchPreview.storeAngle,
           })
@@ -6544,8 +6550,8 @@ export function WorkspaceCanvas() {
             return
           }
           const notchPos = nearestCurveIndexAndPoint(position, intCurves)?.point ?? position
-          const L = pathLengthAt(intCurves, curveIndex, t)
-          const total = totalPathLength(intCurves)
+          const L = internalLineSegmentPathLength(intCurves, curveIndex, t)
+          const segLen = internalLineSegmentTotalLength(intCurves, curveIndex)
           addNotch(pieceId, {
             id,
             position: notchPos,
@@ -6554,8 +6560,8 @@ export function WorkspaceCanvas() {
             depth: defaultDepth,
             width: defaultWidth,
             internalLineIndex: curveIndex,
-            internalSNormalized: total > 0 ? L / total : undefined,
-            internalArcLengthMm: total > 0 ? L : undefined,
+            internalSNormalized: segLen > 0 ? L / segLen : undefined,
+            internalArcLengthMm: segLen > 0 ? L : undefined,
           })
           setDragging(null)
           setHoveredPieceId(null)
@@ -6694,11 +6700,7 @@ export function WorkspaceCanvas() {
           const t = nr.t ?? 0
           const tangDeg = contourTangentAngleDeg(pieceSnap.cutLine, nr.curveIndex, t)
           const currentLine = pieceSnap.grainLine ?? getPieceGrainLine(pieceSnap)
-          const aligned = alignGrainLineToContourTangent(currentLine, tangDeg)
-          const bounds = curvesBounds(pieceSnap.cutLine)
-          if (bounds) {
-            setGrainLine(dragging.pieceId, clampLineSegmentInAabb(aligned, bounds))
-          }
+          setGrainLine(dragging.pieceId, alignGrainLineToContourTangent(currentLine, tangDeg))
         }
       }
     }
@@ -7966,8 +7968,8 @@ export function WorkspaceCanvas() {
           })()}
           {/* Eckpunkte: Seam-as-Master = auf seamLine; sonst cut/seam je nach Ansicht */}
           {contourEditEnabled &&
-            showPoints &&
-            (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+            (showPoints || tool === 'notch') &&
+            (tool === 'select' || tool === 'point' || tool === 'curvepoint' || tool === 'notch') &&
             (() => {
               const vpS = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
               const ps = (1 / Math.max(view.zoom, 1e-6)) * vpS
@@ -8027,8 +8029,8 @@ export function WorkspaceCanvas() {
           }
           {/* Kurvenpunkte (Bézier-Mitte): bei Nahtzugabe auf Nahtlinie, sonst Schnittkontur */}
           {contourEditEnabled &&
-            showPoints &&
-            (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+            (showPoints || tool === 'notch') &&
+            (tool === 'select' || tool === 'point' || tool === 'curvepoint' || tool === 'notch') &&
             (() => {
               const vpS = Math.min(2.5, Math.max(0.5, canvasVertexPointUiScale))
               const ps = (1 / Math.max(view.zoom, 1e-6)) * vpS
@@ -9169,7 +9171,8 @@ export function WorkspaceCanvas() {
               </g>
             )
           })}
-          {seamAssignments.length > 0 &&
+          {showSeamPruefanzeigen &&
+            seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
               if (isInternalSeamAssignment(a)) {
                 const pieceA = pieces.find((p) => p.id === a.pieceIdA)
@@ -10588,6 +10591,7 @@ export function WorkspaceCanvas() {
           setEdgeSeamPickingActive(false)
         }}
       />}
+      <WorkspaceLiveCostPanel />
     </div>
   )
 }
@@ -10623,7 +10627,7 @@ function EdgeAllowancePopover({
         padding: '10px 14px',
         zIndex: 3000,
         fontFamily: 'sans-serif',
-        fontSize: uiTextPx(13),
+        fontSize: 13,
         minWidth: 160,
       }}
       onPointerDown={(e) => e.stopPropagation()}
@@ -10645,7 +10649,7 @@ function EdgeAllowancePopover({
         style={{
           width: '100%',
           padding: '4px 8px',
-          fontSize: uiTextPx(14),
+          fontSize: 14,
           border: '1px solid #bbb',
           borderRadius: 4,
           boxSizing: 'border-box',
@@ -10657,7 +10661,7 @@ function EdgeAllowancePopover({
           onClick={onCancel}
           style={{
             padding: '3px 10px',
-            fontSize: uiTextPx(12),
+            fontSize: 12,
             border: '1px solid #ccc',
             borderRadius: 4,
             background: '#f5f5f5',
@@ -10671,7 +10675,7 @@ function EdgeAllowancePopover({
           onClick={confirm}
           style={{
             padding: '3px 10px',
-            fontSize: uiTextPx(12),
+            fontSize: 12,
             border: 'none',
             borderRadius: 4,
             background: '#e65100',

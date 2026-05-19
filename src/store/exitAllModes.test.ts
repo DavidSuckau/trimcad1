@@ -22,6 +22,7 @@ describe('exitAllModes', () => {
       showSettingsModal: true,
       showStuecklisteModal: true,
       showMaterialCatalogModal: true,
+      showNestingModal: true,
       configuratorModalOpen: true,
       rockGeneratorModalOpen: true,
       toastMessage: 'warn:test',
@@ -55,6 +56,7 @@ describe('exitAllModes', () => {
     expect(s.showSettingsModal).toBe(false)
     expect(s.showStuecklisteModal).toBe(false)
     expect(s.showMaterialCatalogModal).toBe(false)
+    expect(s.showNestingModal).toBe(false)
     expect(s.configuratorModalOpen).toBe(false)
     expect(s.rockGeneratorModalOpen).toBe(false)
   })

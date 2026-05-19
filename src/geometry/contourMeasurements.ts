@@ -1,10 +1,7 @@
-import type { Notch, PatternPiece, Point } from '../types/model'
-import { pathLengthAt, totalPathLength, pointAtPathLength, bezierDerivativeAt } from './curveToPath'
-import { getNotchCurveIndexAndT, getNotchPositionAndAngleOnSeamLine } from './notchOnCurve'
-import { nearestCurveIndexAndPoint } from './nearestOnCurve'
+import type { PatternPiece, Point } from '../types/model'
+import { totalPathLength, pointAtPathLength, bezierDerivativeAt } from './curveToPath'
+import { collectContourMeasurementStationArcLengths } from './measurementStations'
 
-/** Stationen näher als diese Bogenlänge (mm) gelten als identisch (Ecke + Kerbe am selben Punkt). */
-const STATION_MERGE_MM = 0.4
 /** Kürzeste angezeigte Teilstrecke (mm). */
 const MIN_DISPLAY_MM = 0.01
 
@@ -42,26 +39,9 @@ function useSeamLineForContourMeasurements(piece: PatternPiece): boolean {
   )
 }
 
-function notchToCurveParameterOnContour(
-  notch: Notch,
-  contour: PatternPiece['cutLine'],
-  piece: PatternPiece,
-  measureOnSeam: boolean
-): { curveIndex: number; t: number } | null {
-  if (contour.length === 0) return null
-  if (measureOnSeam && piece.seamLine.length > 0 && piece.cutLine.length > 0) {
-    const onSeam = getNotchPositionAndAngleOnSeamLine(notch, piece.cutLine, piece.seamLine)
-    if (onSeam) {
-      const r = nearestCurveIndexAndPoint(onSeam.position, contour)
-      if (r) return { curveIndex: r.curveIndex, t: r.t ?? 0 }
-    }
-  }
-  return getNotchCurveIndexAndT(notch, piece.cutLine)
-}
-
 /**
  * Alle Teilstrecken entlang der gewählten Außen-/Arbeitskontur zwischen aufeinanderfolgenden
- * „Stationen“: Eckpunkte (Polygon-Ecken) und Kerben (Mittelpunkt auf der Kontur).
+ * „Stationen“: feste Eckpunkte (rot) und Kerben — keine weichen (blauen) Ecken.
  * Maße = Bogenlängen in mm (Geraden exakt, Bézier numerisch).
  *
  * Mit Nahtzugabe und tessellierter cutLine werden die Maße entlang der **seamLine** gebildet,
@@ -76,39 +56,12 @@ export function getCutLineContourMeasurements(piece: PatternPiece): ContourMeasu
   const total = totalPathLength(contour)
   if (total <= MIN_DISPLAY_MM) return []
 
-  const stations: Station[] = []
-
-  for (let i = 0; i < n; i++) {
-    const s = pathLengthAt(contour, i, 0)
-    stations.push({ s, p: { ...contour[i].start } })
-  }
-
-  for (const notch of piece.notches) {
-    const ct = notchToCurveParameterOnContour(notch, contour, piece, measureOnSeam)
-    if (!ct) continue
-    let t = ct.t
-    t = Math.max(0, Math.min(1, t))
-    const s = pathLengthAt(contour, ct.curveIndex, t)
+  const stationS = collectContourMeasurementStationArcLengths(piece, contour)
+  const merged: Station[] = []
+  for (const s of stationS) {
     const pr = pointAtPathLength(contour, s)
     if (!pr) continue
-    stations.push({ s, p: pr.point })
-  }
-
-  stations.sort((a, b) => a.s - b.s)
-
-  const merged: Station[] = []
-  for (const st of stations) {
-    if (merged.length === 0) {
-      merged.push({ ...st })
-      continue
-    }
-    const last = merged[merged.length - 1]
-    if (Math.abs(st.s - last.s) < STATION_MERGE_MM) {
-      last.s = (last.s + st.s) / 2
-      last.p = { x: (last.p.x + st.p.x) / 2, y: (last.p.y + st.p.y) / 2 }
-      continue
-    }
-    merged.push({ ...st })
+    merged.push({ s, p: pr.point })
   }
 
   const m = merged.length

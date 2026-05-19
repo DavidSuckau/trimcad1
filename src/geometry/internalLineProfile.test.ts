@@ -74,7 +74,7 @@ describe('internalLineProfile', () => {
 
   it('derives role range between start and end', () => {
     const piece = pieceWithInternal()
-    const range = deriveInternalNotchRoleRangeOnPath(piece)
+    const range = deriveInternalNotchRoleRangeOnPath(piece, [0])
     expect(range).toEqual({ startNotchId: 'start', endNotchId: 'e' })
   })
 

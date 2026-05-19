@@ -14,11 +14,6 @@ import {
   resolveNotchInternalLineAnchor,
 } from './notchOnInternalLine'
 
-/** Alle Segmente der internen Polylinie (offen). */
-export function getInternalProfileCurveIndices(piece: PatternPiece): number[] {
-  return piece.internalLines.map((_, i) => i)
-}
-
 /** Ein einzelnes Segment in `internalLines` (ein Eintrag = eine Linie Punkt→Punkt). */
 export function getSingleInternalLineCurveIndices(curveIndex: number): number[] {
   return curveIndex >= 0 ? [curveIndex] : []
@@ -102,8 +97,9 @@ export function internalProfileEdgeTotalLength(
 
 export function deriveInternalNotchRoleRangeOnPath(
   piece: PatternPiece,
-  curveIndices: number[] = getInternalProfileCurveIndices(piece)
+  curveIndices: number[]
 ): NotchRoleRange | null {
+  if (curveIndices.length === 0) return null
   const curves = piece.internalLines
   const notches = getNotchesOnInternalProfilePath(piece, curveIndices, curves)
   if (notches.length < 2) return null

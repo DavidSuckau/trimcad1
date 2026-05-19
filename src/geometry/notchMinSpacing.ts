@@ -1,5 +1,6 @@
 import type { Notch, PatternPiece } from '../types/model'
-import { pathLengthAt, totalPathLength } from './curveToPath'
+import { pathLengthAt, totalPathLength, curveSegmentArcLength } from './curveToPath'
+import { internalLineSegmentPathLength } from './notchOnInternalLine'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { resolveNotchCutLineAnchor } from './notchOnCurve'
 import {
@@ -62,18 +63,20 @@ function minInternalLineGapToOtherNotchesMm(
 ): number {
   const lines = piece.internalLines
   if (lines.length === 0) return Number.POSITIVE_INFINITY
-  const total = totalPathLength(lines)
-  if (total <= LENGTH_EPS) return Number.POSITIVE_INFINITY
+  const seg = lines[candidateCurveIndex]
+  if (!seg) return Number.POSITIVE_INFINITY
+  const segLen = curveSegmentArcLength(seg, 0, 1)
+  if (segLen <= LENGTH_EPS) return Number.POSITIVE_INFINITY
 
-  const s0 = pathLengthAt(lines, candidateCurveIndex, candidateT)
+  const s0 = internalLineSegmentPathLength(lines, candidateCurveIndex, candidateT)
   let minGap = Number.POSITIVE_INFINITY
 
   for (const n of piece.notches) {
     if (!isNotchOnInternalLine(n)) continue
     if (excludeNotchId != null && n.id === excludeNotchId) continue
     const anchor = resolveNotchInternalLineAnchor(n, lines)
-    if (!anchor) continue
-    const s = pathLengthAt(lines, anchor.curveIndex, anchor.t)
+    if (!anchor || anchor.curveIndex !== candidateCurveIndex) continue
+    const s = internalLineSegmentPathLength(lines, anchor.curveIndex, anchor.t)
     const along = Math.abs(s0 - s)
     if (along < minGap) minGap = along
   }

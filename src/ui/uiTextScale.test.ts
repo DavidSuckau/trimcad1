@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasTextSize, clampUiTextScale, uiTextPx } from './uiTextScale'
+import { canvasTextSize, clampUiTextScale } from './uiTextScale'
 
 describe('uiTextScale', () => {
   it('clampUiTextScale begrenzt auf 0.75–1.75', () => {
@@ -11,9 +11,5 @@ describe('uiTextScale', () => {
 
   it('canvasTextSize skaliert Basiswerte', () => {
     expect(canvasTextSize(10, 1.5)).toBe(15)
-  })
-
-  it('uiTextPx erzeugt calc-Ausdruck', () => {
-    expect(uiTextPx(13)).toBe('calc(13px * var(--ui-text-scale, 1))')
   })
 })

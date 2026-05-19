@@ -59,7 +59,7 @@ export type TrimTexProjectFileV1 = {
   canvasDigitizeUiScale: number
   /** 0.5–2.5: rote Eckpunkte, weiche (blaue) Punkte, Bézier-Kurvenpunkte. */
   canvasVertexPointUiScale: number
-  /** 0.75–1.75: Schriftgröße in Oberfläche und auf der Arbeitsfläche. */
+  /** 0.75–1.75: Schriftgröße für Beschriftungen auf Teilen. */
   uiTextScale: number
   /** Drehpunkt, Drehring und Drehgriff am ausgewählten Teil (Standard: an). */
   showPivotRotationUi: boolean

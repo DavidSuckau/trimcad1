@@ -24,6 +24,7 @@ import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { StuecklisteModal } from './StuecklisteModal'
 import { MaterialCatalogModal } from './MaterialCatalogModal'
+import { NestingModal } from './NestingModal'
 import { ProfileAssignmentDialog } from './ProfileAssignmentDialog'
 import logoTrimtexUrl from '../assets/logo-trimtex.png'
 
@@ -89,6 +90,7 @@ export function Toolbar() {
     setShowSettingsModal,
     setShowStuecklisteModal,
     setShowMaterialCatalogModal,
+    setShowNestingModal,
     setShowHelpModal,
     setShowShortcutListModal,
     dxfExportScale,
@@ -149,6 +151,7 @@ export function Toolbar() {
       setShowSettingsModal: s.setShowSettingsModal,
       setShowStuecklisteModal: s.setShowStuecklisteModal,
       setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
+      setShowNestingModal: s.setShowNestingModal,
       setShowHelpModal: s.setShowHelpModal,
       setShowShortcutListModal: s.setShowShortcutListModal,
       dxfExportScale: s.dxfExportScale,
@@ -442,7 +445,10 @@ export function Toolbar() {
 
   return (
     <header className="menubar" ref={menuRef}>
-      <img src={logoTrimtexUrl} alt="TrimTex" className="menubar-logo" />
+      <div className="menubar-brand">
+        <img src={logoTrimtexUrl} alt="TrimTex" className="menubar-logo" />
+      </div>
+      <div className="menubar-divider" role="presentation" aria-hidden />
       <input
         ref={jsonImportInputRef}
         type="file"
@@ -515,7 +521,7 @@ export function Toolbar() {
           reader.readAsDataURL(file)
         }}
       />
-      <nav className="menubar-nav">
+      <nav className="menubar-nav" aria-label="Hauptmenü">
         <div className="menubar-item-wrap">
           <button
             type="button"
@@ -1122,6 +1128,18 @@ export function Toolbar() {
                   Materialdatenbank
                 </button>
               </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setShowNestingModal(true)
+                    closeMenu()
+                  }}
+                >
+                  Zuschnittplan (Nesting) …
+                </button>
+              </li>
             </ul>
           )}
         </div>
@@ -1214,6 +1232,7 @@ export function Toolbar() {
           )}
         </div>
       </nav>
+      <div className="menubar-divider menubar-divider--grow" role="presentation" aria-hidden />
       <div className="toolbar-tool-indicator" title="Aktives Werkzeug">
         {(() => {
           const d = TOOL_DISPLAY[tool]
@@ -1221,29 +1240,22 @@ export function Toolbar() {
           const shortcut = d?.shortcut
           return (
             <span className="toolbar-tool-label">
-              Werkzeug: {label}
-              {shortcut != null && <span className="menubar-shortcut">{shortcut}</span>}
+              <span className="toolbar-tool-label-muted">Werkzeug</span>
+              <span className="toolbar-tool-label-name">{label}</span>
+              {shortcut != null && <kbd className="menubar-kbd">{shortcut}</kbd>}
             </span>
           )
         })()}
         {tool === 'notch' && (
           <label
             className="toolbar-notch-preset"
-            style={{
-              marginLeft: 16,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 12,
-              color: '#333',
-            }}
             title="Notch 1 ist der Standard. Werte kommen aus Einstellungen → Notches. Hier das Preset wählen, das beim Setzen einer neuen Kerbe verwendet wird."
           >
-            <span>Aktives Notch-Preset (Notch 1 = Standard):</span>
+            <span className="toolbar-notch-preset-label">Notch-Preset</span>
             <select
+              className="toolbar-notch-preset-select"
               value={activeNotchPresetIndex}
               onChange={(e) => setActiveNotchPresetIndex(Number(e.target.value))}
-              style={{ fontSize: 12, padding: '2px 6px', maxWidth: 280 }}
             >
               {notchSettings.map((n, i) => {
                 const typLabel = n.type === 'kerbe' ? 'Kerbe' : n.type === 'keine' ? 'Keine' : 'Strich'
@@ -1257,7 +1269,7 @@ export function Toolbar() {
           </label>
         )}
       </div>
-      <div className="menubar-right">
+      <div className="menubar-right" aria-label="Werkzeugleiste">
         {nahtzuordnungMode !== 'idle' && (
           <span className="nahtzuordnung-hint">
             {nahtzuordnungMode === 'first'
@@ -1368,6 +1380,7 @@ export function Toolbar() {
       <SettingsModal />
       <StuecklisteModal />
       <MaterialCatalogModal />
+      <NestingModal />
       <ProfileAssignmentDialog />
       <SeamAdjustmentModal />
       <SeamAssignmentMetaModal />

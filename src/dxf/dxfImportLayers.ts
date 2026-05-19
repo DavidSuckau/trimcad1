@@ -3,8 +3,8 @@
  * Namen werden normalisiert (trim, uppercase) vor dem Abgleich.
  */
 
-export function normalizeDxfLayerName(layer: string): string {
-  return layer.trim().toUpperCase()
+export function normalizeDxfLayerName(layer: string | undefined): string {
+  return (layer ?? '0').trim().toUpperCase()
 }
 
 /**
@@ -38,6 +38,7 @@ export const SEAM_LAYER_NAMES = new Set(
 /** Kerben als LINE-Entity (Layer → Notch-Typ). */
 const NOTCH_ENTRIES: Array<[string, 'single' | 'double' | 'v']> = [
   ['4', 'single'],
+  ['5', 'single'],
   ['80', 'single'],
   ['81', 'double'],
   ['82', 'v'],
@@ -83,7 +84,25 @@ export function isSeamLayer(layer: string): boolean {
   return SEAM_LAYER_NAMES.has(normalizeDxfLayerName(layer))
 }
 
+/** ASTM Layer 2: Hilfspunkte an Kontur — keine Kerben. */
+export function isAuxDxfLayer(layer: string): boolean {
+  const n = normalizeDxfLayerName(layer)
+  return n === '2' || n === 'DEFPOINTS'
+}
+
+/** Interne Linien / Abnäher (ASTM 8, AAMA INTERNAL). */
+export const INTERNAL_LAYER_NAMES = new Set(
+  ['8', 'INTERNAL', 'INT', 'INSIDE', 'CONSTRUCTION', 'ABNAEHER', 'ABNÄHER', 'FOLD', 'FALTE'].map((s) =>
+    s.toUpperCase()
+  )
+)
+
+export function isInternalLayer(layer: string): boolean {
+  return INTERNAL_LAYER_NAMES.has(normalizeDxfLayerName(layer))
+}
+
 export function isNotchLineLayer(layer: string): boolean {
+  if (isAuxDxfLayer(layer)) return false
   return NOTCH_LAYER_TO_TYPE.has(normalizeDxfLayerName(layer))
 }
 
@@ -108,6 +127,8 @@ export function isExcludedLayerFallback(layer: string): boolean {
   if (NOTCH_LAYER_TO_TYPE.has(n)) return true
   if (DRILL_LAYER_NAMES.has(n)) return true
   if (GRAIN_LAYER_NAMES.has(n)) return true
+  if (INTERNAL_LAYER_NAMES.has(n)) return true
+  if (isAuxDxfLayer(layer)) return true
   const sub = ['TEXT', 'DIMENSION', 'AXIS', 'DEFPOINTS', 'HATCH', 'CENTER', 'HIDDEN', 'DOTS', 'PHANTOM', 'VIEWPORT', 'TITLE', 'GRID', 'CONSTRUCTION', 'M-TEXT', 'LEADER', 'ATTDEF', 'ANNOTATION']
   for (const s of sub) {
     if (n.includes(s)) return true
