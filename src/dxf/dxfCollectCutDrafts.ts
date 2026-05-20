@@ -538,6 +538,7 @@ function collectInternalsInBlockForBounds(
   const circles: Array<{ center: DxfPoint; radius: number }> = []
 
   for (const be of blockEntities) {
+    if (be.type === 'INSERT') continue
     if (isAuxDxfLayer(be.layer)) continue
     if (be.type === 'CIRCLE' && isInternalLayer(be.layer)) {
       const c = transformDxfInsertPoint({ x: be.cx, y: be.cy }, insert, unitScale)

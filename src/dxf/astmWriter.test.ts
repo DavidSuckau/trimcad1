@@ -28,12 +28,14 @@ function minimalPiece(overrides: Partial<PatternPiece> = {}): PatternPiece {
         depth: 5,
         width: 6,
         sNormalized: 0.25,
+        angle: 90,
       },
     ],
     drills: [],
     internalLines: [],
     internalCircles: [],
     grainLine: { start: { x: 50, y: 10 }, end: { x: 50, y: 70 } },
+    layer: 'CUT',
     transform: { x: 0, y: 0, rotation: 0, mirrored: false },
     ...overrides,
   }
@@ -42,7 +44,11 @@ function minimalPiece(overrides: Partial<PatternPiece> = {}): PatternPiece {
 describe('exportWorkspaceToAstmDxf', () => {
   it('exportiert geschlossene Kontur mit 70=1, Grain auf 7, Kerben ohne Layer 7', () => {
     const workspace: Workspace = {
+      id: 'ws-astm',
+      name: 'Test',
       pieces: [minimalPiece()],
+      view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [],
       notes: [],
     }
     const dxf = exportWorkspaceToAstmDxf(workspace, 1)

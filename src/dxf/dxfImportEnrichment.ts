@@ -9,14 +9,12 @@ import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   type BBox,
-  type PieceDraft,
   dxfVerticesToLineCurves,
   lineToNotchDxf,
   pointToNotchDxf,
   polylineFromEntity,
   transformDxfInsertPoint,
 } from './dxfCollectCutDrafts'
-import { dist } from './dxfShared'
 import {
   isCutLayer,
   isDrillLayer,
@@ -105,6 +103,7 @@ function collectInternalsFromEntityList(
   }
 
   for (const e of entities) {
+    if (e.type === 'INSERT') continue
     if (isAuxDxfLayer(e.layer)) continue
 
     if (e.type === 'LINE') {
