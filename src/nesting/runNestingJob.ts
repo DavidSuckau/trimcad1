@@ -1,6 +1,13 @@
 import type { PatternPiece } from '../types/model'
 import type { MaterialCatalogRow } from '../material/materialCatalogTypes'
-import type { NestingJobRequest, NestingJobResponse, NestingPieceInput, NestingPlan } from './nestingTypes'
+import type {
+  NestingJobRequest,
+  NestingJobResponse,
+  NestingPieceInput,
+  NestingPlan,
+  NestingProgressCallback,
+  NestingWorkerOutMessage,
+} from './nestingTypes'
 import { buildNestingPartGeometry } from './nestingGeometry'
 import { runNesting } from './nestingEngine'
 import { findCatalogRowByMaterialKey } from '../bom/materialCatalogCost'
@@ -70,17 +77,47 @@ export function buildNestingJobRequest(
   }
 }
 
+function safeRunNesting(request: NestingJobRequest, onProgress?: NestingProgressCallback): NestingJobResponse {
+  try {
+    return runNesting(request, onProgress)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Nesting-Berechnung fehlgeschlagen.'
+    return { ok: false, error: message }
+  }
+}
+
 /** Nesting im Web Worker; fällt bei Worker-Fehler auf Main-Thread zurück. */
-export function runNestingJobAsync(request: NestingJobRequest): Promise<NestingJobResponse> {
+export function runNestingJobAsync(
+  request: NestingJobRequest,
+  onProgress?: NestingProgressCallback,
+): Promise<NestingJobResponse> {
   return new Promise<NestingJobResponse>((resolve) => {
-    const w = getWorker()
-    const onMessage = (ev: MessageEvent<NestingJobResponse>) => {
-      w.removeEventListener('message', onMessage)
-      resolve(ev.data)
+    try {
+      const w = getWorker()
+      const cleanup = () => {
+        w.removeEventListener('message', onMessage)
+        w.removeEventListener('error', onWorkerError)
+      }
+      const onMessage = (ev: MessageEvent<NestingWorkerOutMessage>) => {
+        const data = ev.data
+        if (data.type === 'progress') {
+          onProgress?.(data.pct, data.phase)
+          return
+        }
+        cleanup()
+        resolve(data.result)
+      }
+      const onWorkerError = () => {
+        cleanup()
+        resolve(safeRunNesting(request, onProgress))
+      }
+      w.addEventListener('message', onMessage)
+      w.addEventListener('error', onWorkerError)
+      w.postMessage(request)
+    } catch {
+      resolve(safeRunNesting(request, onProgress))
     }
-    w.addEventListener('message', onMessage)
-    w.postMessage(request)
-  }).catch(() => runNesting(request))
+  })
 }
 
 /** Synchron (Tests). */

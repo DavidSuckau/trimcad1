@@ -58,3 +58,12 @@ export type NestingJobRequest = {
 export type NestingJobResponse =
   | { ok: true; plan: NestingPlan }
   | { ok: false; error: string }
+
+export type NestingProgressPhase = 'placing' | 'optimizing'
+
+export type NestingProgressCallback = (pct: number, phase: NestingProgressPhase) => void
+
+/** Nachrichten vom Nesting-Web-Worker an den UI-Thread. */
+export type NestingWorkerOutMessage =
+  | { type: 'progress'; pct: number; phase: NestingProgressPhase }
+  | { type: 'result'; result: NestingJobResponse }

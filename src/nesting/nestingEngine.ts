@@ -4,6 +4,8 @@ import type {
   NestingPartGeometry,
   NestingPlacement,
   NestingPlan,
+  NestingProgressCallback,
+  NestingProgressPhase,
   NestingRotationDeg,
 } from './nestingTypes'
 import { polygonBounds, translatePolygon, type NestPoint } from './nestingGeometry'
@@ -18,12 +20,18 @@ function toClipperPath(pts: NestPoint[]): ClipperLib.IntPoint[] {
 
 function polygonsOverlap(a: NestPoint[], b: NestPoint[]): boolean {
   if (a.length < 3 || b.length < 3) return false
-  const c = new ClipperLib.Clipper()
-  c.AddPath(toClipperPath(a), ClipperLib.PolyType.ptSubject, true)
-  c.AddPath(toClipperPath(b), ClipperLib.PolyType.ptClip, true)
-  const solution: ClipperLib.Paths = []
-  c.Execute(ClipperLib.ClipType.ctIntersection, solution)
-  return solution.length > 0 && solution[0].length >= 3
+  try {
+    const c = new ClipperLib.Clipper()
+    c.AddPath(toClipperPath(a), ClipperLib.PolyType.ptSubject, true)
+    c.AddPath(toClipperPath(b), ClipperLib.PolyType.ptClip, true)
+    const solution: ClipperLib.Paths = []
+    c.Execute(ClipperLib.ClipType.ctIntersection, solution)
+    return solution.length > 0 && solution[0].length >= 3
+  } catch {
+    const ba = polygonBounds(a)
+    const bb = polygonBounds(b)
+    return !(ba.maxX <= bb.minX || bb.maxX <= ba.minX || ba.maxY <= bb.minY || bb.maxY <= ba.minY)
+  }
 }
 
 function polygonFitsInBin(pts: NestPoint[], binWidth: number, maxLength: number | null): boolean {
@@ -56,8 +64,13 @@ function candidatePositions(
     candidates.push({ x: b.minX, y: b.maxY + gap })
     candidates.push({ x: b.maxX + gap, y: b.minY })
     candidates.push({ x: 0, y: b.maxY + gap })
+    candidates.push({ x: b.minX, y: b.minY })
     if (b.maxX + gap + variantBounds.width <= binWidth + 0.01) {
       candidates.push({ x: b.maxX + gap, y: b.minY })
+      candidates.push({ x: b.maxX + gap, y: b.maxY + gap })
+    }
+    if (b.minX + variantBounds.width <= binWidth + 0.01) {
+      candidates.push({ x: b.minX, y: b.maxY + gap })
     }
   }
   const seen = new Set<string>()
@@ -145,12 +158,13 @@ function tryPlaceInstance(
   return best ? { pts: best.pts, placement: best.placement } : null
 }
 
-/** Mehrere Reihenfolgen testen (einfache Optimierung). */
-const ORDER_SHUFFLES = 3
+/** Mehrere Reihenfolgen testen (Bottom-Left-Heuristik, inspiriert von SVGNest/Deepnest). */
+const ORDER_SHUFFLES = 8
 
 function runSingleOrder(
   instances: Instance[],
   req: NestingJobRequest,
+  onPieceStep?: () => void,
 ): { placements: NestingPlacement[]; placed: Placed[]; unplaced: number } {
   const placed: Placed[] = []
   const placements: NestingPlacement[] = []
@@ -161,10 +175,11 @@ function runSingleOrder(
     const result = tryPlaceInstance(inst, placed, req.rollWidthMm, req.maxRollLengthMm, req.spacingMm, allow180)
     if (!result) {
       unplaced++
-      continue
+    } else {
+      placed.push(result)
+      placements.push(result.placement)
     }
-    placed.push(result)
-    placements.push(result.placement)
+    onPieceStep?.()
   }
   return { placements, placed, unplaced }
 }
@@ -180,15 +195,30 @@ function shuffleOrder<T>(arr: T[], seed: number): T[] {
   return a
 }
 
-export function runNesting(req: NestingJobRequest): NestingJobResponse {
+export function runNesting(req: NestingJobRequest, onProgress?: NestingProgressCallback): NestingJobResponse {
   const started = Date.now()
   const instances = buildInstances(req)
   if (instances.length === 0) {
     return { ok: false, error: 'Keine Teile mit Stückzahl > 0.' }
   }
 
+  const pieceCount = instances.length
+  const totalSteps = pieceCount * ORDER_SHUFFLES
+  let completedSteps = 0
+  const report = (phase: NestingProgressPhase) => {
+    if (!onProgress || totalSteps <= 0) return
+    const pct = Math.min(99, Math.round((completedSteps / totalSteps) * 100))
+    onProgress(pct, phase)
+  }
+  const pieceStep = (phase: NestingProgressPhase) => {
+    completedSteps++
+    report(phase)
+  }
+
+  onProgress?.(0, 'placing')
+
   const sorted = orderInstances(instances)
-  let bestResult = runSingleOrder(sorted, req)
+  let bestResult = runSingleOrder(sorted, req, () => pieceStep('placing'))
   let bestUsedY = 0
   for (const p of bestResult.placed) {
     bestUsedY = Math.max(bestUsedY, polygonBounds(p.pts).maxY)
@@ -197,7 +227,7 @@ export function runNesting(req: NestingJobRequest): NestingJobResponse {
   for (let s = 1; s < ORDER_SHUFFLES; s++) {
     if (Date.now() - started > req.timeLimitMs) break
     const shuffled = shuffleOrder(sorted, s + 42)
-    const attempt = runSingleOrder(shuffled, req)
+    const attempt = runSingleOrder(shuffled, req, () => pieceStep('optimizing'))
     let usedY = 0
     for (const p of attempt.placed) {
       usedY = Math.max(usedY, polygonBounds(p.pts).maxY)
@@ -210,6 +240,8 @@ export function runNesting(req: NestingJobRequest): NestingJobResponse {
       bestUsedY = usedY
     }
   }
+
+  onProgress?.(100, 'optimizing')
 
   if (bestResult.unplaced > 0 && bestResult.placements.length === 0) {
     return {

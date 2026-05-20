@@ -8,6 +8,7 @@ import { listNestingMaterialOptions, piecesForMaterial } from '../nesting/nestin
 import { buildGeometriesForPlan } from '../nesting/nestingDxfExport'
 import { downloadNestingPlanDxf } from '../nesting/nestingDxfExport'
 import { buildNestingJobRequest, runNestingJobAsync } from '../nesting/runNestingJob'
+import { fmtEuroNesting, summarizeNestingMaterialCosts } from '../nesting/nestingMaterialCost'
 import { NestingCanvas } from './NestingCanvas'
 import type { NestingPieceInput } from '../nesting/nestingTypes'
 
@@ -69,12 +70,23 @@ export function NestingModal() {
   const materialOptions = useMemo(() => listNestingMaterialOptions(pieces, catalogRows), [pieces, catalogRows])
 
   const [computing, setComputing] = useState(false)
+  const [nestingProgress, setNestingProgress] = useState(0)
+  const [nestingProgressPhase, setNestingProgressPhase] = useState<'placing' | 'optimizing'>('placing')
 
   useEffect(() => {
     if (!showNestingModal) return
     if (nestingSelectedMaterialKey && materialOptions.some((o) => o.materialKey === nestingSelectedMaterialKey)) return
     if (materialOptions.length > 0) setNestingSelectedMaterialKey(materialOptions[0].materialKey)
   }, [showNestingModal, materialOptions, nestingSelectedMaterialKey, setNestingSelectedMaterialKey])
+
+  useEffect(() => {
+    if (!showNestingModal) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowNestingModal(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showNestingModal, setShowNestingModal])
 
   const materialPieces = useMemo(() => {
     if (!nestingSelectedMaterialKey) return []
@@ -111,8 +123,25 @@ export function NestingModal() {
     setComputing(true)
     setNestingStatus('running')
     setNestingError(null)
-    const result = await runNestingJobAsync(built.request)
+    setNestingProgress(2)
+    setNestingProgressPhase('placing')
+    let result: Awaited<ReturnType<typeof runNestingJobAsync>>
+    try {
+      result = await runNestingJobAsync(built.request, (pct, phase) => {
+        setNestingProgress(pct)
+        setNestingProgressPhase(phase)
+      })
+    } catch (err) {
+      setComputing(false)
+      setNestingProgress(0)
+      const msg = err instanceof Error ? err.message : 'Nesting-Berechnung fehlgeschlagen.'
+      setNestingError(msg)
+      setNestingStatus('error')
+      setToastMessage(`warn:${msg}`)
+      return
+    }
     setComputing(false)
+    setNestingProgress(0)
     if (!result.ok) {
       setNestingError(result.error)
       setNestingStatus('error')
@@ -146,35 +175,73 @@ export function NestingModal() {
 
   const selectedOption = materialOptions.find((o) => o.materialKey === nestingSelectedMaterialKey)
 
+  const costSummary = useMemo(
+    () =>
+      summarizeNestingMaterialCosts({
+        materialOptions,
+        pieces,
+        nestingInputs,
+        catalogRows,
+        selectedMaterialKey: nestingSelectedMaterialKey,
+        selectedPlanUsedLengthMm: nestingPlan?.usedLengthMm ?? null,
+      }),
+    [
+      materialOptions,
+      pieces,
+      nestingInputs,
+      catalogRows,
+      nestingSelectedMaterialKey,
+      nestingPlan?.usedLengthMm,
+    ],
+  )
+
   if (!showNestingModal) return null
 
   return (
-    <div
-      className="settings-overlay nesting-overlay"
-      onClick={() => setShowNestingModal(false)}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Zuschnitt / Nesting"
-    >
-      <div
-        className="settings-panel nesting-panel"
-        ref={trapRef}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="settings-header">
-          <h2>Zuschnittplan (Nesting)</h2>
-          <button type="button" className="settings-close" onClick={() => setShowNestingModal(false)} aria-label="Schließen">
+    <div className="nesting-window" ref={trapRef} role="dialog" aria-modal="true" aria-label="Zuschnittplan">
+      <header className="nesting-window-header">
+        <div className="nesting-window-title">
+          <h2>Zuschnittplan</h2>
+          {selectedOption && (
+            <span className="nesting-window-subtitle">
+              {selectedOption.label} · Rollenbreite {selectedOption.rollWidthMm} mm
+            </span>
+          )}
+        </div>
+        <div className="nesting-window-header-actions">
+          {nestingPlan && (
+            <button
+              type="button"
+              className="sidebar-btn"
+              onClick={() => downloadNestingPlanDxf(nestingPlan, pieces, dxfExportScale)}
+            >
+              DXF exportieren
+            </button>
+          )}
+          <button
+            type="button"
+            className="settings-close"
+            onClick={() => setShowNestingModal(false)}
+            aria-label="Fenster schließen"
+          >
             ×
           </button>
         </div>
+      </header>
 
-        {materialOptions.length === 0 ? (
-          <p className="nesting-empty-hint">
-            Kein Stoff mit Rollenbreite im Materialkatalog. Teilen Sie den Teilen eine Materialnummer zu und pflegen Sie die
-            Nutzbreite in der Materialdatenbank.
+      {materialOptions.length === 0 ? (
+        <div className="nesting-window-empty">
+          <p>
+            Kein Stoff mit Rollenbreite im Materialkatalog. Teilen Sie den Teilen eine Materialnummer zu und pflegen Sie
+            die Nutzbreite in der Materialdatenbank.
           </p>
-        ) : (
-          <>
+          <button type="button" className="sidebar-btn primary" onClick={() => setShowNestingModal(false)}>
+            Schließen
+          </button>
+        </div>
+      ) : (
+        <div className="nesting-window-body">
+          <aside className="nesting-window-sidebar">
             <div className="nesting-controls">
               <label className="nesting-field">
                 <span>Material</span>
@@ -189,7 +256,7 @@ export function NestingModal() {
                 >
                   {materialOptions.map((o) => (
                     <option key={o.materialKey} value={o.materialKey}>
-                      {o.label} ({o.rollWidthMm} mm, {o.pieceCount} Teil(e))
+                      {o.label} ({o.rollWidthMm} mm)
                     </option>
                   ))}
                 </select>
@@ -220,34 +287,51 @@ export function NestingModal() {
                   }}
                 />
               </label>
-              <div className="nesting-actions">
-                <button type="button" className="sidebar-btn" onClick={() => importNestingQuantitiesFromBom()}>
-                  Aus Stückliste übernehmen
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-btn primary"
-                  disabled={computing || nestingStatus === 'running'}
-                  onClick={() => void handleCompute()}
-                >
-                  {computing ? 'Berechne…' : 'Zuschnitt berechnen'}
-                </button>
-              </div>
             </div>
+
+            <div className="nesting-sidebar-actions">
+              <button type="button" className="sidebar-btn" onClick={() => importNestingQuantitiesFromBom()}>
+                Aus Stückliste
+              </button>
+              <button
+                type="button"
+                className="sidebar-btn primary"
+                disabled={computing || nestingStatus === 'running'}
+                onClick={() => void handleCompute()}
+              >
+                {computing ? 'Berechne…' : 'Zuschnitt berechnen'}
+              </button>
+            </div>
+
+            {(computing || nestingStatus === 'running') && (
+              <div className="nesting-progress" role="status" aria-live="polite">
+                <div className="nesting-progress-track">
+                  <div
+                    className={`nesting-progress-fill${nestingProgress <= 2 ? ' nesting-progress-fill--indeterminate' : ''}`}
+                    style={{ width: nestingProgress <= 2 ? undefined : `${nestingProgress}%` }}
+                  />
+                </div>
+                <span className="nesting-progress-label">
+                  {nestingProgressPhase === 'optimizing'
+                    ? `Optimierung … ${nestingProgress} %`
+                    : `Platziere Teile … ${nestingProgress} %`}
+                </span>
+              </div>
+            )}
 
             <div className="nesting-table-wrap">
               <table className="stueckliste-table nesting-table">
                 <thead>
                   <tr>
                     <th>Teil</th>
-                    <th>Fläche (m²)</th>
-                    <th>Stückzahl</th>
+                    <th>m²</th>
+                    <th>Stk.</th>
                   </tr>
                 </thead>
                 <tbody>
                   {materialPieces.map((p) => (
                     <tr key={p.id}>
-                      <td>{p.name}</td>
+                      <td title={p.name}>{p.name}</td>
                       <td>{fmtAreaM2(getCutLineAreaMm2(p))}</td>
                       <td>
                         <input
@@ -255,7 +339,7 @@ export function NestingModal() {
                           className="notch-input"
                           min={0}
                           step={1}
-                          style={{ width: 64 }}
+                          style={{ width: 52 }}
                           value={nestingInputs[p.id] ?? 0}
                           onChange={(e) => {
                             const n = parseInt(e.target.value, 10)
@@ -275,54 +359,79 @@ export function NestingModal() {
               </p>
             )}
 
-            {nestingPlan && nestingSelectedMaterialKey && (
-              <div className="nesting-result">
-                <div className="nesting-stats">
-                  <span>
-                    Effizienz: <strong>{nestingPlan.efficiencyPct.toFixed(1)} %</strong>
-                  </span>
-                  <span>
-                    Verbrauch: <strong>{(nestingPlan.usedLengthMm / 1000).toFixed(3)} m</strong>
-                  </span>
-                  <span>
-                    Breite: <strong>{nestingPlan.rollWidthMm} mm</strong>
-                  </span>
-                  <span>
-                    Teile platziert: <strong>{nestingPlan.placements.length}</strong>
-                  </span>
-                  {selectedOption && (
-                    <span className="nesting-grain-hint">
-                      Laufrichtung: Kette nach unten (+Y){' '}
-                      {selectedOption.grainDirection === 'frei' ? '(Stoff frei)' : `(Katalog: ${selectedOption.grainDirection})`}
-                    </span>
+            {nestingPlan && (
+              <div className="nesting-sidebar-stats">
+                <div>
+                  Effizienz <strong>{nestingPlan.efficiencyPct.toFixed(1)} %</strong>
+                </div>
+                <div>
+                  Verbrauch <strong>{(nestingPlan.usedLengthMm / 1000).toFixed(3)} m</strong>
+                </div>
+                {costSummary?.current.costEuro != null && (
+                  <div className="nesting-cost-block">
+                    <div>
+                      {costSummary.current.materialLabel}{' '}
+                      <strong>{fmtEuroNesting(costSummary.current.costEuro)}</strong>
+                      {costSummary.current.isEstimate ? ' (geschätzt)' : ''}
+                    </div>
+                    {costSummary.current.formulaLabel && (
+                      <p className="nesting-cost-formula">{costSummary.current.formulaLabel}</p>
+                    )}
+                  </div>
+                )}
+                {costSummary &&
+                  costSummary.materialCountInTotal > 1 &&
+                  costSummary.totalAllMaterialsEuro != null && (
+                    <div className="nesting-cost-total">
+                      Gesamt ({costSummary.materialCountInTotal} Materialien){' '}
+                      <strong>{fmtEuroNesting(costSummary.totalAllMaterialsEuro)}</strong>
+                    </div>
                   )}
+                <div>
+                  Platziert <strong>{nestingPlan.placements.length}</strong>
                 </div>
-                <NestingCanvas
-                  plan={nestingPlan}
-                  pieces={pieces}
-                  geometries={geometries}
-                  materialKey={nestingSelectedMaterialKey}
-                />
-                <div className="nesting-export-row">
-                  <button
-                    type="button"
-                    className="sidebar-btn"
-                    onClick={() => downloadNestingPlanDxf(nestingPlan, pieces, dxfExportScale)}
-                  >
-                    Zuschnittplan als DXF exportieren
-                  </button>
-                </div>
+                {selectedOption && (
+                  <p className="nesting-grain-hint">
+                    Kette nach unten (+Y)
+                    {selectedOption.grainDirection === 'frei' ? ' · Stoff frei' : ` · ${selectedOption.grainDirection}`}
+                  </p>
+                )}
               </div>
             )}
-          </>
-        )}
 
-        <div className="settings-footer">
-          <button type="button" className="sidebar-btn primary" onClick={() => setShowNestingModal(false)}>
-            Schließen
-          </button>
+            {!nestingPlan && costSummary && costSummary.materialCountInTotal > 1 && (
+              <div className="nesting-sidebar-stats">
+                <div className="nesting-cost-total">
+                  Geschätzt gesamt ({costSummary.materialCountInTotal} Materialien){' '}
+                  <strong>{fmtEuroNesting(costSummary.totalAllMaterialsEuro)}</strong>
+                </div>
+                <p className="nesting-grain-hint">Nach „Zuschnitt berechnen“ Verbrauch und Preis pro Material.</p>
+              </div>
+            )}
+          </aside>
+
+          <main className="nesting-window-main" aria-label="Stoffbahn">
+            {nestingPlan && nestingSelectedMaterialKey ? (
+              <NestingCanvas
+                mode="plan"
+                plan={nestingPlan}
+                pieces={pieces}
+                geometries={geometries}
+                materialKey={nestingSelectedMaterialKey}
+              />
+            ) : selectedOption ? (
+              <NestingCanvas
+                mode="preview"
+                rollWidthMm={selectedOption.rollWidthMm}
+                materialLabel={selectedOption.label}
+                hint="Stückzahlen setzen und „Zuschnitt berechnen“"
+              />
+            ) : (
+              <div className="nesting-main-placeholder">Material wählen …</div>
+            )}
+          </main>
         </div>
-      </div>
+      )}
     </div>
   )
 }
