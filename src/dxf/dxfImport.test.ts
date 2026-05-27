@@ -461,6 +461,20 @@ EOF
     expect(r.pieces[0].internalLines.length).toBe(0)
   })
 
+  it('CUT/SEAM-Dubletten auf Layer 8 (INTERNAL) werden nicht als Innenlinien importiert', () => {
+    const dxf =
+      DXF_HEADER +
+      closedRectPolyline('CUT') +
+      closedRectPolylineOffset('SEAM', 1, 1) +
+      closedRectPolyline('8') +
+      closedRectPolylineOffset('8', 1, 1) +
+      DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].seamLine.length).toBeGreaterThanOrEqual(3)
+    expect(r.pieces[0].internalLines.length).toBe(0)
+  })
+
   it('duplizierte Schnittkontur neben CUT/SEAM aus DXF nicht als Innenlinie', () => {
     const dxf =
       DXF_HEADER +

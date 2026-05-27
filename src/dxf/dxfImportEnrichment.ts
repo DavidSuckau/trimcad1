@@ -9,13 +9,19 @@ import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   type BBox,
-  areNearDuplicateContourRings,
   dxfVerticesToLineCurves,
   lineToNotchDxf,
   pointToNotchDxf,
   polylineFromEntity,
   transformDxfInsertPoint,
 } from './dxfCollectCutDrafts'
+import {
+  type ContourRef,
+  type PieceCutRing,
+  collectPieceContourRefs,
+  isPolylineDuplicateOfAnyContour,
+  stripDuplicateContourInternalLines,
+} from './dxfImportInternalFilter'
 import {
   isCutLayer,
   isDrillLayer,
@@ -30,27 +36,7 @@ const ASSIGN_BBOX_PAD_MM = 50
 const NOTCH_DEDUPE_MM = 2.5
 const V_NOTCH_TIP_SNAP_MM = 1.5
 
-export type PieceCutRing = DxfPoint[] | null
-
-type PieceContourRefs = {
-  cutVertices: DxfPoint[]
-  cutClosed: boolean
-  seamVertices: DxfPoint[] | null
-  seamClosed: boolean
-}
-
-function isPolylineDuplicateOfPieceContours(
-  vertices: DxfPoint[],
-  closed: boolean,
-  refs: PieceContourRefs | undefined,
-): boolean {
-  if (!refs) return false
-  if (areNearDuplicateContourRings(vertices, closed, refs.cutVertices, refs.cutClosed)) return true
-  if (refs.seamVertices && refs.seamVertices.length >= 3) {
-    return areNearDuplicateContourRings(vertices, closed, refs.seamVertices, refs.seamClosed)
-  }
-  return false
-}
+export type { PieceCutRing } from './dxfImportInternalFilter'
 
 export function assignDxfPointToPiece(
   px: number,
@@ -101,7 +87,7 @@ function collectInternalsFromEntityList(
   cutRings: PieceCutRing[],
   cutBounds: BBox[],
   extraCutLayers: string[],
-  contourRefsByPiece: PieceContourRefs[],
+  contourRefsByPiece: ContourRef[][],
 ): {
   internalLinesByPiece: Map<number, Curve[]>
   internalCirclesByPiece: Map<number, InternalCircle[]>
@@ -196,7 +182,7 @@ function collectInternalsFromEntityList(
 
     if (isInternalLayer(pl.layer) || !pl.closed || centroidInside) {
       const dxfPts = pts.map((p) => ({ x: p.x, y: p.y }))
-      if (pl.closed && isPolylineDuplicateOfPieceContours(dxfPts, pl.closed, contourRefsByPiece[idx])) {
+      if (pl.closed && isPolylineDuplicateOfAnyContour(dxfPts, pl.closed, contourRefsByPiece[idx] ?? [])) {
         continue
       }
       pushInternalLine(idx, dxfVerticesToLineCurves(dxfPts, pl.closed))
@@ -283,6 +269,7 @@ function mergeVNotchLines(
 export function enrichPiecesFromParsedDxf(
   pieces: PatternPiece[],
   cutRings: PieceCutRing[],
+  seamRings: PieceCutRing[],
   cutBounds: BBox[],
   parsed: ParsedDxf,
   unitScale: number,
@@ -293,24 +280,9 @@ export function enrichPiecesFromParsedDxf(
 
   const mapPt = (p: DxfPoint): Point => ({ x: p.x * scale, y: p.y * scale })
 
-  const contourRefsByPiece: PieceContourRefs[] = pieces.map((p) => {
-    const cutVertices: DxfPoint[] = []
-    for (const c of p.cutLine) {
-      if (c.type !== 'line') break
-      cutVertices.push({ x: c.start.x, y: c.start.y })
-    }
-    const seamVertices: DxfPoint[] = []
-    for (const c of p.seamLine) {
-      if (c.type !== 'line') break
-      seamVertices.push({ x: c.start.x, y: c.start.y })
-    }
-    return {
-      cutVertices,
-      cutClosed: cutVertices.length >= 3,
-      seamVertices: seamVertices.length >= 3 ? seamVertices : null,
-      seamClosed: seamVertices.length >= 3,
-    }
-  })
+  const contourRefsByPiece: ContourRef[][] = pieces.map((p, i) =>
+    collectPieceContourRefs(p, cutRings[i] ?? null, seamRings[i] ?? null),
+  )
 
   const fromFlat = collectInternalsFromEntityList(
     entities,
@@ -429,6 +401,9 @@ export function enrichPiecesFromParsedDxf(
     } else {
       pieces[i].notches = dedupeNotches(pieces[i].notches)
     }
+
+    const refs = contourRefsByPiece[i] ?? []
+    pieces[i].internalLines = stripDuplicateContourInternalLines(pieces[i].internalLines, refs)
   }
 
   const addPointNotch = (e: Extract<DxfEntity, { type: 'POINT' }>, coordScale: number) => {

@@ -497,7 +497,9 @@ function mergeInnerDraftIntoParent(parent: PieceDraft, inner: PieceDraft): void 
     parent.internalPolylines.push(innerAsInternal)
   }
   for (const pl of inner.internalPolylines ?? []) {
-    parent.internalPolylines.push(pl)
+    if (!isInternalPolylineDuplicateOfDraftContours(pl, parent)) {
+      parent.internalPolylines.push(pl)
+    }
   }
   for (const c of inner.internalCircles ?? []) {
     parent.internalCircles.push(c)
@@ -722,9 +724,7 @@ function isInternalPolylineDuplicateOfDraftContours(
   pl: { vertices: DxfPoint[]; closed: boolean },
   draft: PieceDraft,
 ): boolean {
-  if (
-    areNearDuplicateContourRings(pl.vertices, pl.closed, draft.cutVertices, draft.closed)
-  ) {
+  if (areNearDuplicateContourRings(pl.vertices, pl.closed, draft.cutVertices, draft.closed)) {
     return true
   }
   if (draft.seamVertices && draft.seamVertices.length >= 3) {

@@ -6921,7 +6921,7 @@ export function WorkspaceCanvas() {
                 : 'default',
       } as React.CSSProperties}
     >
-      <div className="workspace-version">Aktuell V. 0.0.6</div>
+      <div className="workspace-version">Aktuell V. 0.0.7</div>
       <CanvasToolbar />
       {notchEditTarget &&
         tool === 'select' &&

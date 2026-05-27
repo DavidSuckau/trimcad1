@@ -26,6 +26,7 @@ import {
   enrichPiecesFromParsedDxf,
   type PieceCutRing,
 } from './dxfImportEnrichment'
+import { seamRingFromDraftVertices, stripDuplicateContourInternalLines, collectPieceContourRefs } from './dxfImportInternalFilter'
 import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { isBinaryDxf, scanUnsupportedEntityHints } from './dxfBinaryHints'
@@ -269,6 +270,7 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
     const pieces: PatternPiece[] = []
     const cutBounds: BBox[] = []
     const cutRings: PieceCutRing[] = []
+    const seamRings: PieceCutRing[] = []
 
     for (let d = 0; d < drafts.length; d++) {
       const draft = drafts[d]
@@ -402,9 +404,22 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       pieces.push(piece)
       cutBounds.push({ minX, minY, maxX, maxY })
       cutRings.push(closedRingPointsRaw(cleanedVertices, isContourClosed))
+      let seamRing: PieceCutRing = seamRingFromDraftVertices(draft.seamVertices, draft.seamClosed)
+      if (!seamRing && seamLine.length >= 3) {
+        const seamVerts: DxfPoint[] = []
+        for (const c of seamLine) {
+          if (c.type !== 'line') break
+          seamVerts.push({ x: c.start.x, y: c.start.y })
+        }
+        seamRing = closedRingPointsRaw(seamVerts, dxfVertexRingClosed(seamVerts))
+      }
+      seamRings.push(seamRing)
+
+      const contourRefs = collectPieceContourRefs(piece, cutRings[cutRings.length - 1], seamRing)
+      piece.internalLines = stripDuplicateContourInternalLines(piece.internalLines, contourRefs)
     }
 
-    enrichPiecesFromParsedDxf(pieces, cutRings, cutBounds, parsed, scale, extraCutLayers)
+    enrichPiecesFromParsedDxf(pieces, cutRings, seamRings, cutBounds, parsed, scale, extraCutLayers)
 
     const standaloneDrills = extractStandaloneDrills(parsed.entities, cutBounds, cutRings, scale)
     const standaloneGrain = extractStandaloneGrain(parsed.entities, cutBounds, cutRings, scale)

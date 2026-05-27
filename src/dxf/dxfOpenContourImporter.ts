@@ -168,7 +168,8 @@ export function importDxfOpenContoursFromString(
       }
     }
 
-    enrichPiecesFromParsedDxf(pieces, cutRings, cutBounds, parsed, scale, extraCutLayers)
+    const seamRings: PieceCutRing[] = cutRings.map(() => null)
+    enrichPiecesFromParsedDxf(pieces, cutRings, seamRings, cutBounds, parsed, scale, extraCutLayers)
 
     const standaloneDrills = extractStandaloneDrills(parsed.entities, cutBounds, cutRings, scale)
     const standaloneGrain = extractStandaloneGrain(parsed.entities, cutBounds, cutRings, scale)
