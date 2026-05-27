@@ -8,8 +8,8 @@ import {
   closedRingPointsRaw,
   DUPLICATE_THRESHOLD_DXF,
   dxfVertexRingClosed,
-  type DxfPoint,
 } from './dxfCollectCutDrafts'
+import type { DxfPoint } from './dxfParser'
 import { dist } from './dxfShared'
 export type PieceCutRing = DxfPoint[] | null
 
