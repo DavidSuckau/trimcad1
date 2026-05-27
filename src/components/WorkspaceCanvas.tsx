@@ -400,6 +400,69 @@ function findNotchContourSnapOnPiece(
   return null
 }
 
+type NotchContourSnapHits = { vertexHitMm: number; vertexSeamHitMm: number; curveMidHitMm: number }
+
+function notchContourSnapHitRadiiMm(
+  container: HTMLElement,
+  svgEl: SVGElement | null,
+  view: { zoom: number; panX: number; panY: number },
+  vertexUiScale: number,
+): NotchContourSnapHits {
+  return {
+    vertexHitMm: clampPointHitWorldMm(
+      worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * vertexUiScale, view, svgEl, container),
+    ),
+    vertexSeamHitMm: clampPointHitWorldMm(
+      worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * vertexUiScale, view, svgEl, container),
+    ),
+    curveMidHitMm: clampPointHitWorldMm(
+      worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX * vertexUiScale, view, svgEl, container),
+    ),
+  }
+}
+
+/** Kontur-Snap (Eck-/Kurvenpunkt) auf placementCurves → Speicherung entlang cutLine. */
+function mapContourSnapToCutLine(
+  piece: PatternPiece,
+  snap: NotchContourSnap,
+  placementCurves: Curve[],
+): { curveIndex: number; t: number; point: Point } {
+  if (placementCurves === piece.cutLine) {
+    return { curveIndex: snap.curveIndex, t: snap.t, point: snap.point }
+  }
+  const onCut = nearestCurveIndexAndPoint(snap.point, piece.cutLine)
+  if (!onCut) {
+    return { curveIndex: snap.curveIndex, t: snap.t, point: snap.point }
+  }
+  return { curveIndex: onCut.curveIndex, t: onCut.t ?? 0, point: onCut.point }
+}
+
+function findInternalLineNotchSnap(
+  piece: PatternPiece,
+  local: Point,
+  hitMm: number,
+): NotchContourSnap | null {
+  let best: { dist: number; curveIndex: number; t: number; point: Point } | null = null
+  for (const { dist, target } of collectInternalLineVertexHoverCandidates(piece, local, hitMm)) {
+    if (best && dist >= best.dist) continue
+    const lines = piece.internalLines
+    if (target.kind === 'internalTerminal') {
+      const ci = target.curveIndex
+      const c = lines[ci]
+      if (!c) continue
+      const point = target.end === 'start' ? c.start : c.end
+      best = { dist, curveIndex: ci, t: target.end === 'start' ? 0 : 1, point: { ...point } }
+    } else if (target.kind === 'internalJunction') {
+      const j = target.j
+      const pt = lines[j]?.start
+      if (!pt) continue
+      best = { dist, curveIndex: j, t: 0, point: { ...pt } }
+    }
+  }
+  if (!best) return null
+  return { point: best.point, curveIndex: best.curveIndex, t: best.t }
+}
+
 function isWorldInsideWorkspaceImage(
   world: Point,
   session: { imagePosition: Point; imageSizePx: { width: number; height: number } | null; renderMmPerPixel: number }
@@ -410,9 +473,6 @@ function isWorldInsideWorkspaceImage(
   return world.x >= left && world.x <= right && world.y >= top && world.y <= bottom
 }
 
-/** t vom Vertex weghalten, damit ein verschobener Notch nicht exakt auf einen Eckpunkt fällt. */
-const NOTCH_MOVE_T_MIN = 0.05
-const NOTCH_MOVE_T_MAX = 0.95
 /** Fallback, wenn Container fehlt (sollte selten sein). */
 const POINT_INSERT_HIT_FALLBACK_MM = 15
 
@@ -1017,29 +1077,43 @@ type NotchMovePreviewState = {
   onInternalLine?: boolean
 }
 
+type NotchMovePreviewOpts = {
+  /** Mausposition in Teillokal-Koordinaten (für Eck-/Kurvenpunkt-Snap wie beim Kerben-Werkzeug). */
+  local?: Point
+  placementCurves?: Curve[]
+  snapHits?: NotchContourSnapHits
+}
+
 /** Vorschau beim Verschieben einer Kerbe (cutLine); optional Mausposition zur Projektion. */
 function buildNotchMovePreview(
   piece: PatternPiece,
   notchId: string,
-  localHint?: Point,
+  moveOpts?: NotchMovePreviewOpts,
 ): NotchMovePreviewState | null {
   const notch = piece.notches.find((n) => n.id === notchId)
   if (!notch) return null
+  const localHint = moveOpts?.local
   if (isNotchOnInternalLine(notch)) {
     if (piece.internalLines.length === 0) return null
     const intPos = getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)
     if (!intPos) return null
-    const nearest = nearestCurveIndexAndPoint(localHint ?? intPos.position, piece.internalLines)
+    const intSnap =
+      localHint && moveOpts?.snapHits
+        ? findInternalLineNotchSnap(piece, localHint, moveOpts.snapHits.vertexHitMm)
+        : null
+    const nearest = intSnap
+      ? { curveIndex: intSnap.curveIndex, point: intSnap.point, t: intSnap.t }
+      : nearestCurveIndexAndPoint(localHint ?? intPos.position, piece.internalLines)
     if (!nearest) return null
-    const tNudged = nearest.t ?? 0
+    const t = intSnap?.t ?? nearest.t ?? 0
     const curve = piece.internalLines[nearest.curveIndex]
-    const storePos = pointOnCurveAt(curve, tNudged)
-    const storeAngle = outwardNormalAngleAt(piece.internalLines, nearest.curveIndex, tNudged) + 180
+    const storePos = intSnap?.point ?? pointOnCurveAt(curve, t)
+    const storeAngle = outwardNormalAngleAt(piece.internalLines, nearest.curveIndex, t) + 180
     const dist = getNotchMeasurementDistancesOnContour(
       piece,
       piece.internalLines,
       nearest.curveIndex,
-      tNudged,
+      t,
       { excludeNotchId: notchId, onInternalLine: true },
     )
     return {
@@ -1047,7 +1121,7 @@ function buildNotchMovePreview(
       position: storePos,
       angle: storeAngle,
       curveIndex: nearest.curveIndex,
-      t: tNudged,
+      t,
       distanceMmLeft: dist.distanceMmLeft,
       distanceMmRight: dist.distanceMmRight,
       storePos,
@@ -1057,21 +1131,46 @@ function buildNotchMovePreview(
   }
   if (piece.cutLine.length === 0) return null
   const { position: notchPos } = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
-  const cutNearest = nearestCurveIndexAndPoint(localHint ?? notchPos, piece.cutLine)
-  if (!cutNearest) return null
-  const cutT = cutNearest.t ?? 0
-  const tNudged =
-    cutT <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : cutT >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : cutT
-  const cutCurveIndex = cutNearest.curveIndex
-  const storePos = pointOnCurveAt(piece.cutLine[cutCurveIndex], tNudged)
-  const storeAngle = outwardNormalAngleAt(piece.cutLine, cutCurveIndex, tNudged) + 180
-  const dist = getCutLineNotchMeasurementDistances(piece, cutCurveIndex, tNudged, notchId)
+  const placementCurves = moveOpts?.placementCurves ?? piece.cutLine
+  let cutCurveIndex: number
+  let cutT: number
+  let storePos: Point
+  if (localHint && moveOpts?.snapHits && placementCurves.length > 0) {
+    const contourSnap = findNotchContourSnapOnPiece(
+      piece,
+      localHint,
+      placementCurves,
+      moveOpts.snapHits.vertexHitMm,
+      moveOpts.snapHits.vertexSeamHitMm,
+      moveOpts.snapHits.curveMidHitMm,
+    )
+    if (contourSnap) {
+      const onCut = mapContourSnapToCutLine(piece, contourSnap, placementCurves)
+      cutCurveIndex = onCut.curveIndex
+      cutT = onCut.t
+      storePos = onCut.point
+    } else {
+      const cutNearest = nearestCurveIndexAndPoint(localHint, piece.cutLine)
+      if (!cutNearest) return null
+      cutCurveIndex = cutNearest.curveIndex
+      cutT = cutNearest.t ?? 0
+      storePos = cutNearest.point
+    }
+  } else {
+    const cutNearest = nearestCurveIndexAndPoint(localHint ?? notchPos, piece.cutLine)
+    if (!cutNearest) return null
+    cutCurveIndex = cutNearest.curveIndex
+    cutT = cutNearest.t ?? 0
+    storePos = cutNearest.point
+  }
+  const storeAngle = outwardNormalAngleAt(piece.cutLine, cutCurveIndex, cutT) + 180
+  const dist = getCutLineNotchMeasurementDistances(piece, cutCurveIndex, cutT, notchId)
   return {
     pieceId: piece.id,
     position: storePos,
     angle: storeAngle,
     curveIndex: cutCurveIndex,
-    t: tNudged,
+    t: cutT,
     distanceMmLeft: dist.distanceMmLeft,
     distanceMmRight: dist.distanceMmRight,
     storePos,
@@ -2543,12 +2642,10 @@ export function WorkspaceCanvas() {
     )
     const pr = pointAtPathLength(contours, targetS)
     if (!pr) return
-    let tClamped = pr.t
-    tClamped =
-      tClamped <= NOTCH_MOVE_T_MIN ? NOTCH_MOVE_T_MIN : tClamped >= NOTCH_MOVE_T_MAX ? NOTCH_MOVE_T_MAX : tClamped
-    const storePos = pointOnCurveAt(contours[pr.curveIndex], tClamped)
-    const storeAngle = outwardNormalAngleAt(contours, pr.curveIndex, tClamped) + 180
-    const dist = getNotchMeasurementDistancesOnContour(piece, contours, pr.curveIndex, tClamped, {
+    const t = pr.t
+    const storePos = pointOnCurveAt(contours[pr.curveIndex], t)
+    const storeAngle = outwardNormalAngleAt(contours, pr.curveIndex, t) + 180
+    const dist = getNotchMeasurementDistancesOnContour(piece, contours, pr.curveIndex, t, {
       excludeNotchId: notchMoveDistanceEditor.notchId,
       onInternalLine: onInternal,
     })
@@ -2557,7 +2654,7 @@ export function WorkspaceCanvas() {
       position: storePos,
       angle: storeAngle,
       curveIndex: pr.curveIndex,
-      t: tClamped,
+      t,
       distanceMmLeft: dist.distanceMmLeft,
       distanceMmRight: dist.distanceMmRight,
       storePos,
@@ -5436,11 +5533,20 @@ export function WorkspaceCanvas() {
         if (!piece || !moveNotch) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
+        const ctnNm = containerRef.current
+        const svgNm = svgRef.current
+        const snapHits =
+          ctnNm != null ? notchContourSnapHitRadiiMm(ctnNm, svgNm, view, canvasVertexPointUiScale) : undefined
+        const movePreviewOpts = (placementCurves: Curve[]): NotchMovePreviewOpts => ({
+          local,
+          placementCurves,
+          snapHits,
+        })
         if (isNotchOnInternalLine(moveNotch)) {
           if (piece.internalLines.length === 0) return
           const nearest = nearestCurveIndexAndPoint(local, piece.internalLines)
           if (nearest && nearest.distance < 25) {
-            setNotchPreview(buildNotchMovePreview(piece, dragging.notchId, nearest.point))
+            setNotchPreview(buildNotchMovePreview(piece, dragging.notchId, movePreviewOpts(piece.internalLines)))
           } else {
             setNotchPreview(null)
           }
@@ -5453,7 +5559,7 @@ export function WorkspaceCanvas() {
         const curves = useSeam ? piece.seamLine : piece.cutLine
         const nearest = nearestCurveIndexAndPoint(local, curves)
         if (nearest && nearest.distance < 25) {
-          const preview = buildNotchMovePreview(piece, dragging.notchId, nearest.point)
+          const preview = buildNotchMovePreview(piece, dragging.notchId, movePreviewOpts(curves))
           setNotchPreview(preview)
         } else {
           setNotchPreview(null)
@@ -6815,7 +6921,7 @@ export function WorkspaceCanvas() {
                 : 'default',
       } as React.CSSProperties}
     >
-      <div className="workspace-version">Aktuell V. 0.0.5</div>
+      <div className="workspace-version">Aktuell V. 0.0.6</div>
       <CanvasToolbar />
       {notchEditTarget &&
         tool === 'select' &&

@@ -247,9 +247,15 @@ export function polygonCentroidClosed(pts: DxfPoint[]): DxfPoint | null {
   return { x: cx / (6 * a), y: cy / (6 * a) }
 }
 
-function areNearDuplicateCuts(a: PieceDraft, b: PieceDraft): boolean {
-  const ringA = closedRingPointsRaw(a.cutVertices, a.closed)
-  const ringB = closedRingPointsRaw(b.cutVertices, b.closed)
+/** Zwei geschlossene Konturen sind geometrisch nahezu gleich (Import-Deduplizierung / Innenlinien-Filter). */
+export function areNearDuplicateContourRings(
+  vertsA: DxfPoint[],
+  closedA: boolean,
+  vertsB: DxfPoint[],
+  closedB: boolean,
+): boolean {
+  const ringA = closedRingPointsRaw(vertsA, closedA)
+  const ringB = closedRingPointsRaw(vertsB, closedB)
   if (!ringA || !ringB) return false
 
   const areaA = polygonArea(ringA)
@@ -279,6 +285,10 @@ function areNearDuplicateCuts(a: PieceDraft, b: PieceDraft): boolean {
   if (inter / boxMin < NEAR_DUPE_BBOX_OVERLAP_MIN) return false
 
   return true
+}
+
+function areNearDuplicateCuts(a: PieceDraft, b: PieceDraft): boolean {
+  return areNearDuplicateContourRings(a.cutVertices, a.closed, b.cutVertices, b.closed)
 }
 
 function dedupeNearDuplicatePieceDrafts(drafts: PieceDraft[]): { drafts: PieceDraft[]; removed: number } {
@@ -479,10 +489,13 @@ function isDraftInsideParent(inner: PieceDraft, outer: PieceDraft): boolean {
 function mergeInnerDraftIntoParent(parent: PieceDraft, inner: PieceDraft): void {
   if (!parent.internalPolylines) parent.internalPolylines = []
   if (!parent.internalCircles) parent.internalCircles = []
-  parent.internalPolylines.push({
+  const innerAsInternal = {
     vertices: inner.cutVertices.map((p) => ({ x: p.x, y: p.y })),
     closed: inner.closed || true,
-  })
+  }
+  if (!isInternalPolylineDuplicateOfDraftContours(innerAsInternal, parent)) {
+    parent.internalPolylines.push(innerAsInternal)
+  }
   for (const pl of inner.internalPolylines ?? []) {
     parent.internalPolylines.push(pl)
   }
@@ -705,6 +718,26 @@ function extractFallbackCutDrafts(
   return drafts
 }
 
+function isInternalPolylineDuplicateOfDraftContours(
+  pl: { vertices: DxfPoint[]; closed: boolean },
+  draft: PieceDraft,
+): boolean {
+  if (
+    areNearDuplicateContourRings(pl.vertices, pl.closed, draft.cutVertices, draft.closed)
+  ) {
+    return true
+  }
+  if (draft.seamVertices && draft.seamVertices.length >= 3) {
+    return areNearDuplicateContourRings(
+      pl.vertices,
+      pl.closed,
+      draft.seamVertices,
+      draft.seamClosed ?? draft.closed,
+    )
+  }
+  return false
+}
+
 export function draftInternalsToPieceFields(draft: PieceDraft): {
   internalLines: Curve[]
   internalCircles: InternalCircle[]
@@ -712,6 +745,7 @@ export function draftInternalsToPieceFields(draft: PieceDraft): {
   const internalLines: Curve[] = []
   for (const pl of draft.internalPolylines ?? []) {
     if (pl.vertices.length < 2) continue
+    if (isInternalPolylineDuplicateOfDraftContours(pl, draft)) continue
     internalLines.push(...dxfVerticesToLineCurves(pl.vertices, pl.closed))
   }
   const internalCircles: InternalCircle[] = (draft.internalCircles ?? []).map((c) => ({

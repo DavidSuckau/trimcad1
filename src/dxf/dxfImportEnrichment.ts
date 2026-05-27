@@ -9,6 +9,7 @@ import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine
 import { isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   type BBox,
+  areNearDuplicateContourRings,
   dxfVerticesToLineCurves,
   lineToNotchDxf,
   pointToNotchDxf,
@@ -30,6 +31,26 @@ const NOTCH_DEDUPE_MM = 2.5
 const V_NOTCH_TIP_SNAP_MM = 1.5
 
 export type PieceCutRing = DxfPoint[] | null
+
+type PieceContourRefs = {
+  cutVertices: DxfPoint[]
+  cutClosed: boolean
+  seamVertices: DxfPoint[] | null
+  seamClosed: boolean
+}
+
+function isPolylineDuplicateOfPieceContours(
+  vertices: DxfPoint[],
+  closed: boolean,
+  refs: PieceContourRefs | undefined,
+): boolean {
+  if (!refs) return false
+  if (areNearDuplicateContourRings(vertices, closed, refs.cutVertices, refs.cutClosed)) return true
+  if (refs.seamVertices && refs.seamVertices.length >= 3) {
+    return areNearDuplicateContourRings(vertices, closed, refs.seamVertices, refs.seamClosed)
+  }
+  return false
+}
 
 export function assignDxfPointToPiece(
   px: number,
@@ -80,6 +101,7 @@ function collectInternalsFromEntityList(
   cutRings: PieceCutRing[],
   cutBounds: BBox[],
   extraCutLayers: string[],
+  contourRefsByPiece: PieceContourRefs[],
 ): {
   internalLinesByPiece: Map<number, Curve[]>
   internalCirclesByPiece: Map<number, InternalCircle[]>
@@ -173,10 +195,11 @@ function collectInternalsFromEntityList(
       isPointInPolygon({ x: mx, y: my }, ring)
 
     if (isInternalLayer(pl.layer) || !pl.closed || centroidInside) {
-      pushInternalLine(idx, dxfVerticesToLineCurves(
-        pts.map((p) => ({ x: p.x, y: p.y })),
-        pl.closed,
-      ))
+      const dxfPts = pts.map((p) => ({ x: p.x, y: p.y }))
+      if (pl.closed && isPolylineDuplicateOfPieceContours(dxfPts, pl.closed, contourRefsByPiece[idx])) {
+        continue
+      }
+      pushInternalLine(idx, dxfVerticesToLineCurves(dxfPts, pl.closed))
     }
   }
 
@@ -270,7 +293,34 @@ export function enrichPiecesFromParsedDxf(
 
   const mapPt = (p: DxfPoint): Point => ({ x: p.x * scale, y: p.y * scale })
 
-  const fromFlat = collectInternalsFromEntityList(entities, mapPt, scale, cutRings, cutBounds, extraCutLayers)
+  const contourRefsByPiece: PieceContourRefs[] = pieces.map((p) => {
+    const cutVertices: DxfPoint[] = []
+    for (const c of p.cutLine) {
+      if (c.type !== 'line') break
+      cutVertices.push({ x: c.start.x, y: c.start.y })
+    }
+    const seamVertices: DxfPoint[] = []
+    for (const c of p.seamLine) {
+      if (c.type !== 'line') break
+      seamVertices.push({ x: c.start.x, y: c.start.y })
+    }
+    return {
+      cutVertices,
+      cutClosed: cutVertices.length >= 3,
+      seamVertices: seamVertices.length >= 3 ? seamVertices : null,
+      seamClosed: seamVertices.length >= 3,
+    }
+  })
+
+  const fromFlat = collectInternalsFromEntityList(
+    entities,
+    mapPt,
+    scale,
+    cutRings,
+    cutBounds,
+    extraCutLayers,
+    contourRefsByPiece,
+  )
 
   // INSERT-Blöcke: transformierte Entities für Zuordnung zu bereits platzierten Teilen
   const insertEntities: DxfEntity[] = []
@@ -331,7 +381,15 @@ export function enrichPiecesFromParsedDxf(
   }
 
   const mapPtId = (p: DxfPoint): Point => ({ x: p.x, y: p.y })
-  const fromInsert = collectInternalsFromEntityList(insertEntities, mapPtId, 1, cutRings, cutBounds, extraCutLayers)
+  const fromInsert = collectInternalsFromEntityList(
+    insertEntities,
+    mapPtId,
+    1,
+    cutRings,
+    cutBounds,
+    extraCutLayers,
+    contourRefsByPiece,
+  )
 
   const mergeMaps = <T>(a: Map<number, T[]>, b: Map<number, T[]>, merge: (x: T[], y: T[]) => T[]) => {
     for (const [k, v] of b) {

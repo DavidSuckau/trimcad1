@@ -451,6 +451,29 @@ EOF
     expect(r.pieces[0].cutLine.length).toBeGreaterThanOrEqual(3)
   })
 
+  it('duplizierte Schnittkontur auf Layer 0 wird nicht als Innenlinie importiert', () => {
+    const dxf = DXF_HEADER + closedRectPolyline('CUT') + closedRectPolyline('0') + DXF_FOOTER
+    const r = importDxfFromString(dxf, {
+      createSeamLineOnImport: true,
+      importSeamAllowanceMm: 2,
+    })
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].internalLines.length).toBe(0)
+  })
+
+  it('duplizierte Schnittkontur neben CUT/SEAM aus DXF nicht als Innenlinie', () => {
+    const dxf =
+      DXF_HEADER +
+      closedRectPolyline('CUT') +
+      closedRectPolylineOffset('SEAM', 1, 1) +
+      closedRectPolyline('0') +
+      DXF_FOOTER
+    const r = importDxfFromString(dxf)
+    expect(r.pieces.length).toBe(1)
+    expect(r.pieces[0].seamLine.length).toBeGreaterThanOrEqual(3)
+    expect(r.pieces[0].internalLines.length).toBe(0)
+  })
+
   it('dedupliziert identische Schnittkonturen im Modellraum', () => {
     const dxf = DXF_HEADER + closedRectPolyline('CUT') + closedRectPolyline('CUT') + DXF_FOOTER
     const r = importDxfFromString(dxf)

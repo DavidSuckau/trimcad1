@@ -43,6 +43,24 @@ describe('runNesting', () => {
     expect(res.plan.placements.length).toBe(2)
     expect(res.plan.usedLengthMm).toBeGreaterThan(0)
     expect(res.plan.efficiencyPct).toBeGreaterThan(0)
+    expect(res.plan.usedLengthMm).toBeLessThan(150)
+    expect(res.plan.efficiencyPct).toBeGreaterThan(70)
+  })
+
+  it('packs four small rectangles with reasonable efficiency', () => {
+    const req: NestingJobRequest = {
+      materialKey: 'STOFF',
+      rollWidthMm: 300,
+      spacingMm: 2,
+      maxRollLengthMm: null,
+      timeLimitMs: 5000,
+      parts: [{ pieceId: 's', quantity: 4, geometry: boxGeom('s', 120, 80) }],
+    }
+    const res = runNesting(req)
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.plan.placements.length).toBe(4)
+    expect(res.plan.efficiencyPct).toBeGreaterThan(52)
   })
 
   it('fails when part wider than roll', () => {
