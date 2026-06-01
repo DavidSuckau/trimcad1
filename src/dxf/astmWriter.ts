@@ -3,6 +3,7 @@ import {
   getNotchPositionAndAngleOnCutLine,
   notchCutoutPoints,
   resolveNotchCutLineAnchor,
+  cutLineWithNotchCutouts,
 } from '../geometry/notchOnCurve'
 import { isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import { getPieceGrainLine } from '../geometry/grainArrowLayout'
@@ -14,6 +15,7 @@ import {
   closeContour, dist,
   projectPointOntoClosedPolylineWithSegment,
   dxfPolyline, dxfCircle, dxfLine, dxfPoint, dxfAstmNotchPoint, dxfText,
+  applyTransform, transformPoints,
   sanitizeBlockName, makeExportFilename, downloadBlob,
   type Pt,
 } from './dxfShared'
@@ -26,8 +28,8 @@ import {
  * - Hilfs-**POINT** auf **Layer 2** an Kontur- und Naht-Vertices sowie Kerben-Enden.
  * - Kerbe: **LINE Layer 4** (+ Duplikat **5**); **POINT Layer 4** (ggf. **82** bei V) mit 30/39/50.
  *   **Layer 7** = Fadenlauf (LINE), nicht mehr für Kerben-Duplikate.
- * - Schnitt/Naht-POLYLINE: **glatte** `cutLine` / `seamLine` **ohne** Kerb-Vertices — sonst mappt Gerber
- *   V-Kerben nur auf die Außenkontur. Kerb-Geometrie nur über LINEs (4/7/5) + Hilfs-POINTs.
+ * - Schnitt/Naht-POLYLINE: `cutLine` **mit** Kerb-Einbuchtungen (V/Strich) auf Layer 1/84 — damit Gerber
+ *   die Kerbe auch über die Schnittkontur erkennt; zusätzlich LINE/POINT auf Layer 4/5/82 (ASTM).
  *
  * Hinweis: AccuMark-Versionen unterscheiden sich; früher wurden Kerben testweise nur in ENTITIES
  * ausgegeben — die aktuelle Struktur folgt dem internen Gerber-Beispiel (alles im Block).
@@ -208,6 +210,7 @@ function emitGerberNotchPackLocal(
       emitNotchLinePair(rx, ry, tx, ty),
       dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, notchLayer),
       dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, ASTM_NOTCH_LAYER),
+      dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, GERBER_NOTCH_ALT),
       dxfPoint(ASTM_LAYER.POINT_AUX, lx, ly),
       dxfPoint(ASTM_LAYER.POINT_AUX, rx, ry),
       dxfPoint(ASTM_LAYER.POINT_AUX, tx, ty),
@@ -255,11 +258,120 @@ function emitGerberNotchPackLocal(
 
   const parts = [
     emitNotchLinePair(x1, y1, x2, y2),
-    dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX),
+    dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX, ASTM_NOTCH_LAYER),
+    dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX, GERBER_NOTCH_ALT),
     dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1),
     dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2),
   ]
   return parts.join('')
+}
+
+/** Kerben-Pack in Weltkoordinaten (ENTITIES), falls AccuMark Layer 4 im Block ignoriert. */
+function emitGerberNotchPackWorld(
+  notch: Notch,
+  piece: PatternPiece,
+  fileScale: number,
+  boundaryRingWorld: Pt[],
+  polygonOpenWorld: Pt[],
+): string {
+  if (boundaryRingWorld.length < 2 || polygonOpenWorld.length < 3) return ''
+
+  const { position, angle } = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+  if (!isFinitePt(position)) return ''
+
+  const t = piece.transform
+  const toWorld = (p: Pt): Pt => {
+    const w = applyTransform(p.x, p.y, t)
+    return { x: w.x * fileScale, y: w.y * fileScale }
+  }
+  const anchor = resolveNotchCutLineAnchor(notch, piece.cutLine)
+  const widthMm = notch.width ?? 6
+  const depthMmClamped = Math.min(NOTCH_DEPTH_MAX_MM, Math.max(NOTCH_DEPTH_MIN_MM, notch.depth))
+
+  if (notch.type !== 'single') {
+    const geom = notchCutoutPoints(
+      position,
+      angle,
+      depthMmClamped,
+      widthMm,
+      piece.cutLine,
+      anchor,
+      notch.type,
+    )
+    if (!geom || geom.kind !== 'v') return ''
+
+    const lx = toWorld(geom.left).x
+    const ly = toWorld(geom.left).y
+    const rx = toWorld(geom.right).x
+    const ry = toWorld(geom.right).y
+    const tx = toWorld(geom.tip).x
+    const ty = toWorld(geom.tip).y
+    if (![lx, ly, rx, ry, tx, ty].every(Number.isFinite)) return ''
+
+    const depthLeft = Math.hypot(tx - lx, ty - ly)
+    const depthRight = Math.hypot(tx - rx, ty - ry)
+    const angleLeftDeg = (Math.atan2(ty - ly, tx - lx) * 180) / Math.PI
+    const widthF = Math.max(0, widthMm * fileScale)
+    const notchLayer = astmNotchPointLayerForType(notch.type)
+
+    const parts = [
+      emitNotchLinePair(lx, ly, tx, ty),
+      emitNotchLinePair(rx, ry, tx, ty),
+      dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, notchLayer),
+      dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, ASTM_NOTCH_LAYER),
+      dxfAstmNotchPoint(lx, ly, depthLeft, widthF, angleLeftDeg, GERBER_NOTCH_ALT),
+      dxfPoint(ASTM_LAYER.POINT_AUX, lx, ly),
+      dxfPoint(ASTM_LAYER.POINT_AUX, rx, ry),
+      dxfPoint(ASTM_LAYER.POINT_AUX, tx, ty),
+    ]
+    if (notch.type === 'double') {
+      const angleRightDeg = (Math.atan2(ty - ry, tx - rx) * 180) / Math.PI
+      parts.push(dxfAstmNotchPoint(rx, ry, depthRight, widthF, angleRightDeg, '81'))
+    }
+    return parts.join('')
+  }
+
+  const anchorWorld = toWorld(position)
+  const { closest: initialClosest, segIndex } = projectPointOntoClosedPolylineWithSegment(
+    boundaryRingWorld,
+    anchorWorld,
+  )
+  let snapped = initialClosest
+  const tol = Math.max(SNAP_TOLERANCE_MIN_FILE, fileScale * SNAP_TOLERANCE_FILE_PER_SCALE)
+  let nearestV = snapped
+  let nearestD = Infinity
+  for (let i = 0; i < boundaryRingWorld.length - 1; i++) {
+    const v = boundaryRingWorld[i]
+    const d = dist(snapped, v)
+    if (d < nearestD) {
+      nearestD = d
+      nearestV = v
+    }
+  }
+  if (nearestD <= tol) snapped = nearestV
+
+  const a = boundaryRingWorld[segIndex]
+  const b = boundaryRingWorld[segIndex + 1]
+  const angleDeg = inwardNormalDegFromEdgeTowardInterior(a, b, polygonOpenWorld)
+  const rad = (angleDeg * Math.PI) / 180
+  const depthF = notchDepthFileMmClamped(notch.depth, fileScale)
+  const x1 = snapped.x
+  const y1 = snapped.y
+  const x2 = x1 + depthF * Math.cos(rad)
+  const y2 = y1 + depthF * Math.sin(rad)
+
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return ''
+
+  const angleDegFromX = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI
+  const widthF = Math.max(0, widthMm * fileScale)
+
+  return [
+    emitNotchLinePair(x1, y1, x2, y2),
+    dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX, ASTM_NOTCH_LAYER),
+    dxfAstmNotchPoint(x1, y1, depthF, widthF, angleDegFromX, GERBER_NOTCH_ALT),
+    dxfPoint(ASTM_LAYER.POINT_AUX, x1, y1),
+    dxfPoint(ASTM_LAYER.POINT_AUX, x2, y2),
+  ].join('')
 }
 
 function emitPointsAlongPolylineOpen(pts: Pt[], layer: string): string {
@@ -274,7 +386,9 @@ function emitPointsAlongPolylineOpen(pts: Pt[], layer: string): string {
 function buildBlockContent(piece: PatternPiece, fileScale: number): string {
   const out: string[] = []
 
-  const cutPts = curveToPolylinePoints(piece.cutLine)
+  const contourNotches = piece.notches.filter((n) => !isNotchOnInternalLine(n))
+  const cutCurves = cutLineWithNotchCutouts(piece.cutLine, contourNotches, piece.seamLine)
+  const cutPts = curveToPolylinePoints(cutCurves)
   if (cutPts.length < BLOCK_MIN_VERTICES) {
     return ''
   }
@@ -303,7 +417,7 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     out.push(emitPointsAlongPolylineOpen(scaledSeamPts, ASTM_LAYER.POINT_AUX))
   }
 
-  for (const notch of piece.notches.filter((n) => !isNotchOnInternalLine(n))) {
+  for (const notch of contourNotches) {
     out.push(emitGerberNotchPackLocal(notch, piece, fileScale, boundaryRing, polygonOpen))
   }
 
@@ -408,6 +522,22 @@ export function exportWorkspaceToAstmDxf(workspace: Workspace, dxfExportScale = 
       + '41' + EOL + (t.mirrored ? '-1' : '1') + EOL
       + '42' + EOL + '1' + EOL
       + '50' + EOL + fmt(rot) + EOL)
+  }
+
+  // Kerben zusätzlich in ENTITIES (Weltkoordinaten) — manche AccuMark-Importe lesen Layer 4 nur hier.
+  for (const piece of workspace.pieces) {
+    if (piece.cutLine.length < 3) continue
+    const contourNotches = piece.notches.filter((n) => !isNotchOnInternalLine(n))
+    const cutCurves = cutLineWithNotchCutouts(piece.cutLine, contourNotches, piece.seamLine)
+    const cutPtsWorld = transformPoints(curveToPolylinePoints(cutCurves), piece.transform, s)
+    if (cutPtsWorld.length < 2) continue
+    const boundaryRingWorld = closeContour([...cutPtsWorld])
+    const polygonOpenWorld = cutPtsWorld.map((p) => ({ ...p }))
+    for (const notch of contourNotches) {
+      out.push(
+        emitGerberNotchPackWorld(notch, piece, s, boundaryRingWorld, polygonOpenWorld),
+      )
+    }
   }
 
   out.push('0' + EOL + 'ENDSEC' + EOL + '0' + EOL + 'EOF' + EOL)

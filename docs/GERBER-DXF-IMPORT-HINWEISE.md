@@ -1,6 +1,6 @@
 # Gerber AccuMark: DXF-Import – Naht und Notches sichtbar machen
 
-Der **ASTM-DXF-Export** nutzt dieselbe **Header-/Skalierungslogik** wie **AAMA-DXF**. Struktur nach **ASTM D6673** / AccuMark: Kontur **Layer 1** + Kopie **84** (geschlossene POLYLINE mit **70=1**), Naht **14** + Kopie **87**, **Fadenlauf** als **LINE** auf **Layer 7**, **Kerben** als **LINE** auf **4** (+ Duplikat **5**) und attributierte **POINT**-Kerben (Strich auf **4**, V-Kerbe zusätzlich **82**), Hilfs-**POINT** auf **Layer 2**, alles im **BLOCK** mit Flag **70 = 64**.
+Der **ASTM-DXF-Export** nutzt dieselbe **Header-/Skalierungslogik** wie **AAMA-DXF**. Struktur nach **ASTM D6673** / AccuMark: Kontur **Layer 1** + Kopie **84** (geschlossene POLYLINE mit **70=1**, **inkl. Kerb-Einbuchtungen** in der Schnittlinie), Naht **14** + Kopie **87**, **Fadenlauf** als **LINE** auf **Layer 7**, **Kerben** zusätzlich als **LINE** auf **4** (+ Duplikat **5**) und attributierte **POINT**-Kerben (Strich auf **4** und **5**, V-Kerbe **82**), Hilfs-**POINT** auf **Layer 2**. Geometrie im **BLOCK** (Flag **70 = 64**) und die Kerben **zusätzlich in ENTITIES** (Weltkoordinaten), falls AccuMark Layer 4 im Block ignoriert.
 
 Wenn nach dem ASTM-DXF-Import in Gerber AccuMark **die Nahtlinie und/oder Notches nicht angezeigt werden**, bitte Folgendes prüfen:
 

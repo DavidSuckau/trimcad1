@@ -1,5 +1,9 @@
-import type { Line, PatternPiece, Point } from '../types/model'
-import { curvesBounds } from './curveToPath'
+import type { Curve, Line, PatternPiece, Point } from '../types/model'
+import { bezierDerivativeAt, curvesBounds } from './curveToPath'
+import { nearestCurveIndexAndPoint } from './nearestOnCurve'
+
+/** Max. Abstand Linienmitte → Schnittkontur (mm) zum Snappen an eine Kante. */
+export const GRAIN_SNAP_TO_EDGE_MM = 14
 
 /** Feste Schaftlänge beim ersten Anlegen der Laufrichtung (mm); ändert sich danach nicht automatisch. */
 export const GRAIN_LINE_DEFAULT_LENGTH_MM = 100
@@ -94,4 +98,63 @@ export function getGrainArrowLayout(piece: PatternPiece): {
     baseRight,
     triangleD,
   }
+}
+
+function smallestAngleDiffDeg(a: number, b: number): number {
+  return ((((a - b) % 360) + 540) % 360) - 180
+}
+
+function contourTangentAngleDeg(curves: Curve[], curveIndex: number, t: number): number {
+  const c = curves[curveIndex]
+  if (!c) return 0
+  if (c.type === 'line') {
+    return (Math.atan2(c.end.y - c.start.y, c.end.x - c.start.x) * 180) / Math.PI
+  }
+  const d = bezierDerivativeAt(c, t)
+  if (Math.hypot(d.x, d.y) < 1e-12) return 0
+  return (Math.atan2(d.y, d.x) * 180) / Math.PI
+}
+
+/**
+ * Laufrichtungslinie parallel zur Kontur-Tangente; optional Mittelpunkt auf `anchorPoint` setzen
+ * (z. B. nächster Punkt auf der Kante beim Snappen).
+ */
+export function alignGrainLineToContourTangent(line: Line, tangentDeg: number, anchorPoint?: Point): Line {
+  const curDeg =
+    (Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x) * 180) / Math.PI
+  const opt0 = tangentDeg
+  const opt1 = tangentDeg + 180
+  const diff0 = Math.abs(smallestAngleDiffDeg(curDeg, opt0))
+  const diff1 = Math.abs(smallestAngleDiffDeg(curDeg, opt1))
+  const use1 = diff1 < diff0 - 1e-6
+  const dirDeg = use1 ? opt1 : opt0
+  const rad = (dirDeg * Math.PI) / 180
+  const ux = Math.cos(rad)
+  const uy = Math.sin(rad)
+  const mx = anchorPoint?.x ?? (line.start.x + line.end.x) / 2
+  const my = anchorPoint?.y ?? (line.start.y + line.end.y) / 2
+  let L = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y)
+  if (L < 1e-6) L = GRAIN_LINE_DEFAULT_LENGTH_MM
+  const half = L / 2
+  return {
+    start: { x: mx - ux * half, y: my - uy * half },
+    end: { x: mx + ux * half, y: my + uy * half },
+  }
+}
+
+/** Snapt Laufrichtung an die nächste Schnittkante (parallel + Mittelpunkt auf der Kante). */
+export function snapGrainLineToContourEdge(
+  line: Line,
+  curves: Curve[],
+  maxDistanceMm = GRAIN_SNAP_TO_EDGE_MM
+): Line | null {
+  if (curves.length === 0) return null
+  const mid = {
+    x: (line.start.x + line.end.x) / 2,
+    y: (line.start.y + line.end.y) / 2,
+  }
+  const nr = nearestCurveIndexAndPoint(mid, curves)
+  if (!nr || nr.distance > maxDistanceMm) return null
+  const tangDeg = contourTangentAngleDeg(curves, nr.curveIndex, nr.t ?? 0)
+  return alignGrainLineToContourTangent(line, tangDeg, nr.point)
 }

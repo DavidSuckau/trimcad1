@@ -408,13 +408,14 @@ export function cutLineWithNotchCutouts(
 
   for (const n of notches) {
     if (isNotchOnInternalLine(n)) continue
-    if (n.type === 'single') continue
 
     const ct = getNotchCurveIndexAndT(n, cutLine, seamLine)
     if (!ct) continue
 
     const Lcenter = pathLengthAt(cutLine, ct.curveIndex, ct.t)
-    const width = n.width ?? 6
+    // Strichkerbe: schmale V-Einbuchtung (für DXF/Gerber-Polylinie erkennbar)
+    const width =
+      n.type === 'single' ? Math.max(1.5, Math.min(n.width ?? 6, 3)) : (n.width ?? 6)
     const depth = n.depth
 
     let Lleft = Lcenter - width / 2

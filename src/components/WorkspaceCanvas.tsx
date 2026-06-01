@@ -101,7 +101,12 @@ import {
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
-import { getPieceGrainLine, getGrainArrowLayout } from '../geometry/grainArrowLayout'
+import {
+  getPieceGrainLine,
+  getGrainArrowLayout,
+  GRAIN_SNAP_TO_EDGE_MM,
+  snapGrainLineToContourEdge,
+} from '../geometry/grainArrowLayout'
 import type { PatternPiece, Point, Line, Curve, Notch, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType, NotchRole } from '../types/model'
 import { findMatchingNotchPresetIndex, modelNotchFieldsFromPreset } from '../notch/notchPresetMapping'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
@@ -617,51 +622,6 @@ function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
   if (minDistToTriangleEdgesMm(local, tickEnd, tickBaseLeft, tickBaseRight) <= GRAIN_HIT_HEAD_MM) return true
   return false
 }
-
-/** Kürzeste Winkel-Differenz in Grad (−180 … 180). */
-function smallestAngleDiffDeg(a: number, b: number): number {
-  return ((((a - b) % 360) + 540) % 360) - 180
-}
-
-/** Tangentenrichtung der Schnittkontur bei (curveIndex, t) in Grad (Richtung wachsender Parameter). */
-function contourTangentAngleDeg(curves: Curve[], curveIndex: number, t: number): number {
-  const c = curves[curveIndex]
-  if (!c) return 0
-  if (c.type === 'line') {
-    return (Math.atan2(c.end.y - c.start.y, c.end.x - c.start.x) * 180) / Math.PI
-  }
-  const d = bezierDerivativeAt(c, t)
-  if (Math.hypot(d.x, d.y) < 1e-12) return 0
-  return (Math.atan2(d.y, d.x) * 180) / Math.PI
-}
-
-/**
- * Laufrichtungslinie parallel zur Kontur-Tangente; wählt die der bisherigen Ausrichtung nähere der beiden
- * entgegengesetzten Richtungen (0° / 180°).
- */
-function alignGrainLineToContourTangent(line: Line, tangentDeg: number): Line {
-  const curDeg =
-    (Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x) * 180) / Math.PI
-  const opt0 = tangentDeg
-  const opt1 = tangentDeg + 180
-  const use1 = Math.abs(smallestAngleDiffDeg(curDeg, opt1)) < Math.abs(smallestAngleDiffDeg(curDeg, opt0))
-  const dirDeg = use1 ? opt1 : opt0
-  const rad = (dirDeg * Math.PI) / 180
-  const ux = Math.cos(rad)
-  const uy = Math.sin(rad)
-  const mx = (line.start.x + line.end.x) / 2
-  const my = (line.start.y + line.end.y) / 2
-  let L = Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y)
-  if (L < 1e-6) L = 20
-  const half = L / 2
-  return {
-    start: { x: mx - ux * half, y: my - uy * half },
-    end: { x: mx + ux * half, y: my + uy * half },
-  }
-}
-
-/** Max. Abstand Maus→Kontur (mm), damit die Laufrichtung an die Kante „snappt“. */
-const GRAIN_SNAP_TO_EDGE_MM = 14
 
 /** Prüft ob ein lokaler Punkt innerhalb des sichtbaren Bereichs eines Teils liegt (inkl. Nahtzugabe)
  *  oder nah genug an der Konturlinie (cutLine/seamLine) ist. */
@@ -1318,6 +1278,8 @@ const PieceGroup = memo(function PieceGroup({
   showGrain,
   /** Endpunkte des Laufrichtungs-Pfeils (nur wenn Fadenlauf per Ziehen änderbar, z. B. Layout-Modus). */
   showGrainDragHandles,
+  /** Schaft ziehbar (nur Layout-Modus, nicht Kontur bearbeiten). */
+  grainArrowDraggable,
   showNotches,
   showDrills,
   showInternalLines,
@@ -1352,6 +1314,7 @@ const PieceGroup = memo(function PieceGroup({
   cutSeamSwapped?: boolean
   showGrain?: boolean
   showGrainDragHandles?: boolean
+  grainArrowDraggable?: boolean
   showNotches?: boolean
   showDrills?: boolean
   showInternalLines?: boolean
@@ -1617,7 +1580,14 @@ const PieceGroup = memo(function PieceGroup({
                 e.stopPropagation()
                 onGrainArrowClick?.(e)
               }}
-              style={hasGrainHandlers ? { cursor: isSelected ? 'grab' : 'pointer' } : undefined}
+              style={
+                hasGrainHandlers
+                  ? {
+                      cursor:
+                        grainArrowDraggable !== false && isSelected ? 'grab' : 'pointer',
+                    }
+                  : undefined
+              }
             >
               <line
                 x1={line.start.x}
@@ -3928,28 +3898,6 @@ export function WorkspaceCanvas() {
             }
           }
         }
-        if (contourEditEnabled && showGrain) {
-          const GRAIN_POINT_HIT = 14
-          for (let i = pieces.length - 1; i >= 0; i--) {
-            const p = pieces[i]
-            if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-            const grain = getPieceGrainLine(p)
-            const startWorld = pieceLocalToWorld(grain.start, p)
-            const endWorld = pieceLocalToWorld(grain.end, p)
-            const dStart = Math.hypot(world.x - startWorld.x, world.y - startWorld.y)
-            const dEnd = Math.hypot(world.x - endWorld.x, world.y - endWorld.y)
-            if (dStart < GRAIN_POINT_HIT) {
-              setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'start' })
-              containerRef.current?.setPointerCapture?.(e.pointerId)
-              return
-            }
-            if (dEnd < GRAIN_POINT_HIT) {
-              setDragging({ kind: 'grainPoint', pieceId: p.id, which: 'end' })
-              containerRef.current?.setPointerCapture?.(e.pointerId)
-              return
-            }
-          }
-        }
         if (!contourEditEnabled) {
         const GRAIN_SHAFT_HIT = 14
         for (let i = pieces.length - 1; i >= 0; i--) {
@@ -3964,6 +3912,8 @@ export function WorkspaceCanvas() {
           const dStart = Math.hypot(world.x - startW.x, world.y - startW.y)
           const dEnd = Math.hypot(world.x - endW.x, world.y - endW.y)
           if (dStart < GRAIN_SHAFT_HIT || dEnd < GRAIN_SHAFT_HIT) continue
+          const shaftHit = distPointToSegmentMm(local, grain.start, grain.end)
+          if (shaftHit.d > GRAIN_SHAFT_HIT) continue
           setDragging({
             kind: 'grainLine',
             pieceId: p.id,
@@ -6796,18 +6746,12 @@ export function WorkspaceCanvas() {
         recomputeSeamLine(dragging.pieceId)
       }
     }
-    if (_e && dragging?.kind === 'grainLine') {
+    if (_e && dragging?.kind === 'grainLine' && !_e.shiftKey) {
       const pieceSnap = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
       if (pieceSnap && pieceSnap.cutLine.length >= 3) {
-        const world = toWorld(_e.clientX, _e.clientY)
-        const local = worldToPieceLocal(world, pieceSnap)
-        const nr = nearestCurveIndexAndPoint(local, pieceSnap.cutLine)
-        if (nr && nr.distance <= GRAIN_SNAP_TO_EDGE_MM) {
-          const t = nr.t ?? 0
-          const tangDeg = contourTangentAngleDeg(pieceSnap.cutLine, nr.curveIndex, t)
-          const currentLine = pieceSnap.grainLine ?? getPieceGrainLine(pieceSnap)
-          setGrainLine(dragging.pieceId, alignGrainLineToContourTangent(currentLine, tangDeg))
-        }
+        const currentLine = pieceSnap.grainLine ?? getPieceGrainLine(pieceSnap)
+        const snapped = snapGrainLineToContourEdge(currentLine, pieceSnap.cutLine, GRAIN_SNAP_TO_EDGE_MM)
+        if (snapped) setGrainLine(dragging.pieceId, snapped)
       }
     }
     setDragging(null)
@@ -7779,7 +7723,10 @@ export function WorkspaceCanvas() {
               onPointerDown={handlePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
               showGrain={showGrain}
-              showGrainDragHandles={contourEditEnabled && selectedPieceIds.includes(piece.id) && showGrain}
+              showGrainDragHandles={
+                !contourEditEnabled && selectedPieceIds.includes(piece.id) && showGrain
+              }
+              grainArrowDraggable={!contourEditEnabled}
               showNotches={showNotches}
               showDrills={showDrills}
               showInternalLines={showInternalLines}

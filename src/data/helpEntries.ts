@@ -183,7 +183,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Laufrichtung (Grain) Kontextmenü',
     description:
-      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln etc. öffnen. Teil ausgewählt: Pfeil am Schaft (nicht an den blauen Endpunkten) ziehen, um die ganze Linie parallel zu verschieben. Loslassen nahe einer Schnittkontur-Kante (Linie oder Kurve): Laufrichtung wird parallel zu dieser Kante ausgerichtet (waagerecht, senkrecht oder schräg). Endpunkte einzeln ziehen weiterhin möglich.',
+      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln etc. öffnen. Nur im Layout-Modus (Kontur bearbeiten aus): Teil ausgewählt, am Schaft (nicht Pfeilkopf/Querstrich) ziehen, um die Linie parallel zu verschieben. Loslassen mit Linienmitte nahe einer Schnittkontur-Kante: parallel zur Kante ausrichten und auf die Kante legen. Umschalt beim Loslassen: kein Snappen. Im Kontur-Bearbeitungsmodus ist die Laufrichtung nicht verschiebbar.',
     access: 'Laufrichtungspfeil mit Maus anfahren → Leertaste bzw. Ziehen',
     shortcut: 'Leertaste',
   },
@@ -244,7 +244,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Datei',
     name: 'ASTM-DXF exportieren',
     description:
-      'ASTM-DXF: AccuMark-ähnlich (Layer 1/84, 14/87, POINT 2, Kerben LINE 7+5 im Block). Kein Fadenlauf.',
+      'ASTM-DXF (Gerber/AccuMark): Schnitt Layer 1/84 mit Kerb-Einbuchtungen, zusätzlich Kerben Layer 4/5/82, doppelt in ENTITIES.',
     access: 'Menü Datei → Exportieren → ASTM-DXF (Gerber)',
     shortcut: undefined,
   },

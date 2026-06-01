@@ -58,7 +58,18 @@ describe('exportWorkspaceToAstmDxf', () => {
     expect(dxf).toContain('LINE\r\n8\r\n7\r\n')
     expect(dxf).not.toMatch(/LINE\r\n8\r\n7\r\n[\s\S]*?LINE\r\n8\r\n7\r\n[\s\S]*?LINE\r\n8\r\n7\r\n/)
     expect(dxf).toContain('8\r\n4\r\n')
+    expect(dxf).toContain('8\r\n5\r\n')
     expect(dxf).toContain('8\r\n82\r\n')
     expect(dxf).toContain('8\r\n14\r\n')
+    // V-Kerbe als Einbuchtung in Layer-1-Polylinie (mehr Vertices als reines Rechteck)
+    const layer1Polys = dxf.match(/POLYLINE\r?\n8\r?\n1\r?\n[\s\S]*?SEQEND/g) ?? []
+    expect(layer1Polys.length).toBeGreaterThan(0)
+    const vertexCount = (layer1Polys[0].match(/\r?\nVERTEX\r?\n/g) ?? []).length
+    expect(vertexCount).toBeGreaterThan(4)
+    // Kerben auch in ENTITIES (Weltkoordinaten)
+    const entitiesIdx = dxf.indexOf('ENTITIES')
+    const eofIdx = dxf.indexOf('EOF')
+    const entities = dxf.slice(entitiesIdx, eofIdx)
+    expect(entities).toMatch(/LINE\r?\n8\r?\n4\r?\n/)
   })
 })
