@@ -1,5 +1,5 @@
 import type { ProfileAssignment, PatternPiece } from '../types/model'
-import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
+import { profileAssignmentBillLengthMm } from '../geometry/internalLineProfile'
 
 export type ProfileBomRow = {
   profileKey: string
@@ -24,7 +24,7 @@ export function aggregateProfileBom(
   for (const pa of assignments) {
     const piece = pieceById.get(pa.pieceId)
     if (!piece) continue
-    const lengthMm = profileAssignmentLengthMm(piece, pa)
+    const lengthMm = profileAssignmentBillLengthMm(piece, pa)
 
     const groupKey = `${pa.profileKey}|||${pa.internalArticleNumber ?? ''}`
     const existing = map.get(groupKey)

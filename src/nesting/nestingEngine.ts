@@ -418,7 +418,7 @@ function measureUsedLength(placed: Placed[]): number {
 }
 
 function measureEfficiency(placed: Placed[], rollWidthMm: number): number {
-  let usedLengthMm = measureUsedLength(placed)
+  const usedLengthMm = measureUsedLength(placed)
   let totalPieceAreaMm2 = 0
   for (const p of placed) {
     totalPieceAreaMm2 += Math.abs(polygonSignedAreaLocal(p.pts))

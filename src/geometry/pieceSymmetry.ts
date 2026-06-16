@@ -196,7 +196,7 @@ function largestPathByAbsArea(solution: IntPoint[][]): Point[] | null {
   for (const path of solution) {
     if (path.length < 3) continue
     const pts = path.map(fromIntPoint)
-    let ring = [...pts]
+    const ring = [...pts]
     if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
     if (ring.length < 3) continue
     const area = Math.abs(signedAreaRing(ring))
@@ -367,7 +367,7 @@ export function buildSymmetricContour(
     return { ok: false, message: 'Vereinigung der gespiegelten Hälften fehlgeschlagen.' }
   }
 
-  let outRing = ringToOpenPoints(outArea)
+  const outRing = ringToOpenPoints(outArea)
   const curves = closedPointsToLineCurves(outRing, 0.18)
   if (curves.length < 3) {
     return { ok: false, message: 'Ergebnis-Kontur ungültig.' }

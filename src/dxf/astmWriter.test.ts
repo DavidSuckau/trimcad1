@@ -64,7 +64,7 @@ describe('exportWorkspaceToAstmDxf', () => {
     // V-Kerbe als Einbuchtung in Layer-1-Polylinie (mehr Vertices als reines Rechteck)
     const layer1Polys = dxf.match(/POLYLINE\r?\n8\r?\n1\r?\n[\s\S]*?SEQEND/g) ?? []
     expect(layer1Polys.length).toBeGreaterThan(0)
-    const vertexCount = (layer1Polys[0].match(/\r?\nVERTEX\r?\n/g) ?? []).length
+    const vertexCount = (layer1Polys[0]!.match(/\r?\nVERTEX\r?\n/g) ?? []).length
     expect(vertexCount).toBeGreaterThan(4)
     // Kerben auch in ENTITIES (Weltkoordinaten)
     const entitiesIdx = dxf.indexOf('ENTITIES')

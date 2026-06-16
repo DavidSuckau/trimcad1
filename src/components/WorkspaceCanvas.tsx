@@ -86,6 +86,10 @@ import {
   PROFILE_DISPLAY_OFFSET_MM,
 } from '../geometry/internalLineProfile'
 import {
+  computeProfileFitPreviewsForPiece,
+  type ProfileFitPreview,
+} from '../geometry/profileLengthFit'
+import {
   deriveInternalSeamNotchRangeAtClick,
   getInternalSeamAssignmentCurves,
   hitInternalLineForSeamAssignment,
@@ -2023,6 +2027,7 @@ export function WorkspaceCanvas() {
     checkSeamAdjustment,
     snapSeamEdgeToMatch,
     recomputeSeamLine,
+    applyProfileLengthFitPreviews,
     digitizeState,
     addDigitizeNode,
     updateDigitizeDrag,
@@ -2158,6 +2163,7 @@ export function WorkspaceCanvas() {
       checkSeamAdjustment: s.checkSeamAdjustment,
       snapSeamEdgeToMatch: s.snapSeamEdgeToMatch,
       recomputeSeamLine: s.recomputeSeamLine,
+      applyProfileLengthFitPreviews: s.applyProfileLengthFitPreviews,
       digitizeState: s.digitizeState,
       addDigitizeNode: s.addDigitizeNode,
       updateDigitizeDrag: s.updateDigitizeDrag,
@@ -2352,6 +2358,11 @@ export function WorkspaceCanvas() {
     storePos: Point
     storeAngle: number
     onInternalLine?: boolean
+  } | null>(null)
+  const [profileFitPreviews, setProfileFitPreviews] = useState<ProfileFitPreview[]>([])
+  const [profileFitConfirm, setProfileFitConfirm] = useState<{
+    pieceId: string
+    previews: ProfileFitPreview[]
   } | null>(null)
   const [notchMoveDistanceEditor, setNotchMoveDistanceEditor] = useState<{
     pieceId: string
@@ -2867,6 +2878,10 @@ export function WorkspaceCanvas() {
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!containerRef.current) return
+      if (profileFitConfirm) {
+        setProfileFitConfirm(null)
+        setProfileFitPreviews([])
+      }
       const navigationOnlyPointer =
         typeof window !== 'undefined' &&
         typeof window.matchMedia === 'function' &&
@@ -4426,6 +4441,7 @@ export function WorkspaceCanvas() {
       canvasDigitizeUiScale,
       canvasVertexPointUiScale,
       showPivotRotationUi,
+      profileFitConfirm,
     ]
   )
 
@@ -4734,8 +4750,6 @@ export function WorkspaceCanvas() {
               const nearestInt = nearestCurveIndexAndPoint(local, p.internalLines)
               if (nearestInt && nearestInt.distance < SEAM_HIT_MM) {
                 const curveIndices = [nearestInt.curveIndex]
-                let startNotchId: string | undefined
-                let endNotchId: string | undefined
                 const seg = p.internalLines[nearestInt.curveIndex]
                 const arcOnPath = seg
                   ? curveSegmentArcLength(seg, 0, nearestInt.t ?? 0)
@@ -4743,8 +4757,8 @@ export function WorkspaceCanvas() {
                 const rangeAtClick =
                   deriveInternalNotchRoleRangeAtArcLength(p, curveIndices, arcOnPath) ??
                   deriveInternalNotchRoleRangeOnPath(p, curveIndices)
-                startNotchId = rangeAtClick?.startNotchId
-                endNotchId = rangeAtClick?.endNotchId
+                const startNotchId = rangeAtClick?.startNotchId
+                const endNotchId = rangeAtClick?.endNotchId
                 if (!bestEdge || nearestInt.distance < bestEdge.distance) {
                   bestEdge = {
                     pieceId: p.id,
@@ -5411,6 +5425,12 @@ export function WorkspaceCanvas() {
             dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
           )
         }
+        const nextPiece = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
+        if (nextPiece) {
+          setProfileFitPreviews(
+            computeProfileFitPreviewsForPiece(nextPiece, useStore.getState().workspace.profileAssignments ?? [])
+          )
+        }
       } else if (dragging.kind === 'pointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -5428,11 +5448,23 @@ export function WorkspaceCanvas() {
           target = { x: local.x + dx, y: local.y + dy }
         }
         movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target, false, dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined)
+        const nextPiecePc = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
+        if (nextPiecePc) {
+          setProfileFitPreviews(
+            computeProfileFitPreviewsForPiece(nextPiecePc, useStore.getState().workspace.profileAssignments ?? [])
+          )
+        }
       } else if (dragging.kind === 'internalPointOnCurve') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
         const local = worldToPieceLocal(toWorld(e.clientX, e.clientY), piece)
         moveInternalLinePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, local)
+        const nextPieceIntPc = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
+        if (nextPieceIntPc) {
+          setProfileFitPreviews(
+            computeProfileFitPreviewsForPiece(nextPieceIntPc, useStore.getState().workspace.profileAssignments ?? [])
+          )
+        }
       } else if (dragging.kind === 'internalLineVertex') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece) return
@@ -5453,6 +5485,12 @@ export function WorkspaceCanvas() {
           }
         }
         moveInternalLineVertex(dragging.pieceId, dragging.target, local)
+        const nextPieceIntV = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
+        if (nextPieceIntV) {
+          setProfileFitPreviews(
+            computeProfileFitPreviewsForPiece(nextPieceIntV, useStore.getState().workspace.profileAssignments ?? [])
+          )
+        }
       } else if (dragging.kind === 'line') {
         if (lineLengthEditor?.mode === 'draw' && lineLengthEditor.pieceId === dragging.pieceId) return
         const piece = pieces.find((p) => p.id === dragging.pieceId)
@@ -6754,6 +6792,23 @@ export function WorkspaceCanvas() {
         if (snapped) setGrainLine(dragging.pieceId, snapped)
       }
     }
+    const profileFitDragKinds = new Set(['vertex', 'pointOnCurve', 'internalLineVertex', 'internalPointOnCurve'])
+    if (dragging && profileFitDragKinds.has(dragging.kind) && 'pieceId' in dragging) {
+      const nextPiece = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
+      if (nextPiece) {
+        const previews = computeProfileFitPreviewsForPiece(
+          nextPiece,
+          useStore.getState().workspace.profileAssignments ?? []
+        )
+        if (previews.length > 0) {
+          setProfileFitPreviews(previews)
+          setProfileFitConfirm({ pieceId: dragging.pieceId, previews })
+        } else {
+          setProfileFitPreviews([])
+          setProfileFitConfirm(null)
+        }
+      }
+    }
     setDragging(null)
     setHoveredPieceId(null)
   }, [
@@ -6774,6 +6829,7 @@ export function WorkspaceCanvas() {
     setToastMessage,
     finishDigitizeDrag,
     recomputeSeamLine,
+    applyProfileLengthFitPreviews,
     snapSeamEdgeToMatch,
     lineLengthEditor,
     rectangleSizeEditor,
@@ -7799,6 +7855,64 @@ export function WorkspaceCanvas() {
                 </g>
               )
             })}
+          {profileFitPreviews.map((preview) => {
+            const pa = profileAssignments.find((a) => a.id === preview.assignmentId)
+            const piece = pa ? pieces.find((p) => p.id === pa.pieceId) : null
+            if (!piece) return null
+            const tx = `translate(${piece.transform.x},${piece.transform.y}) rotate(${piece.transform.rotation}) scale(${piece.transform.mirrored ? -1 : 1},1)`
+            const adj = preview.adjust
+            const pos =
+              adj.kind === 'endNotch'
+                ? adj.position
+                : adj.kind === 'endVertex'
+                  ? adj.position
+                  : adj.position
+            const angle = adj.kind === 'endNotch' ? adj.angle : 0
+            const stroke = '#e65100'
+            const [a, b, c] =
+              adj.kind === 'endNotch'
+                ? notchTriangleCorners(pos, angle, 4, 6)
+                : [pos, pos, pos]
+            return (
+              <g key={preview.assignmentId} transform={tx} pointerEvents="none" opacity={0.85}>
+                {adj.kind === 'endNotch' ? (
+                  <>
+                    <path
+                      d={`M ${a.x} ${a.y} L ${b.x} ${b.y} L ${c.x} ${c.y} Z`}
+                      fill={stroke}
+                      fillOpacity={0.2}
+                      stroke={stroke}
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
+                ) : (
+                  <circle
+                    cx={pos.x}
+                    cy={pos.y}
+                    r={4}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth={1.2}
+                    strokeDasharray="4 3"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+                <text
+                  x={pos.x}
+                  y={pos.y - 10}
+                  textAnchor="middle"
+                  fontSize={ct(7)}
+                  fill={stroke}
+                  fontFamily="sans-serif"
+                  fontWeight="700"
+                >
+                  Profil {preview.profileKey}: {preview.targetLengthMm} mm
+                </text>
+              </g>
+            )
+          })}
           {notchPreview && (() => {
             const piece = pieces.find((p) => p.id === notchPreview.pieceId)
             if (!piece) return null
@@ -9176,7 +9290,7 @@ export function WorkspaceCanvas() {
             const endW = pieceLocalToWorld(endL, piece)
             const angleDeg = (Math.atan2(endW.y - startW.y, endW.x - startW.x) * 180) / Math.PI
 
-            const lengthMm = profileAssignmentLengthMm(piece, pa)
+            const lengthMm = pa.targetLengthMm ?? profileAssignmentLengthMm(piece, pa)
             const labelParts: string[] = []
             if (pa.supplierNumber) labelParts.push(pa.supplierNumber)
             if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)
@@ -10201,6 +10315,69 @@ export function WorkspaceCanvas() {
             Abbrechen
           </button>
         </form>
+      )}
+      {profileFitConfirm && (
+        <div
+          role="dialog"
+          aria-labelledby="profile-fit-confirm-title"
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#fff',
+            border: '1px solid #cfd8dc',
+            borderRadius: 8,
+            padding: '10px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            zIndex: 10001,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+            maxWidth: 420,
+          }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+        >
+          <div id="profile-fit-confirm-title" style={{ fontSize: fs(13), color: '#263238', fontWeight: 700 }}>
+            Profillängen anpassen?
+          </div>
+          <p style={{ margin: 0, fontSize: fs(12), color: '#455a64', lineHeight: 1.45 }}>
+            Die orange Vorschau zeigt, wohin Profil-Enden (Notch oder Ecke) verschoben würden, damit
+            die feste Profillänge wieder passt.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: fs(12), color: '#37474f' }}>
+            {profileFitConfirm.previews.map((p) => (
+              <li key={p.assignmentId}>
+                Profil {p.profileKey}: {p.currentLengthMm.toFixed(1)} mm → {p.targetLengthMm} mm
+              </li>
+            ))}
+          </ul>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              className="sidebar-btn primary"
+              style={{ fontSize: fs(12), padding: '5px 12px' }}
+              onClick={() => {
+                applyProfileLengthFitPreviews(profileFitConfirm.pieceId)
+                setProfileFitConfirm(null)
+                setProfileFitPreviews([])
+              }}
+            >
+              OK
+            </button>
+            <button
+              type="button"
+              className="sidebar-btn"
+              style={{ fontSize: fs(12), padding: '5px 12px' }}
+              onClick={() => {
+                setProfileFitConfirm(null)
+                setProfileFitPreviews([])
+              }}
+            >
+              Abbrechen
+            </button>
+          </div>
+        </div>
       )}
       {lineLengthEditor && (
         <form

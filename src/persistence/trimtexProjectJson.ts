@@ -423,6 +423,9 @@ function normalizeProfileAssignments(raw: unknown, pieces: PatternPiece[]): Prof
         ? { internalArticleNumber: o.internalArticleNumber }
         : {}),
       ...(typeof o.pdfDocumentUrl === 'string' && o.pdfDocumentUrl ? { pdfDocumentUrl: o.pdfDocumentUrl } : {}),
+      ...(typeof o.targetLengthMm === 'number' && Number.isFinite(o.targetLengthMm) && o.targetLengthMm > 0
+        ? { targetLengthMm: o.targetLengthMm }
+        : {}),
     })
   }
   return out

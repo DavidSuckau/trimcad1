@@ -172,6 +172,14 @@ export function profileAssignmentLengthMm(piece: PatternPiece, pa: ProfileAssign
   return edgeLengthInNotchRange(piece, edge.curveIndices, range)
 }
 
+/** Stückliste/Export: feste Soll-Länge wenn gesetzt, sonst gemessene Länge. */
+export function profileAssignmentBillLengthMm(piece: PatternPiece, pa: ProfileAssignment): number {
+  if (pa.targetLengthMm != null && Number.isFinite(pa.targetLengthMm) && pa.targetLengthMm > 0) {
+    return pa.targetLengthMm
+  }
+  return profileAssignmentLengthMm(piece, pa)
+}
+
 export function getProfileAssignmentDisplayCurves(
   piece: PatternPiece,
   pa: ProfileAssignment

@@ -1,7 +1,7 @@
 import type { PatternPiece, ProfileAssignment, SeamAssignment, Workspace } from '../types/model'
 import { SEAM_ASSIGNMENT_KIND_IDS, SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { isInternalSeamAssignment } from '../geometry/internalSeamAssignment'
-import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
+import { profileAssignmentBillLengthMm } from '../geometry/internalLineProfile'
 import {
   internalSeamForProfile,
   isProfileSewnWithInternalSeam,
@@ -144,7 +144,7 @@ export function buildProfilnahtRows(workspace: Workspace): ProfilnahtRow[] {
     if (!profileAssignmentStillValid(pa, byId)) continue
     if (isProfileSewnWithInternalSeam(pa) && internalSeamForProfile(workspace, pa)) continue
     const piece = byId.get(pa.pieceId)!
-    const lengthMm = profileAssignmentLengthMm(piece, pa)
+    const lengthMm = profileAssignmentBillLengthMm(piece, pa)
     const where = pa.onInternalLine
       ? `interne Linie ${pa.edgeIndex + 1}`
       : `Kante ${pa.edgeIndex + 1}`

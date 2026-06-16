@@ -135,7 +135,7 @@ export function projectPointOntoClosedPolylineWithSegment(
 
 export function applyTransform(x: number, y: number, t: PatternPiece['transform']): Pt {
   let xx = x
-  let yy = y
+  const yy = y
   if (t.mirrored) xx = -xx
   const rad = (t.rotation * Math.PI) / 180
   const cos = Math.cos(rad)
@@ -274,7 +274,7 @@ export function downloadBlob(content: string, filename: string, mimeType = 'appl
  * Replaces non-ASCII and whitespace with underscores.
  */
 export function sanitizeBlockName(name: string): string {
-  return name.replace(/[^A-Za-z0-9_\-]/g, '_').replace(/^(\d)/, '_$1')
+  return name.replace(/[^A-Za-z0-9_-]/g, '_').replace(/^(\d)/, '_$1')
 }
 
 /* ------------------------------------------------------------------ */

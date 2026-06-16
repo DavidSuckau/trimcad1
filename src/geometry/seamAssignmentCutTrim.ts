@@ -28,7 +28,7 @@ const CUT_VERTEX_MATCH_MM = 22
 
 const EPS = 1e-9
 
-/** Nur echte Längendifferenz: früher 0,08 mm — dadurch blieb der längere Zopf oft unangetastet. */
+/** Nur echte Längendifferenz: früher 0,08 mm — dadurch blieb der längere Zopf oft unangetastet. */
 const PARTNER_TRIM_LENGTH_EPS_MM = 0.002
 
 function allLineSegments(curves: Curve[]): boolean {
@@ -417,7 +417,7 @@ export function applySeamAssignmentCutTrim(
 
 /**
  * Wendet die Nahtzuordnungs-Schnittkontur-Korrektur für **alle** Zuordnungen nacheinander an
- * (z. B. nach neuer Ableitung der cutLine aus der Naht — sonst fehlt der Zopf-Trim).
+ * (z. B. nach neuer Ableitung der cutLine aus der Naht — sonst fehlt der Zopf-Trim).
  */
 export function reapplySeamAssignmentCutTrimsForAllPieces(
   pieces: PatternPiece[],

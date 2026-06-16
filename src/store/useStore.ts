@@ -85,6 +85,13 @@ import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../worksp
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import { formatProfileEdgeGeometryWarnings, mergeWarnToasts } from '../profile/profileEdgeWarnings'
+import {
+  computeProfileFitAdjustTarget,
+  computeProfileFitPreviewsForPiece,
+  snapProfileLengthMm,
+  type ProfileFitAdjustTarget,
+} from '../geometry/profileLengthFit'
+import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
 import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece'
 import type { PieceSymmetryKeepSide } from '../geometry/pieceSymmetry'
 import type { PieceSymmetryUiState } from '../symmetry/types'
@@ -580,6 +587,10 @@ type Store = {
   updateProfileAssignment: (id: string, updates: Partial<Omit<ProfileAssignment, 'id'>>) => void
   removeProfileAssignment: (id: string) => void
   setProfileDialogAssignmentId: (v: string | null) => void
+  /** Passt Geometrie an 5-mm-Profillänge an und speichert `targetLengthMm`. */
+  fitProfileAssignmentGeometry: (assignmentId: string) => number | null
+  /** Korrigiert Profil-Enden nach Geometrie-Bearbeitung (End-Notch/Ecke). */
+  applyProfileLengthFitPreviews: (pieceId: string) => void
 
   /** Legacy-Name: fügt auf der Master-Kontur ein (bei Nahtzugabe faktisch seamLine). */
   addCurveToCutLine: (pieceId: string, curve: Curve) => void
@@ -890,6 +901,44 @@ export function digitizeNodesToCurves(nodes: DigitizeNode[]): Curve[] {
     }
   }
   return curves
+}
+
+type StoreGet = () => Store
+
+function applyProfileFitTargetInStore(get: StoreGet, pieceId: string, target: ProfileFitAdjustTarget): void {
+  if (target.kind === 'endVertex') {
+    get().updateVertex(pieceId, target.vertexIndex, target.position, false)
+    const piece = get().workspace.pieces.find((p) => p.id === pieceId)
+    if (piece && !useSeamLineForVertexEditing(piece)) {
+      get().recomputeSeamLine(pieceId)
+    }
+    return
+  }
+  if (target.kind === 'endNotch') {
+    get().updateNotch(pieceId, target.notchId, {
+      position: target.position,
+      angle: target.angle,
+      ...(target.onInternalLine
+        ? {
+            internalLineIndex: target.internalLineIndex,
+            internalSNormalized: target.internalSNormalized,
+            sNormalized: undefined,
+            arcLengthMm: undefined,
+          }
+        : {
+            sNormalized: target.sNormalized,
+            arcLengthMm: target.arcLengthMm,
+            internalLineIndex: undefined,
+            internalSNormalized: undefined,
+          }),
+    })
+    return
+  }
+  get().moveInternalLineVertex(pieceId, {
+    kind: 'terminal',
+    curveIndex: target.curveIndex,
+    end: target.end,
+  }, target.position)
 }
 
 export const useStore = create<Store>()(
@@ -1588,6 +1637,33 @@ export const useStore = create<Store>()(
         s.profileDialogAssignmentId === id ? null : s.profileDialogAssignmentId,
     })),
   setProfileDialogAssignmentId: (v) => set({ profileDialogAssignmentId: v }),
+
+  fitProfileAssignmentGeometry: (assignmentId) => {
+    const s = get()
+    const pa = (s.workspace.profileAssignments ?? []).find((a) => a.id === assignmentId)
+    if (!pa) return null
+    const piece = s.workspace.pieces.find((p) => p.id === pa.pieceId)
+    if (!piece) return null
+    const rawLen = profileAssignmentLengthMm(piece, pa)
+    const targetLengthMm = snapProfileLengthMm(rawLen)
+    const adjust = computeProfileFitAdjustTarget(piece, pa, targetLengthMm)
+    if (adjust) {
+      applyProfileFitTargetInStore(get, pa.pieceId, adjust)
+    }
+    get().updateProfileAssignment(assignmentId, { targetLengthMm })
+    return targetLengthMm
+  },
+
+  applyProfileLengthFitPreviews: (pieceId) => {
+    const s = get()
+    const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece) return
+    const previews = computeProfileFitPreviewsForPiece(piece, s.workspace.profileAssignments ?? [])
+    if (previews.length === 0) return
+    for (const preview of previews) {
+      applyProfileFitTargetInStore(get, pieceId, preview.adjust)
+    }
+  },
 
   setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v, seamAdjustmentHoverPieceId: null }),
   setSeamAdjustmentHoverPieceId: (v) => set({ seamAdjustmentHoverPieceId: v }),

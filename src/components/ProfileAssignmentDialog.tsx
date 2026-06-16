@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store/useStore'
 import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
+import { snapProfileLengthMm } from '../geometry/profileLengthFit'
 import { internalSeamForProfile } from '../geometry/profileInternalSeamLink'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
@@ -17,6 +18,7 @@ export function ProfileAssignmentDialog() {
     setProfileDialogAssignmentId,
     updateProfileAssignment,
     removeProfileAssignment,
+    fitProfileAssignmentGeometry,
     setToastMessage,
   } = useStore(
     useShallow((s) => ({
@@ -25,6 +27,7 @@ export function ProfileAssignmentDialog() {
       setProfileDialogAssignmentId: s.setProfileDialogAssignmentId,
       updateProfileAssignment: s.updateProfileAssignment,
       removeProfileAssignment: s.removeProfileAssignment,
+      fitProfileAssignmentGeometry: s.fitProfileAssignmentGeometry,
       setToastMessage: s.setToastMessage,
     })),
   )
@@ -64,6 +67,8 @@ export function ProfileAssignmentDialog() {
     return profileAssignmentLengthMm(piece, assignment)
   }, [piece, assignment])
 
+  const snappedLengthMm = useMemo(() => snapProfileLengthMm(edgeLengthMm), [edgeLengthMm])
+
   useEffect(() => {
     if (profileDialogAssignmentId && !assignment) {
       setProfileDialogAssignmentId(null)
@@ -89,6 +94,10 @@ export function ProfileAssignmentDialog() {
         : { internalLineAttachment: undefined }),
     }
     updateProfileAssignment(assignment.id, patch)
+    const fitted = fitProfileAssignmentGeometry(assignment.id)
+    if (fitted == null) {
+      updateProfileAssignment(assignment.id, { targetLengthMm: snappedLengthMm })
+    }
     if (
       assignment.onInternalLine &&
       internalLineAttachment === 'with_seam' &&
@@ -193,9 +202,22 @@ export function ProfileAssignmentDialog() {
           />
         </label>
 
-        <div className="nahtzugabe-dialog-label" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <span>Profillänge:</span>
-          <strong>{edgeLengthMm.toFixed(1)} mm</strong>
+        <div className="nahtzugabe-dialog-label" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>Gemessene Strecke:</span>
+            <strong>{edgeLengthMm.toFixed(1)} mm</strong>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>Profillänge (5-mm-Raster):</span>
+            <strong>{(assignment.targetLengthMm ?? snappedLengthMm).toFixed(0)} mm</strong>
+          </div>
+          {assignment.targetLengthMm != null &&
+            Math.abs(edgeLengthMm - assignment.targetLengthMm) > 0.5 && (
+              <p style={{ margin: 0, fontSize: 12, color: '#c62828' }}>
+                Aktuelle Geometrie weicht von der Profillänge ab — nach Bearbeitungen erscheint eine
+                Vorschau; mit OK werden die Profil-Enden angepasst.
+              </p>
+            )}
         </div>
 
         {assignment.onInternalLine ? (
@@ -218,7 +240,7 @@ export function ProfileAssignmentDialog() {
             ))}
             <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--muted, #666)' }}>
               Bei „mit Naht angenäht“ erscheint das Profil im Nähplan an der internen Nahtzuordnung
-              (Nahtart z. B. Deco im Naht-Dialog). Die Profil-Übersicht in der Stückliste bleibt für
+              (Nahtart z. B. Deco im Naht-Dialog). Die Profil-Übersicht in der Stückliste bleibt für
               Material und Länge erhalten.
             </p>
           </fieldset>

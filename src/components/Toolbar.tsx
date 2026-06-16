@@ -15,7 +15,6 @@ import {
   suggestedTrimTexProjectFilename,
 } from '../persistence/trimtexProjectJson'
 import { validateSeamAllowance } from '../geometry/offset'
-import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
 import { SeamAssignmentMetaModal } from './SeamAssignmentMetaModal'
@@ -442,6 +441,15 @@ export function Toolbar() {
       panY: VIEWBOX_CY - ((VIEWBOX_CY - view.panY) / view.zoom) * newZoom,
     })
   }
+
+  const nahtTrimTarget =
+    nahtTrimPickCutVertexActive && selectedPieceIds.length > 0
+      ? workspace.pieces.find((p) => p.id === selectedPieceIds[0])
+      : null
+  const nahtTrimSeamMaster =
+    nahtTrimTarget != null &&
+    nahtTrimTarget.seamAllowanceMm != null &&
+    nahtTrimTarget.seamLine.length >= 3
 
   return (
     <header className="menubar" ref={menuRef}>
@@ -1286,26 +1294,18 @@ export function Toolbar() {
             </button>
           </span>
         )}
-        {nahtTrimPickCutVertexActive && (() => {
-          const nahtTrimTarget =
-            selectedPieceIds.length > 0 ? workspace.pieces.find((p) => p.id === selectedPieceIds[0]) : null
-          const nahtTrimSeamMaster =
-            nahtTrimTarget != null &&
-            useSeamLineForVertexEditing(nahtTrimTarget) &&
-            nahtTrimTarget.seamLine.length >= 3
-          return (
-            <span className="nahtzuordnung-hint">
-              {nahtTrimSeamMaster
-                ? nahtTrimMode === '45'
-                  ? 'Eckpunkt auf der Nahtlinie anklicken (45°-Fase nur auf Außenkontur)'
-                  : 'Eckpunkt auf der Nahtlinie anklicken (Außenkontur wird dort lokal beschnitten)'
-                : 'Ecke an der Schnittkontur des Zielteils anklicken (überstehende Ecke)'}
-              <button type="button" className="nahtzuordnung-abbrechen" onClick={() => cancelNahtTrimVertexPick()}>
-                Abbrechen
-              </button>
-            </span>
-          )
-        })()}
+        {nahtTrimPickCutVertexActive && (
+          <span className="nahtzuordnung-hint">
+            {nahtTrimSeamMaster
+              ? nahtTrimMode === '45'
+                ? 'Eckpunkt auf der Nahtlinie anklicken (45°-Fase nur auf Außenkontur)'
+                : 'Eckpunkt auf der Nahtlinie anklicken (Außenkontur wird dort lokal beschnitten)'
+              : 'Ecke an der Schnittkontur des Zielteils anklicken (überstehende Ecke)'}
+            <button type="button" className="nahtzuordnung-abbrechen" onClick={() => cancelNahtTrimVertexPick()}>
+              Abbrechen
+            </button>
+          </span>
+        )}
         {tool === 'profil' && (
           <span className="nahtzuordnung-hint">
             Kante anklicken, um Profil zuzuordnen

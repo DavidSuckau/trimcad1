@@ -264,6 +264,11 @@ export type ProfileAssignment = {
    * Fehlt → `separate`.
    */
   internalLineAttachment?: ProfileInternalLineAttachmentId
+  /**
+   * Feste Profillänge in mm (5-mm-Raster), gesetzt beim Speichern der Zuordnung.
+   * Geometrie wird beim Anlegen und nach Bearbeitung an diese Länge angepasst.
+   */
+  targetLengthMm?: number
 }
 
 /** Editor-Notiz am Schnittteil (Teilkoordinaten, mm); bewegt sich mit dem Teil; kein DXF-Export. */

@@ -149,7 +149,7 @@ function encodeRing(pts: DxfPoint[]): string {
 function canonicalCutContourKey(vertices: DxfPoint[], closed: boolean): string | null {
   const ring = ringPointsForHash(vertices, closed)
   if (!ring) return null
-  let oriented = [...ring]
+  const oriented = [...ring]
   if (signedAreaRing(oriented) < 0) oriented.reverse()
   const n = oriented.length
   let best = encodeRing(oriented)
