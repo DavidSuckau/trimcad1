@@ -13,6 +13,12 @@ import {
   isNotchOnInternalLine,
   resolveNotchInternalLineAnchor,
 } from './notchOnInternalLine'
+import {
+  deriveProfileBoundaryRangeAtArcLength,
+  deriveProfileBoundaryRangeOnPath,
+  isProfileBoundaryNotchRole,
+  pieceNotchRoleById,
+} from './profileBoundaryRange'
 
 /** Ein einzelnes Segment in `internalLines` (ein Eintrag = eine Linie Punkt→Punkt). */
 export function getSingleInternalLineCurveIndices(curveIndex: number): number[] {
@@ -141,6 +147,35 @@ export function deriveInternalNotchRoleRangeAtArcLength(
   const end = ends[0]
   if (start.notchId === end.notchId || start.arcLength >= end.arcLength) return null
   return { startNotchId: start.notchId, endNotchId: end.notchId }
+}
+
+/** Profil-Grenzen auf interner Linie (Rollen-Typ egal; auch Kerbe ↔ Endpunkt). */
+export function deriveInternalProfileBoundaryRangeAtArcLength(
+  piece: PatternPiece,
+  curveIndices: number[],
+  arcLengthOnPath: number
+): NotchBoundaryRange | null {
+  const curves = piece.internalLines
+  const notches = getNotchesOnInternalProfilePath(piece, curveIndices, curves)
+  return deriveProfileBoundaryRangeAtArcLength(notches, arcLengthOnPath, pieceNotchRoleById(piece))
+}
+
+export function deriveInternalProfileBoundaryRangeOnPath(
+  piece: PatternPiece,
+  curveIndices: number[]
+): NotchBoundaryRange | null {
+  const curves = piece.internalLines
+  const notches = getNotchesOnInternalProfilePath(piece, curveIndices, curves)
+  return deriveProfileBoundaryRangeOnPath(notches, pieceNotchRoleById(piece))
+}
+
+export function internalPathHasProfileBoundaryNotches(
+  piece: PatternPiece,
+  curveIndices: number[]
+): boolean {
+  const notches = getNotchesOnInternalProfilePath(piece, curveIndices, piece.internalLines)
+  const roleById = pieceNotchRoleById(piece)
+  return notches.some((n) => isProfileBoundaryNotchRole(roleById.get(n.notchId)))
 }
 
 /** Geometrie zwischen Rollen-Kerben auf der internen Polylinie. */

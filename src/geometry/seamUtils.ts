@@ -5,6 +5,12 @@ import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion }
 import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
 import { vertexPosition as vertexPositionOnClosedCurves } from './geometryConstants'
+import {
+  deriveProfileBoundaryRangeAtArcLength,
+  deriveProfileBoundaryRangeOnPath,
+  isProfileBoundaryNotchRole,
+  pieceNotchRoleById,
+} from './profileBoundaryRange'
 
 /**
  * Kontur für Nahtzuordnung und dieselbe **Master-/Editing-Kontur** wie UI/Vertex-Logik.
@@ -501,6 +507,36 @@ export function deriveNotchRoleRangeAtArcLength(
     return null
   }
   return { startNotchId: start.notchId, endNotchId: end.notchId }
+}
+
+/** Profil-Grenzen auf Kontur-Kante (Rollen-Typ egal; auch Kerbe ↔ Eckpunkt). */
+export function deriveContourProfileBoundaryRangeAtArcLength(
+  piece: PatternPiece,
+  curveIndices: number[],
+  arcLengthOnEdge: number,
+  curves?: Curve[]
+): NotchBoundaryRange | null {
+  const notches = getNotchesOnEdge(piece, curveIndices, curves)
+  return deriveProfileBoundaryRangeAtArcLength(notches, arcLengthOnEdge, pieceNotchRoleById(piece))
+}
+
+export function deriveContourProfileBoundaryRangeOnEdge(
+  piece: PatternPiece,
+  curveIndices: number[],
+  curves?: Curve[]
+): NotchBoundaryRange | null {
+  const notches = getNotchesOnEdge(piece, curveIndices, curves)
+  return deriveProfileBoundaryRangeOnPath(notches, pieceNotchRoleById(piece))
+}
+
+export function edgeHasProfileBoundaryNotches(
+  piece: PatternPiece,
+  curveIndices: number[],
+  curves?: Curve[]
+): boolean {
+  const notches = getNotchesOnEdge(piece, curveIndices, curves)
+  const roleById = pieceNotchRoleById(piece)
+  return notches.some((n) => isProfileBoundaryNotchRole(roleById.get(n.notchId)))
 }
 
 export function getNotchesOnEdgeInRange(

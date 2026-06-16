@@ -58,8 +58,9 @@ import {
   getSubSegments,
   getSeamEdgeCurves,
   getCurvesForSeamEdge,
-  deriveNotchRoleRangeOnEdge,
-  deriveNotchRoleRangeAtArcLength,
+  deriveContourProfileBoundaryRangeAtArcLength,
+  deriveContourProfileBoundaryRangeOnEdge,
+  edgeHasProfileBoundaryNotches,
   getEdgeCurvesInNotchRange,
   mapMasterVertexIndexToCutVertexIndex,
   resolvedSeamAssignmentCurveIndices,
@@ -67,6 +68,7 @@ import {
   bestSeamSubSegmentPairing,
   masterSoftVertexIndexSet,
 } from '../geometry/seamUtils'
+import { dragTriggersSeamAdjustmentCheck } from '../geometry/seamAdjustmentCheck'
 import {
   useSeamLineForVertexEditing,
   useSeamLineForPointCurveEditing,
@@ -77,8 +79,9 @@ import { vertexPositionOnClosedMaster, validateCornerRound, ROUND_CORNER_MIN_RAD
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
 import {
-  deriveInternalNotchRoleRangeAtArcLength,
-  deriveInternalNotchRoleRangeOnPath,
+  deriveInternalProfileBoundaryRangeAtArcLength,
+  deriveInternalProfileBoundaryRangeOnPath,
+  internalPathHasProfileBoundaryNotches,
   getInternalProfileCurvesInRange,
   getProfileAssignmentDisplayCurves,
   hitProfileAssignment,
@@ -2862,7 +2865,7 @@ export function WorkspaceCanvas() {
   useEffect(() => {
     const wasDragging = prevDraggingRef.current
     prevDraggingRef.current = dragging
-    if (wasDragging && !dragging) {
+    if (wasDragging && !dragging && dragTriggersSeamAdjustmentCheck(wasDragging.kind)) {
       checkSeamAdjustment()
     }
   }, [dragging, checkSeamAdjustment])
@@ -4755,8 +4758,11 @@ export function WorkspaceCanvas() {
                   ? curveSegmentArcLength(seg, 0, nearestInt.t ?? 0)
                   : 0
                 const rangeAtClick =
-                  deriveInternalNotchRoleRangeAtArcLength(p, curveIndices, arcOnPath) ??
-                  deriveInternalNotchRoleRangeOnPath(p, curveIndices)
+                  deriveInternalProfileBoundaryRangeAtArcLength(p, curveIndices, arcOnPath) ??
+                  deriveInternalProfileBoundaryRangeOnPath(p, curveIndices)
+                if (internalPathHasProfileBoundaryNotches(p, curveIndices) && !rangeAtClick) {
+                  continue
+                }
                 const startNotchId = rangeAtClick?.startNotchId
                 const endNotchId = rangeAtClick?.endNotchId
                 if (!bestEdge || nearestInt.distance < bestEdge.distance) {
@@ -4791,8 +4797,12 @@ export function WorkspaceCanvas() {
                     const prefix = lengths.slice(0, idxInEdge).reduce((a, b) => a + b, 0)
                     const segArc = curveSegmentArcLength(masterK[nearest.curveIndex], 0, nearest.t ?? 0)
                     const arcOnEdge = prefix + segArc
-                    const rangeAtClick = deriveNotchRoleRangeAtArcLength(p, edge.curveIndices, arcOnEdge, masterK)
-                      ?? deriveNotchRoleRangeOnEdge(p, edge.curveIndices, masterK)
+                    const rangeAtClick =
+                      deriveContourProfileBoundaryRangeAtArcLength(p, edge.curveIndices, arcOnEdge, masterK) ??
+                      deriveContourProfileBoundaryRangeOnEdge(p, edge.curveIndices, masterK)
+                    if (edgeHasProfileBoundaryNotches(p, edge.curveIndices, masterK) && !rangeAtClick) {
+                      continue
+                    }
                     startNotchId = rangeAtClick?.startNotchId
                     endNotchId = rangeAtClick?.endNotchId
                   }

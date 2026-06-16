@@ -58,6 +58,11 @@ import {
   getEffectiveSoftVerticesCut,
   syncSoftAfterSharpCornerPromotion,
 } from '../geometry/seamUtils'
+import {
+  evaluateSeamAdjustment,
+  seamAdjustmentFingerprint,
+  SEAM_ADJUSTMENT_NOTCH_ALIGNED_EPS_MM,
+} from '../geometry/seamAdjustmentCheck'
 import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
 import {
   isNotchOnInternalLine,
@@ -471,6 +476,8 @@ type Store = {
   seamAdjustmentDialog: string | null
   /** Temporäres Hover-Highlight im Nahtanpassungsdialog (rein visuell, nicht persistent). */
   seamAdjustmentHoverPieceId: string | null
+  /** Naht-Zuordnung → Fingerprint der zuletzt bestätigten/übersprungenen Abweichung (Session). */
+  seamAdjustmentAcknowledged: Record<string, string>
   /** Nahtzuordnung: Eigenschaften (Nummer, Nahtart), Leertaste bei Hover */
   seamAssignmentMetaDialogId: string | null
   /** Maßstab: Referenzkante gewählt, Ziel-Länge eingeben. */
@@ -576,6 +583,8 @@ type Store = {
   adjustSeamNotches: (assignmentId: string, keepSide: 'A' | 'B') => void
   /** Prüft alle SeamAssignments: Gesamtlänge gleich + Notch-Abstände ungleich → Modal öffnen. */
   checkSeamAdjustment: () => void
+  /** Merkt die aktuelle Nahtabweichung als bestätigt/übersprungen (kein erneuter Dialog bei gleicher Signatur). */
+  acknowledgeSeamAdjustment: (assignmentId: string) => void
   /** Snap bei Vertex-Drag: wenn Differenz < 5mm, Vertex exakt auf 0 setzen. */
   snapSeamEdgeToMatch: (
     pieceId: string,
@@ -1013,6 +1022,7 @@ export const useStore = create<Store>()(
   toastMessage: null,
   seamAdjustmentDialog: null,
   seamAdjustmentHoverPieceId: null,
+  seamAdjustmentAcknowledged: {},
   seamAssignmentMetaDialogId: null,
   massstabDialog: null,
   digitizeState: null,
@@ -1601,12 +1611,16 @@ export const useStore = create<Store>()(
   },
 
   removeSeamAssignment: (id) =>
-    set((s) => ({
-      workspace: {
-        ...s.workspace,
-        seamAssignments: s.workspace.seamAssignments.filter((a) => a.id !== id),
-      },
-    })),
+    set((s) => {
+      const { [id]: _removed, ...restAck } = s.seamAdjustmentAcknowledged
+      return {
+        workspace: {
+          ...s.workspace,
+          seamAssignments: s.workspace.seamAssignments.filter((a) => a.id !== id),
+        },
+        seamAdjustmentAcknowledged: restAck,
+      }
+    }),
 
   addProfileAssignment: (assignment) => {
     const id = generateId()
@@ -1665,8 +1679,26 @@ export const useStore = create<Store>()(
     }
   },
 
-  setSeamAdjustmentDialog: (v) => set({ seamAdjustmentDialog: v, seamAdjustmentHoverPieceId: null }),
+  setSeamAdjustmentDialog: (v) => {
+    const s = get()
+    if (v === null && s.seamAdjustmentDialog) {
+      get().acknowledgeSeamAdjustment(s.seamAdjustmentDialog)
+    }
+    set({ seamAdjustmentDialog: v, seamAdjustmentHoverPieceId: null })
+  },
   setSeamAdjustmentHoverPieceId: (v) => set({ seamAdjustmentHoverPieceId: v }),
+  acknowledgeSeamAdjustment: (assignmentId) => {
+    const s = get()
+    const a = s.workspace.seamAssignments.find((x) => x.id === assignmentId)
+    if (!a) return
+    const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
+    const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
+    if (!pieceA || !pieceB) return
+    const fp = seamAdjustmentFingerprint(a, pieceA, pieceB)
+    set({
+      seamAdjustmentAcknowledged: { ...s.seamAdjustmentAcknowledged, [assignmentId]: fp },
+    })
+  },
   setSeamAssignmentMetaDialogId: (v) => set({ seamAssignmentMetaDialogId: v }),
   updateSeamAssignmentMeta: (assignmentId, patch) => {
     const s = get()
@@ -1816,6 +1848,15 @@ export const useStore = create<Store>()(
       return
     }
 
+    const needsMove = tgtNotches.some(
+      (n, i) => Math.abs(n.arcLength - targetArcPositions[i]) > SEAM_ADJUSTMENT_NOTCH_ALIGNED_EPS_MM
+    )
+    if (!needsMove) {
+      get().acknowledgeSeamAdjustment(assignmentId)
+      set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
+      return
+    }
+
     const targetNotches: { notchId: string; notch: Notch }[] = []
     for (let i = 0; i < tgtNotches.length; i++) {
       const result = pointAtPathLength(tgtSubCurves, targetArcPositions[i])
@@ -1842,6 +1883,7 @@ export const useStore = create<Store>()(
 
     const targetMap = new Map(targetNotches.map((tp) => [tp.notchId, tp.notch]))
 
+    get().acknowledgeSeamAdjustment(assignmentId)
     set((st) => {
       const piece = st.workspace.pieces.find((p) => p.id === tgtPieceId)
       if (!piece) return { seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null }
@@ -1867,26 +1909,14 @@ export const useStore = create<Store>()(
     const s = get()
     if (s.seamAdjustmentDialog) return
     for (const a of s.workspace.seamAssignments) {
-      if (isInternalSeamAssignment(a)) continue
       const pieceA = s.workspace.pieces.find((p) => p.id === a.pieceIdA)
       const pieceB = s.workspace.pieces.find((p) => p.id === a.pieceIdB)
       if (!pieceA || !pieceB) continue
-      const idxA = resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA)
-      const idxB = resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)
-      const lenA = edgeLengthInNotchRange(pieceA, idxA, a.notchRangeA)
-      const lenB = edgeLengthInNotchRange(pieceB, idxB, a.notchRangeB)
-      if (Math.abs(lenA - lenB) >= 0.1) continue
-      const ncA = getNotchesOnEdgeInRange(pieceA, idxA, a.notchRangeA).length
-      const ncB = getNotchesOnEdgeInRange(pieceB, idxB, a.notchRangeB).length
-      if (ncA !== ncB || ncA < 1) continue
-      const subsA = getSubSegments(pieceA, idxA, undefined, a.notchRangeA)
-      const subsB = getSubSegments(pieceB, idxB, undefined, a.notchRangeB)
-      const pairing = bestSeamSubSegmentPairing(subsA, subsB)
-      if (!pairing || subsA.length < 2) continue
-      if (pairing.maxSegmentMismatchMm >= 0.1) {
-        set({ seamAdjustmentDialog: a.id })
-        return
-      }
+      const ev = evaluateSeamAdjustment(a, pieceA, pieceB)
+      if (!ev?.needsDialog) continue
+      if (s.seamAdjustmentAcknowledged[a.id] === ev.fingerprint) continue
+      set({ seamAdjustmentDialog: a.id })
+      return
     }
   },
 
@@ -3886,6 +3916,7 @@ export const useStore = create<Store>()(
       rulerLine: null,
       seamAdjustmentDialog: null,
       seamAdjustmentHoverPieceId: null,
+      seamAdjustmentAcknowledged: {},
       seamAssignmentMetaDialogId: null,
       massstabDialog: null,
       showHelpModal: false,
@@ -4075,6 +4106,7 @@ export const useStore = create<Store>()(
       rulerLine: null,
       seamAdjustmentDialog: null,
       seamAdjustmentHoverPieceId: null,
+      seamAdjustmentAcknowledged: {},
       seamAssignmentMetaDialogId: null,
       profileDialogAssignmentId: null,
       massstabDialog: null,

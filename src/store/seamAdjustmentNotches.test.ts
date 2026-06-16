@@ -11,6 +11,105 @@ function square(size: number): Curve[] {
     { type: 'line', start: { x: 0, y: size }, end: { x: 0, y: 0 } },
   ]
 }
+describe('checkSeamAdjustment', () => {
+  beforeEach(() => {
+    const cutA = square(100)
+    const cutB = square(100)
+    const workspace: Workspace = {
+      id: 'ws-seam-check',
+      name: 'Test',
+      pieces: [
+        {
+          id: 'A',
+          number: '001',
+          name: 'Teil A',
+          cutLine: cutA,
+          seamLine: [],
+          notches: [
+            { id: 'a1', position: { x: 25, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+            { id: 'a2', position: { x: 75, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+          ],
+          drills: [],
+          grainLine: null,
+          internalLines: [],
+          internalCircles: [],
+          layer: 'CUT',
+          transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+          softVertices: [],
+          fillInterior: true,
+          material: '',
+          bomQuantity: 1,
+        },
+        {
+          id: 'B',
+          number: '002',
+          name: 'Teil B',
+          cutLine: cutB,
+          seamLine: [],
+          notches: [
+            { id: 'b1', position: { x: 40, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+            { id: 'b2', position: { x: 70, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+          ],
+          drills: [],
+          grainLine: null,
+          internalLines: [],
+          internalCircles: [],
+          layer: 'CUT',
+          transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+          softVertices: [],
+          fillInterior: true,
+          material: '',
+          bomQuantity: 1,
+        },
+      ],
+      view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [
+        {
+          id: 's-check',
+          pieceIdA: 'A',
+          curveIndicesA: [0],
+          clickedCurveA: 0,
+          pieceIdB: 'B',
+          curveIndicesB: [0],
+          clickedCurveB: 0,
+        },
+      ],
+    }
+    useStore.setState({ workspace, seamAdjustmentDialog: null, seamAdjustmentAcknowledged: {} })
+  })
+
+  it('öffnet Dialog bei Subsegment-Abweichung', () => {
+    useStore.getState().checkSeamAdjustment()
+    expect(useStore.getState().seamAdjustmentDialog).toBe('s-check')
+  })
+
+  it('fragt nach Bestätigung nicht erneut bei gleicher Abweichung', () => {
+    useStore.getState().checkSeamAdjustment()
+    useStore.getState().setSeamAdjustmentDialog(null)
+    useStore.getState().checkSeamAdjustment()
+    expect(useStore.getState().seamAdjustmentDialog).toBeNull()
+  })
+
+  it('fragt erneut nach wenn sich die Nahtgeometrie ändert', () => {
+    useStore.getState().checkSeamAdjustment()
+    useStore.getState().setSeamAdjustmentDialog(null)
+
+    const st = useStore.getState()
+    const pieceB = st.workspace.pieces.find((p) => p.id === 'B')!
+    const movedNotch = pieceB.notches.map((n) =>
+      n.id === 'b1' ? { ...n, position: { x: 30, y: 0 }, arcLengthMm: 30, sNormalized: 0.075 } : n
+    )
+    useStore.setState({
+      workspace: {
+        ...st.workspace,
+        pieces: st.workspace.pieces.map((p) => (p.id === 'B' ? { ...p, notches: movedNotch } : p)),
+      },
+    })
+
+    useStore.getState().checkSeamAdjustment()
+    expect(useStore.getState().seamAdjustmentDialog).toBe('s-check')
+  })
+})
 
 describe('adjustSeamNotches', () => {
   beforeEach(() => {

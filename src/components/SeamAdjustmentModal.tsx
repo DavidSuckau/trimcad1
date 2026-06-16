@@ -1,11 +1,5 @@
 import { useStore } from '../store/useStore'
-import {
-  countNotchesOnEdge,
-  getSubSegments,
-  edgeTotalLength,
-  resolvedSeamAssignmentCurveIndices,
-  bestSeamSubSegmentPairing,
-} from '../geometry/seamUtils'
+import { evaluateSeamAdjustment } from '../geometry/seamAdjustmentCheck'
 
 export function SeamAdjustmentModal() {
   const seamAdjustmentDialog = useStore((s) => s.seamAdjustmentDialog)
@@ -26,27 +20,10 @@ export function SeamAdjustmentModal() {
   const nameA = pieceA.name || `Teil ${pieceA.number}`
   const nameB = pieceB.name || `Teil ${pieceB.number}`
 
-  const idxA = resolvedSeamAssignmentCurveIndices(pieceA, assignment.curveIndicesA)
-  const idxB = resolvedSeamAssignmentCurveIndices(pieceB, assignment.curveIndicesB)
-  const lenA = edgeTotalLength(pieceA, idxA)
-  const ncA = countNotchesOnEdge(pieceA, idxA)
-  const ncB = countNotchesOnEdge(pieceB, idxB)
-  const notchMismatch = ncA !== ncB
+  const ev = evaluateSeamAdjustment(assignment, pieceA, pieceB)
+  if (!ev) return null
 
-  const subsA = getSubSegments(pieceA, idxA)
-  const subsB = getSubSegments(pieceB, idxB)
-  const subPair = bestSeamSubSegmentPairing(subsA, subsB)
-  const diffs: { idx: number; diff: number }[] = []
-  if (!notchMismatch && subPair && subsA.length >= 2) {
-    const rev = subPair.reverseB
-    for (let i = 0; i < subsA.length; i++) {
-      const sb = rev ? subsB[subsB.length - 1 - i] : subsB[i]
-      const d = Math.abs(subsA[i].length - sb.length)
-      if (d >= 0.1) diffs.push({ idx: i + 1, diff: d })
-    }
-  }
-
-  const canAdjust = !notchMismatch && ncA >= 1 && diffs.length > 0
+  const { lenA, ncA, ncB, notchMismatch, diffs, canAdjust } = ev
 
   return (
     <div
