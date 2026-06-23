@@ -490,6 +490,7 @@ type Store = {
   configuratorModalOpen: boolean
   configuratorInstances: ConfiguratorInstance[]
   rockGeneratorModalOpen: boolean
+  showScan3dModal: boolean
 
   setView: (v: Partial<ViewState>) => void
   addPiece: (piece?: Partial<PatternPiece>) => string
@@ -539,6 +540,7 @@ type Store = {
   setShowShortcutListModal: (v: boolean) => void
   setShowConfiguratorModal: (v: boolean) => void
   setShowRockGeneratorModal: (v: boolean) => void
+  setShowScan3dModal: (v: boolean) => void
   createConfiguratorInstance: (kindId: ConfiguratorKindId) => string
   updateConfiguratorPartParams: (
     instanceId: string,
@@ -1031,6 +1033,7 @@ export const useStore = create<Store>()(
   configuratorModalOpen: false,
   configuratorInstances: [],
   rockGeneratorModalOpen: false,
+  showScan3dModal: false,
   batchSelectionFilter: 'all' as BatchSelectionFilter,
   batchSelectionTargets: [] as BatchSelectionTarget[],
   batchUiHighlightByTargetId: {} as Record<string, string>,
@@ -1408,6 +1411,7 @@ export const useStore = create<Store>()(
   setShowShortcutListModal: (v) => set({ showShortcutListModal: v }),
   setShowConfiguratorModal: (v) => set({ configuratorModalOpen: v }),
   setShowRockGeneratorModal: (v) => set({ rockGeneratorModalOpen: v }),
+  setShowScan3dModal: (v) => set({ showScan3dModal: v }),
 
   createConfiguratorInstance: (kindId) => {
     const instanceId = generateId()
@@ -3928,6 +3932,7 @@ export const useStore = create<Store>()(
       workspaceImageSelected: false,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
+      showScan3dModal: false,
       toastMessage: null,
       batchSelectionFilter: 'all',
       batchSelectionTargets: [],
@@ -4121,6 +4126,7 @@ export const useStore = create<Store>()(
       nestingError: null,
       configuratorModalOpen: false,
       rockGeneratorModalOpen: false,
+      showScan3dModal: false,
       toastMessage: null,
       batchSelectionFilter: 'all',
       batchSelectionTargets: [],

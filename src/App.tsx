@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Toolbar } from './components/Toolbar'
 import { Sidebar } from './components/Sidebar'
 import { WorkspaceCanvas } from './components/WorkspaceCanvas'
@@ -7,6 +8,8 @@ import { HelpModal } from './components/HelpModal'
 import { ShortcutListModal } from './components/ShortcutListModal'
 import { PiecePropertiesModal } from './components/PiecePropertiesModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
+
+const Scan3dModal = lazy(() => import('./components/Scan3dModal').then((m) => ({ default: m.Scan3dModal })))
 
 export default function App() {
   return (
@@ -26,6 +29,9 @@ export default function App() {
         <HelpModal />
         <ShortcutListModal />
         <PiecePropertiesModal />
+        <Suspense fallback={null}>
+          <Scan3dModal />
+        </Suspense>
       </div>
     </ErrorBoundary>
   )

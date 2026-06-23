@@ -115,6 +115,7 @@ export function Toolbar() {
     createConfiguratorInstance,
     setShowConfiguratorModal,
     setShowRockGeneratorModal,
+    setShowScan3dModal,
     batchSelectionTargets,
     batchDeleteMarqueeCompletePieces,
     setEdgeSeamPickingActive,
@@ -176,6 +177,7 @@ export function Toolbar() {
       createConfiguratorInstance: s.createConfiguratorInstance,
       setShowConfiguratorModal: s.setShowConfiguratorModal,
       setShowRockGeneratorModal: s.setShowRockGeneratorModal,
+      setShowScan3dModal: s.setShowScan3dModal,
       batchSelectionTargets: s.batchSelectionTargets,
       batchDeleteMarqueeCompletePieces: s.batchDeleteMarqueeCompletePieces,
       setEdgeSeamPickingActive: s.setEdgeSeamPickingActive,
@@ -647,6 +649,18 @@ export function Toolbar() {
                   }}
                 >
                   Bild einfügen
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    setShowScan3dModal(true)
+                    closeMenu()
+                  }}
+                >
+                  3D-Scan zeichnen
                 </button>
               </li>
               <li className="menubar-separator" />

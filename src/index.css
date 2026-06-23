@@ -2374,3 +2374,173 @@ body {
   padding: 2px 6px;
   border-radius: 3px;
 }
+
+/* 3D-Scan zeichnen */
+.scan3d-window {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  background: #f0f0f0;
+  color: #222;
+}
+.scan3d-window-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #ccc;
+  flex-shrink: 0;
+}
+.scan3d-window-title h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.scan3d-window-subtitle {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8rem;
+  color: #666;
+  font-weight: 400;
+}
+.scan3d-window-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scan3d-hidden-input {
+  display: none;
+}
+.scan3d-window-empty-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.scan3d-window-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+  max-width: 520px;
+  width: 100%;
+  border: 2px dashed #bbb;
+  border-radius: 8px;
+}
+.scan3d-window-empty--drag {
+  border-color: #4a7c59;
+  background: rgba(74, 124, 89, 0.08);
+}
+.scan3d-window-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.scan3d-window-sidebar {
+  width: min(320px, 34vw);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: #fff;
+  border-right: 1px solid #ccc;
+  overflow: auto;
+}
+.scan3d-window-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #2a2d32;
+  padding: 0;
+}
+.scan3d-viewport {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+.scan3d-main-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ccc;
+  font-size: 0.95rem;
+}
+.scan3d-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scan3d-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+.scan3d-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #555;
+  line-height: 1.4;
+}
+.scan3d-sidebar-heading {
+  margin: 8px 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.scan3d-empty-list {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #777;
+}
+.scan3d-seam-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scan3d-seam-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.scan3d-seam-list li.active .scan3d-seam-btn {
+  background: #e8f0ea;
+  border-color: #4a7c59;
+}
+.scan3d-seam-btn {
+  flex: 1;
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+}
+.scan3d-seam-delete {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: #a33;
+}
