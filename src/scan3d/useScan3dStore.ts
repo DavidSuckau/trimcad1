@@ -1,12 +1,12 @@
 import { create } from 'zustand'
-import { buildMeshGraph } from './meshGraph'
+import { buildMeshGraphAsync } from './meshGraph'
 import {
   rebuildVertexPathFromSurface,
   simplifySurfacePolyline,
 } from './geodesicPath'
 import { disposeVisualRoot, loadObjAssets, meshBoundingRadius, revokeBlobUrls } from './objImport'
 import * as THREE from 'three'
-import type { MeshGraph, MeshHandle, ObjUnit, Scan3dSession, Scan3dTool } from './types'
+import type { MeshGraph, MeshHandle, ObjUnit, Scan3dLoadPhase, Scan3dSession, Scan3dTool } from './types'
 
 function snapRadiusMm(mesh: MeshHandle): number {
   return Math.max(15, meshBoundingRadius(mesh) * 0.035)
@@ -37,6 +37,10 @@ type Scan3dState = {
   meshGraph: MeshGraph | null
   loadError: string | null
   loadWarnings: string[]
+  isLoading: boolean
+  loadProgress: number
+  loadPhase: Scan3dLoadPhase | null
+  loadLabel: string
   pendingUnit: ObjUnit
   setPendingUnit: (unit: ObjUnit) => void
   loadObjAssets: (files: File[]) => Promise<void>
@@ -66,6 +70,10 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
   meshGraph: null,
   loadError: null,
   loadWarnings: [],
+  isLoading: false,
+  loadProgress: 0,
+  loadPhase: null,
+  loadLabel: '',
   pendingUnit: 'm',
 
   setPendingUnit: (unit) => set({ pendingUnit: unit }),
@@ -75,14 +83,55 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
     const prev = get().session
     if (prev) cleanupSession(prev)
 
-    const result = await loadObjAssets(files, unit)
+    set({
+      isLoading: true,
+      loadProgress: 2,
+      loadPhase: 'reading',
+      loadLabel: 'Datei wird gelesen…',
+      loadError: null,
+      loadWarnings: [],
+      session: null,
+      meshGraph: null,
+    })
+
+    const result = await loadObjAssets(files, unit, (progress) => {
+      set({
+        loadProgress: progress.pct,
+        loadPhase: progress.phase,
+        loadLabel: progress.label,
+      })
+    })
+
     if (!result.ok) {
       if (result.blobUrls) revokeBlobUrls(result.blobUrls)
-      set({ loadError: result.error, loadWarnings: [], session: null, meshGraph: null })
+      set({
+        loadError: result.error,
+        loadWarnings: [],
+        session: null,
+        meshGraph: null,
+        isLoading: false,
+        loadProgress: 0,
+        loadPhase: null,
+        loadLabel: '',
+      })
       return
     }
 
-    const graph = buildMeshGraph(result.mesh)
+    set({
+      loadProgress: 85,
+      loadPhase: 'graph',
+      loadLabel: 'Kantengraph wird erstellt…',
+    })
+
+    const graph = await buildMeshGraphAsync(result.mesh, (subPct) => {
+      const pct = Math.round(82 + (subPct / 100) * 16)
+      set({
+        loadProgress: pct,
+        loadPhase: 'graph',
+        loadLabel: 'Kantengraph wird erstellt…',
+      })
+    })
+
     const meshFile = files.find((f) => /\.(obj|stl)$/i.test(f.name))
     const session: Scan3dSession = {
       fileName: meshFile?.name ?? 'model',
@@ -101,6 +150,10 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
       meshGraph: graph,
       loadError: null,
       loadWarnings: result.warnings,
+      isLoading: false,
+      loadProgress: 100,
+      loadPhase: 'done',
+      loadLabel: 'Fertig',
     })
   },
 
@@ -112,6 +165,10 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
       meshGraph: null,
       loadError: null,
       loadWarnings: [],
+      isLoading: false,
+      loadProgress: 0,
+      loadPhase: null,
+      loadLabel: '',
     })
   },
 

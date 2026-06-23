@@ -2385,6 +2385,29 @@ body {
   background: #f0f0f0;
   color: #222;
 }
+.scan3d-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(240, 240, 240, 0.92);
+}
+.scan3d-loading-card {
+  width: min(420px, 88vw);
+  padding: 24px 28px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #ddd;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+.scan3d-loading-title {
+  margin: 0 0 14px;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+}
 .scan3d-window-header {
   display: flex;
   align-items: center;

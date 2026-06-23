@@ -1,5 +1,11 @@
 import type { MeshGraph, MeshHandle } from './types'
 
+const GRAPH_CHUNK = 40_000
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 function edgeKey(a: number, b: number): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`
 }
@@ -42,6 +48,44 @@ export function buildMeshGraph(mesh: MeshHandle): MeshGraph {
     addEdge(c, a)
   }
 
+  return { vertexCount, neighbors, edgeWeights }
+}
+
+export async function buildMeshGraphAsync(
+  mesh: MeshHandle,
+  onProgress?: (subPct: number) => void,
+): Promise<MeshGraph> {
+  const vertexCount = mesh.vertexCount
+  const neighbors: number[][] = Array.from({ length: vertexCount }, () => [])
+  const edgeWeights = new Map<string, number>()
+
+  const addEdge = (a: number, b: number) => {
+    if (a === b || a < 0 || b < 0 || a >= vertexCount || b >= vertexCount) return
+    const key = edgeKey(a, b)
+    if (edgeWeights.has(key)) return
+    const w = edgeLength(mesh, a, b)
+    edgeWeights.set(key, w)
+    neighbors[a].push(b)
+    neighbors[b].push(a)
+  }
+
+  const triCount = mesh.indices.length / 3
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 3
+    const a = mesh.indices[i]
+    const b = mesh.indices[i + 1]
+    const c = mesh.indices[i + 2]
+    addEdge(a, b)
+    addEdge(b, c)
+    addEdge(c, a)
+
+    if (t > 0 && t % GRAPH_CHUNK === 0) {
+      onProgress?.(Math.round((t / triCount) * 100))
+      await yieldToMain()
+    }
+  }
+
+  onProgress?.(100)
   return { vertexCount, neighbors, edgeWeights }
 }
 

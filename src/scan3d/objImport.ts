@@ -2,7 +2,47 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import * as THREE from 'three'
-import type { MeshHandle, ObjImportResult, ObjUnit } from './types'
+import type { MeshHandle, ObjImportResult, ObjUnit, Scan3dLoadPhase, Scan3dLoadProgress } from './types'
+
+export type LoadProgressCallback = (progress: Scan3dLoadProgress) => void
+
+const WELD_CHUNK = 50_000
+
+const LOAD_PHASE_LABELS: Record<Scan3dLoadPhase, string> = {
+  reading: 'Datei wird gelesen…',
+  parsing: '3D-Modell wird verarbeitet…',
+  textures: 'Texturen werden geladen…',
+  mesh: 'Mesh wird aufbereitet…',
+  graph: 'Kantengraph wird erstellt…',
+  done: 'Fertig',
+}
+
+const LOAD_PHASE_RANGE: Record<Scan3dLoadPhase, [number, number]> = {
+  reading: [2, 15],
+  parsing: [15, 42],
+  textures: [42, 55],
+  mesh: [55, 82],
+  graph: [82, 98],
+  done: [100, 100],
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function reportLoadProgress(
+  onProgress: LoadProgressCallback | undefined,
+  phase: Scan3dLoadPhase,
+  subPct = 0,
+): void {
+  if (!onProgress) return
+  const [lo, hi] = LOAD_PHASE_RANGE[phase]
+  const pct =
+    phase === 'done'
+      ? 100
+      : Math.round(lo + ((hi - lo) * Math.min(100, Math.max(0, subPct))) / 100)
+  onProgress({ pct, phase, label: LOAD_PHASE_LABELS[phase] })
+}
 
 const MAX_TRIANGLES = 500_000
 const WELD_TOLERANCE = 1e-4
@@ -268,16 +308,18 @@ function findMeshFile(files: File[]): File | undefined {
   return files.find((f) => /\.obj$/i.test(f.name)) ?? files.find((f) => /\.stl$/i.test(f.name))
 }
 
-function finalizeLoadedGroup(
+async function finalizeLoadedGroupAsync(
   group: THREE.Group,
   unit: ObjUnit,
   warnings: string[],
-): ObjImportResult & { blobUrls: string[] } {
+  onProgress?: LoadProgressCallback,
+): Promise<ObjImportResult & { blobUrls: string[] }> {
   const scaleToMm = UNIT_TO_MM[unit]
   applyUnitScale(group, scaleToMm)
   centerObject(group)
 
-  const mesh = mergeAndWeldFromObject(group)
+  reportLoadProgress(onProgress, 'mesh', 0)
+  const mesh = await mergeAndWeldFromObjectAsync(group, (subPct) => reportLoadProgress(onProgress, 'mesh', subPct))
   const triangleCount = mesh.indices.length / 3
 
   if (triangleCount < 1) return { ok: false, error: 'Mesh enthält keine Dreiecke.', blobUrls: [] }
@@ -288,10 +330,15 @@ function finalizeLoadedGroup(
     warnings.push(`Großes Mesh (${triangleCount} Dreiecke) — Zeichnen kann langsam sein.`)
   }
 
+  reportLoadProgress(onProgress, 'mesh', 100)
   return { ok: true, mesh, visualRoot: group, triangleCount, warnings, blobUrls: [] }
 }
 
-function weldPositionsIndices(rawPositions: number[], rawIndices: number[]): MeshHandle {
+async function weldPositionsIndicesAsync(
+  rawPositions: number[],
+  rawIndices: number[],
+  onProgress?: (subPct: number) => void,
+): Promise<MeshHandle> {
   const keyToIndex = new Map<string, number>()
   const positions: number[] = []
   const indices: number[] = []
@@ -309,8 +356,15 @@ function weldPositionsIndices(rawPositions: number[], rawIndices: number[]): Mes
     return newIdx
   }
 
-  for (const srcIdx of rawIndices) indices.push(mapVertex(srcIdx))
+  for (let i = 0; i < rawIndices.length; i++) {
+    indices.push(mapVertex(rawIndices[i]))
+    if (i > 0 && i % WELD_CHUNK === 0) {
+      onProgress?.(Math.round((i / rawIndices.length) * 100))
+      await yieldToMain()
+    }
+  }
 
+  onProgress?.(100)
   return {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
@@ -318,7 +372,10 @@ function weldPositionsIndices(rawPositions: number[], rawIndices: number[]): Mes
   }
 }
 
-function mergeAndWeldFromObject(object: THREE.Object3D): MeshHandle {
+async function mergeAndWeldFromObjectAsync(
+  object: THREE.Object3D,
+  onProgress?: (subPct: number) => void,
+): Promise<MeshHandle> {
   const rawPositions: number[] = []
   const rawIndices: number[] = []
   let vertexOffset = 0
@@ -350,7 +407,7 @@ function mergeAndWeldFromObject(object: THREE.Object3D): MeshHandle {
   })
 
   if (rawIndices.length === 0) throw new Error('Mesh ohne Dreiecke.')
-  return weldPositionsIndices(rawPositions, rawIndices)
+  return weldPositionsIndicesAsync(rawPositions, rawIndices, onProgress)
 }
 
 function centerObject(object: THREE.Object3D): void {
@@ -394,7 +451,11 @@ export function revokeBlobUrls(urls: string[]): void {
   for (const url of urls) URL.revokeObjectURL(url)
 }
 
-export async function loadObjAssets(files: File[], unit: ObjUnit = 'm'): Promise<ObjImportResult> {
+export async function loadObjAssets(
+  files: File[],
+  unit: ObjUnit = 'm',
+  onProgress?: LoadProgressCallback,
+): Promise<ObjImportResult> {
   const warnings: string[] = []
   const meshFile = findMeshFile(files)
   if (!meshFile) {
@@ -407,9 +468,16 @@ export async function loadObjAssets(files: File[], unit: ObjUnit = 'm'): Promise
   try {
     let group: THREE.Group
 
+    reportLoadProgress(onProgress, 'reading', 0)
+    await yieldToMain()
+
     if (isStl) {
       const buffer = await meshFile.arrayBuffer()
+      reportLoadProgress(onProgress, 'reading', 100)
+      reportLoadProgress(onProgress, 'parsing', 0)
+      await yieldToMain()
       group = loadStlGroup(buffer)
+      reportLoadProgress(onProgress, 'parsing', 100)
       warnings.push('STL enthält keine Textur — Modell wird grau dargestellt.')
     } else {
       const textureFile = pickPrimaryTextureFile(meshFile, files, null)
@@ -417,16 +485,23 @@ export async function loadObjAssets(files: File[], unit: ObjUnit = 'm'): Promise
         warnings.push('Tipp (Polycam): OBJ und Textur (.jpg/.png) gemeinsam auswählen.')
       }
       const objText = await meshFile.text()
+      reportLoadProgress(onProgress, 'reading', 100)
+      reportLoadProgress(onProgress, 'parsing', 0)
+      await yieldToMain()
+      reportLoadProgress(onProgress, 'textures', 0)
       const loaded = await loadObjGroup(objText, meshFile, files, urls)
       group = loaded.group
       warnings.push(...loaded.warnings)
+      reportLoadProgress(onProgress, 'textures', 100)
+      reportLoadProgress(onProgress, 'parsing', 100)
     }
 
-    const result = finalizeLoadedGroup(group, unit, warnings)
+    const result = await finalizeLoadedGroupAsync(group, unit, warnings, onProgress)
     if (!result.ok) {
       revokeBlobUrls(blobUrls)
       return { ...result, blobUrls }
     }
+    reportLoadProgress(onProgress, 'done', 100)
     return { ...result, blobUrls }
   } catch (err) {
     revokeBlobUrls(blobUrls)

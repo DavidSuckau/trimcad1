@@ -19,6 +19,9 @@ export function Scan3dModal() {
   const pendingUnit = useScan3dStore((s) => s.pendingUnit)
   const setPendingUnit = useScan3dStore((s) => s.setPendingUnit)
   const loadObj = useScan3dStore((s) => s.loadObjAssets)
+  const isLoading = useScan3dStore((s) => s.isLoading)
+  const loadProgress = useScan3dStore((s) => s.loadProgress)
+  const loadLabel = useScan3dStore((s) => s.loadLabel)
   const closeSession = useScan3dStore((s) => s.closeSession)
   const setTool = useScan3dStore((s) => s.setTool)
   const finishActiveSeam = useScan3dStore((s) => s.finishActiveSeam)
@@ -42,13 +45,14 @@ export function Scan3dModal() {
   }, [loadWarnings, setToastMessage])
 
   const handleClose = useCallback(() => {
+    if (isLoading) return
     if (session && session.seams.length > 0) {
       const ok = window.confirm('3D-Session schließen? Gezeichnete Nähte gehen verloren.')
       if (!ok) return
     }
     closeSession()
     setShowScan3dModal(false)
-  }, [session, closeSession, setShowScan3dModal])
+  }, [session, isLoading, closeSession, setShowScan3dModal])
 
   useEffect(() => {
     if (!showScan3dModal) return
@@ -80,9 +84,10 @@ export function Scan3dModal() {
         setToastMessage('warn:Mindestens eine OBJ- oder STL-Datei wird benötigt.')
         return
       }
+      if (isLoading) return
       await loadObj(files)
     },
-    [loadObj, setToastMessage],
+    [loadObj, isLoading, setToastMessage],
   )
 
   const onFileChange = useCallback(
@@ -134,10 +139,20 @@ export function Scan3dModal() {
             {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
             onChange={onFileChange}
           />
-          <button type="button" className="sidebar-btn" onClick={() => fileInputRef.current?.click()}>
+          <button
+            type="button"
+            className="sidebar-btn"
+            disabled={isLoading}
+            onClick={() => fileInputRef.current?.click()}
+          >
             OBJ / STL
           </button>
-          <button type="button" className="sidebar-btn" onClick={() => folderInputRef.current?.click()}>
+          <button
+            type="button"
+            className="sidebar-btn"
+            disabled={isLoading}
+            onClick={() => folderInputRef.current?.click()}
+          >
             Ordner
           </button>
           {session && (
@@ -177,17 +192,44 @@ export function Scan3dModal() {
               )}
             </>
           )}
-          <button type="button" className="settings-close" onClick={handleClose} aria-label="Fenster schließen">
+          <button
+            type="button"
+            className="settings-close"
+            disabled={isLoading}
+            onClick={handleClose}
+            aria-label="Fenster schließen"
+          >
             ×
           </button>
         </div>
       </header>
 
+      {isLoading && (
+        <div className="scan3d-loading-overlay" role="status" aria-live="polite" aria-busy="true">
+          <div className="scan3d-loading-card">
+            <p className="scan3d-loading-title">3D-Modell wird geladen</p>
+            <div className="nesting-progress">
+              <div className="nesting-progress-track">
+                <div
+                  className={`nesting-progress-fill${loadProgress <= 5 ? ' nesting-progress-fill--indeterminate' : ''}`}
+                  style={{ width: loadProgress <= 5 ? undefined : `${loadProgress}%` }}
+                />
+              </div>
+              <span className="nesting-progress-label">
+                {loadLabel}
+                {loadProgress > 5 ? ` · ${loadProgress} %` : ''}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!session ? (
         <div className="scan3d-window-empty-wrap">
         <div
-          className={`scan3d-window-empty ${dragOver ? 'scan3d-window-empty--drag' : ''}`}
+          className={`scan3d-window-empty ${dragOver && !isLoading ? 'scan3d-window-empty--drag' : ''}`}
           onDragOver={(e) => {
+            if (isLoading) return
             e.preventDefault()
             setDragOver(true)
           }}
@@ -214,10 +256,20 @@ export function Scan3dModal() {
               <option value="m">Meter (m)</option>
             </select>
           </label>
-          <button type="button" className="sidebar-btn primary" onClick={() => fileInputRef.current?.click()}>
+          <button
+            type="button"
+            className="sidebar-btn primary"
+            disabled={isLoading}
+            onClick={() => fileInputRef.current?.click()}
+          >
             OBJ / STL wählen
           </button>
-          <button type="button" className="sidebar-btn" onClick={() => folderInputRef.current?.click()}>
+          <button
+            type="button"
+            className="sidebar-btn"
+            disabled={isLoading}
+            onClick={() => folderInputRef.current?.click()}
+          >
             Export-Ordner (Polycam)
           </button>
         </div>

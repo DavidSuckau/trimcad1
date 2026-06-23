@@ -45,3 +45,11 @@ export type MeshGraph = {
   neighbors: number[][]
   edgeWeights: Map<string, number>
 }
+
+export type Scan3dLoadPhase = 'reading' | 'parsing' | 'textures' | 'mesh' | 'graph' | 'done'
+
+export type Scan3dLoadProgress = {
+  pct: number
+  phase: Scan3dLoadPhase
+  label: string
+}
