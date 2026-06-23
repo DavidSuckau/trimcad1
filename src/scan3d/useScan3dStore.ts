@@ -83,9 +83,9 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
     }
 
     const graph = buildMeshGraph(result.mesh)
-    const objFile = files.find((f) => f.name.toLowerCase().endsWith('.obj'))
+    const meshFile = files.find((f) => /\.(obj|stl)$/i.test(f.name))
     const session: Scan3dSession = {
-      fileName: objFile?.name ?? 'model.obj',
+      fileName: meshFile?.name ?? 'model',
       mesh: result.mesh,
       visualRoot: result.visualRoot,
       blobUrls: result.blobUrls,

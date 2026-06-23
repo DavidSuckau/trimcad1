@@ -76,8 +76,8 @@ export function Scan3dModal() {
   const handleFiles = useCallback(
     async (fileList: FileList | File[]) => {
       const files = Array.from(fileList)
-      if (!files.some((f) => f.name.toLowerCase().endsWith('.obj'))) {
-        setToastMessage('warn:Mindestens eine OBJ-Datei wird benötigt.')
+      if (!files.some((f) => /\.(obj|stl)$/i.test(f.name))) {
+        setToastMessage('warn:Mindestens eine OBJ- oder STL-Datei wird benötigt.')
         return
       }
       await loadObj(files)
@@ -121,7 +121,7 @@ export function Scan3dModal() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".obj,.mtl,.jpg,.jpeg,.png,.webp,.bmp"
+            accept=".obj,.stl,.mtl,.jpg,.jpeg,.png,.webp,.bmp"
             multiple
             className="scan3d-hidden-input"
             onChange={onFileChange}
@@ -135,7 +135,7 @@ export function Scan3dModal() {
             onChange={onFileChange}
           />
           <button type="button" className="sidebar-btn" onClick={() => fileInputRef.current?.click()}>
-            OBJ + Textur
+            OBJ / STL
           </button>
           <button type="button" className="sidebar-btn" onClick={() => folderInputRef.current?.click()}>
             Ordner
@@ -195,12 +195,15 @@ export function Scan3dModal() {
           onDrop={onDrop}
         >
           <p>
-            <strong>Polycam:</strong> OBJ und Texturdatei (.jpg/.png) gemeinsam wählen — per Drag &amp; Drop
-            beide Dateien auf einmal ablegen oder „OBJ + Textur wählen“. Optional: ganzen Export-Ordner laden
+            <strong>OBJ (Polycam):</strong> OBJ und Texturdatei (.jpg/.png) gemeinsam wählen — per Drag &amp; Drop
+            beide Dateien auf einmal ablegen oder „OBJ / STL wählen“. Optional: ganzen Export-Ordner laden
             (enthält oft auch .mtl).
           </p>
+          <p>
+            <strong>STL:</strong> Einzelne .stl-Datei (ASCII oder binär) — ohne Textur, grau dargestellt.
+          </p>
           <label className="scan3d-field">
-            <span>Einheit im OBJ</span>
+            <span>Einheit im Modell</span>
             <select
               className="notch-input"
               value={pendingUnit}
@@ -212,7 +215,7 @@ export function Scan3dModal() {
             </select>
           </label>
           <button type="button" className="sidebar-btn primary" onClick={() => fileInputRef.current?.click()}>
-            OBJ + Textur wählen
+            OBJ / STL wählen
           </button>
           <button type="button" className="sidebar-btn" onClick={() => folderInputRef.current?.click()}>
             Export-Ordner (Polycam)

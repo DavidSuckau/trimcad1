@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { meshBoundingRadius, parseObjText, pickPrimaryTextureFile } from './objImport'
+import { meshBoundingRadius, parseObjText, parseStlText, pickPrimaryTextureFile } from './objImport'
 
 const MINI_OBJ = `
 o Cube
@@ -47,6 +47,31 @@ describe('parseObjText', () => {
   it('meldet Fehler bei leerem Inhalt', async () => {
     const result = await parseObjText('# empty\n', 'mm')
     expect(result.ok).toBe(false)
+  })
+})
+
+describe('parseStlText', () => {
+  const MINI_STL = `solid test
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 1 0 0
+      vertex 0 1 0
+    endloop
+  endfacet
+endsolid test
+`
+
+  it('parst minimales STL in mm bei Einheit m', async () => {
+    const result = await parseStlText(MINI_STL, 'm')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.triangleCount).toBe(1)
+    expect(result.warnings.some((w) => w.includes('STL'))).toBe(true)
+    const dx = result.mesh.positions[3] - result.mesh.positions[0]
+    const dy = result.mesh.positions[4] - result.mesh.positions[1]
+    const dz = result.mesh.positions[5] - result.mesh.positions[2]
+    expect(Math.sqrt(dx * dx + dy * dy + dz * dz)).toBeCloseTo(1000, 0)
   })
 })
 

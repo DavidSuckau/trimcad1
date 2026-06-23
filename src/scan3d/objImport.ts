@@ -1,5 +1,6 @@
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js'
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import * as THREE from 'three'
 import type { MeshHandle, ObjImportResult, ObjUnit } from './types'
 
@@ -244,6 +245,52 @@ async function loadObjGroup(
   return { group, warnings }
 }
 
+function defaultScanMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: '#b8c4d0',
+    roughness: 0.65,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+  })
+}
+
+function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
+  const loader = new STLLoader()
+  const geometry = loader.parse(buffer)
+  geometry.computeVertexNormals()
+  const mesh = new THREE.Mesh(geometry, defaultScanMaterial())
+  const group = new THREE.Group()
+  group.add(mesh)
+  return group
+}
+
+function findMeshFile(files: File[]): File | undefined {
+  return files.find((f) => /\.obj$/i.test(f.name)) ?? files.find((f) => /\.stl$/i.test(f.name))
+}
+
+function finalizeLoadedGroup(
+  group: THREE.Group,
+  unit: ObjUnit,
+  warnings: string[],
+): ObjImportResult & { blobUrls: string[] } {
+  const scaleToMm = UNIT_TO_MM[unit]
+  applyUnitScale(group, scaleToMm)
+  centerObject(group)
+
+  const mesh = mergeAndWeldFromObject(group)
+  const triangleCount = mesh.indices.length / 3
+
+  if (triangleCount < 1) return { ok: false, error: 'Mesh enthält keine Dreiecke.', blobUrls: [] }
+  if (triangleCount > MAX_TRIANGLES) {
+    return { ok: false, error: `Mesh zu groß (${triangleCount} Dreiecke, max. ${MAX_TRIANGLES}).`, blobUrls: [] }
+  }
+  if (triangleCount > 200_000) {
+    warnings.push(`Großes Mesh (${triangleCount} Dreiecke) — Zeichnen kann langsam sein.`)
+  }
+
+  return { ok: true, mesh, visualRoot: group, triangleCount, warnings, blobUrls: [] }
+}
+
 function weldPositionsIndices(rawPositions: number[], rawIndices: number[]): MeshHandle {
   const keyToIndex = new Map<string, number>()
   const positions: number[] = []
@@ -349,49 +396,52 @@ export function revokeBlobUrls(urls: string[]): void {
 
 export async function loadObjAssets(files: File[], unit: ObjUnit = 'm'): Promise<ObjImportResult> {
   const warnings: string[] = []
-  const objFile = files.find((f) => f.name.toLowerCase().endsWith('.obj'))
-  if (!objFile) {
-    return { ok: false, error: 'Keine OBJ-Datei gefunden.' }
+  const meshFile = findMeshFile(files)
+  if (!meshFile) {
+    return { ok: false, error: 'Keine OBJ- oder STL-Datei gefunden.' }
   }
 
-  const textureFile = pickPrimaryTextureFile(objFile, files, null)
-  if (!textureFile && !files.some((f) => f.name.toLowerCase().endsWith('.mtl'))) {
-    warnings.push('Tipp (Polycam): OBJ und Textur (.jpg/.png) gemeinsam auswählen.')
-  }
-
+  const isStl = meshFile.name.toLowerCase().endsWith('.stl')
   const { urls, blobUrls } = buildAssetUrlMap(files)
 
   try {
-    const objText = await objFile.text()
-    const { group, warnings: loadWarnings } = await loadObjGroup(objText, objFile, files, urls)
-    warnings.push(...loadWarnings)
+    let group: THREE.Group
 
-    const scaleToMm = UNIT_TO_MM[unit]
-    applyUnitScale(group, scaleToMm)
-    centerObject(group)
+    if (isStl) {
+      const buffer = await meshFile.arrayBuffer()
+      group = loadStlGroup(buffer)
+      warnings.push('STL enthält keine Textur — Modell wird grau dargestellt.')
+    } else {
+      const textureFile = pickPrimaryTextureFile(meshFile, files, null)
+      if (!textureFile && !files.some((f) => f.name.toLowerCase().endsWith('.mtl'))) {
+        warnings.push('Tipp (Polycam): OBJ und Textur (.jpg/.png) gemeinsam auswählen.')
+      }
+      const objText = await meshFile.text()
+      const loaded = await loadObjGroup(objText, meshFile, files, urls)
+      group = loaded.group
+      warnings.push(...loaded.warnings)
+    }
 
-    const mesh = mergeAndWeldFromObject(group)
-    const triangleCount = mesh.indices.length / 3
-
-    if (triangleCount < 1) return { ok: false, error: 'Mesh enthält keine Dreiecke.', blobUrls }
-    if (triangleCount > MAX_TRIANGLES) {
+    const result = finalizeLoadedGroup(group, unit, warnings)
+    if (!result.ok) {
       revokeBlobUrls(blobUrls)
-      return { ok: false, error: `Mesh zu groß (${triangleCount} Dreiecke, max. ${MAX_TRIANGLES}).` }
+      return { ...result, blobUrls }
     }
-    if (triangleCount > 200_000) {
-      warnings.push(`Großes Mesh (${triangleCount} Dreiecke) — Zeichnen kann langsam sein.`)
-    }
-
-    return { ok: true, mesh, visualRoot: group, triangleCount, warnings, blobUrls }
+    return { ...result, blobUrls }
   } catch (err) {
     revokeBlobUrls(blobUrls)
-    const msg = err instanceof Error ? err.message : 'OBJ konnte nicht gelesen werden.'
+    const msg = err instanceof Error ? err.message : '3D-Datei konnte nicht gelesen werden.'
     return { ok: false, error: msg }
   }
 }
 
 export async function parseObjText(text: string, unit: ObjUnit = 'm'): Promise<ObjImportResult> {
   const file = new File([text], 'model.obj', { type: 'text/plain' })
+  return loadObjAssets([file], unit)
+}
+
+export async function parseStlText(text: string, unit: ObjUnit = 'm'): Promise<ObjImportResult> {
+  const file = new File([text], 'model.stl', { type: 'model/stl' })
   return loadObjAssets([file], unit)
 }
 
