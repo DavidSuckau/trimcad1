@@ -3,25 +3,28 @@ import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Line, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { meshBoundingRadius } from '../scan3d/objImport'
-import { smoothSurfacePolyline } from '../scan3d/geodesicPath'
 import {
-  projectPointsOntoSurface,
+  buildSeamDisplayPoints,
+  raycastSurfaceAtNdc,
   sampleSurfaceLineScreen,
+  vertexPathToDisplayPoints,
 } from '../scan3d/surfaceRaycast'
 import { useScan3dStore } from '../scan3d/useScan3dStore'
-import type { Scan3dSeam } from '../scan3d/types'
+import type { MeshHandle, Scan3dSeam } from '../scan3d/types'
 
 const SEAM_COLORS = ['#e85d04', '#d00000', '#ff6b35', '#c1121f', '#f48c06']
 
 function seamLinePoints(
   seam: Scan3dSeam,
+  mesh: MeshHandle,
   visualRoot: THREE.Object3D,
   camera: THREE.Camera,
 ): THREE.Vector3[] {
   let pts: THREE.Vector3[]
-  if (seam.surfacePoints.length >= 6) {
-    pts = smoothSurfacePolyline(seam.surfacePoints, 12)
-    pts = projectPointsOntoSurface(visualRoot, camera, pts)
+  if (seam.vertexPath.length >= 2) {
+    pts = vertexPathToDisplayPoints(mesh, seam.vertexPath)
+  } else if (seam.surfacePoints.length >= 6) {
+    pts = buildSeamDisplayPoints(camera, visualRoot, seam.surfacePoints)
   } else {
     pts = []
     for (let i = 0; i < seam.surfacePoints.length; i += 3) {
@@ -29,14 +32,6 @@ function seamLinePoints(
     }
   }
   if (seam.closed && pts.length > 1) pts.push(pts[0].clone())
-  return pts
-}
-
-function flatToVectors(flat: number[]): THREE.Vector3[] {
-  const pts: THREE.Vector3[] = []
-  for (let i = 0; i < flat.length; i += 3) {
-    pts.push(new THREE.Vector3(flat[i], flat[i + 1], flat[i + 2]))
-  }
   return pts
 }
 
@@ -65,11 +60,13 @@ function SeamLines({
   seams,
   activeSeamId,
   previewPoints,
+  mesh,
   visualRoot,
 }: {
   seams: Scan3dSeam[]
   activeSeamId: string | null
   previewPoints: number[]
+  mesh: MeshHandle
   visualRoot: THREE.Object3D
 }) {
   const { camera } = useThree()
@@ -77,7 +74,7 @@ function SeamLines({
   return (
     <>
       {seams.map((seam, idx) => {
-        const points = seamLinePoints(seam, visualRoot, camera)
+        const points = seamLinePoints(seam, mesh, visualRoot, camera)
         if (points.length < 2) return null
         const color = seam.id === activeSeamId ? '#ff2222' : SEAM_COLORS[idx % SEAM_COLORS.length]
         return (
@@ -94,7 +91,7 @@ function SeamLines({
       })}
       {previewPoints.length >= 6 && (
         <Line
-          points={flatToVectors(previewPoints)}
+          points={buildSeamDisplayPoints(camera, visualRoot, previewPoints)}
           color="#ffaa00"
           lineWidth={3}
           dashed
@@ -130,6 +127,7 @@ function TexturedModel({
   onLineMove: (ndc: THREE.Vector2) => void
   onLineEnd: (x: number, y: number, z: number, ndc: THREE.Vector2) => void
 }) {
+  const { camera } = useThree()
   const isDrawingRef = useRef(false)
   const lastSampleRef = useRef<{ x: number; y: number; z: number } | null>(null)
 
@@ -161,38 +159,50 @@ function TexturedModel({
       e.stopPropagation()
       ;(e.nativeEvent.target as HTMLElement | undefined)?.setPointerCapture?.(e.pointerId)
 
+      const ndc = ndcFromEvent(e)
+
       if (tool === 'drawLine') {
-        const ndc = ndcFromEvent(e)
-        onLineStart(e.point.x, e.point.y, e.point.z, ndc)
+        const hit = raycastSurfaceAtNdc(camera, visualRoot, ndc)
+        if (!hit) return
+        onLineStart(hit.x, hit.y, hit.z, ndc)
         return
       }
 
+      const hit = raycastSurfaceAtNdc(camera, visualRoot, ndc)
+      if (!hit) return
       isDrawingRef.current = true
       lastSampleRef.current = null
-      addSample(e.point.x, e.point.y, e.point.z, true)
+      addSample(hit.x, hit.y, hit.z, true)
     },
-    [tool, addSample, ndcFromEvent, onLineStart],
+    [tool, camera, visualRoot, addSample, ndcFromEvent, onLineStart],
   )
 
   const handlePointerMove = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
+      const ndc = ndcFromEvent(e)
+
       if (tool === 'drawLine') {
         e.stopPropagation()
-        onLineMove(ndcFromEvent(e))
+        onLineMove(ndc)
         return
       }
       if (tool !== 'drawSeam' || !isDrawingRef.current) return
       e.stopPropagation()
-      addSample(e.point.x, e.point.y, e.point.z, false)
+      const hit = raycastSurfaceAtNdc(camera, visualRoot, ndc)
+      if (!hit) return
+      addSample(hit.x, hit.y, hit.z, false)
     },
-    [tool, addSample, ndcFromEvent, onLineMove],
+    [tool, camera, visualRoot, addSample, ndcFromEvent, onLineMove],
   )
 
   const handlePointerUp = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
+      const ndc = ndcFromEvent(e)
+
       if (tool === 'drawLine') {
         e.stopPropagation()
-        onLineEnd(e.point.x, e.point.y, e.point.z, ndcFromEvent(e))
+        const hit = raycastSurfaceAtNdc(camera, visualRoot, ndc)
+        if (hit) onLineEnd(hit.x, hit.y, hit.z, ndc)
         return
       }
       if (tool !== 'drawSeam' || !isDrawingRef.current) return
@@ -201,7 +211,7 @@ function TexturedModel({
       lastSampleRef.current = null
       onStrokeEnd()
     },
-    [tool, onStrokeEnd, ndcFromEvent, onLineEnd],
+    [tool, camera, visualRoot, onStrokeEnd, ndcFromEvent, onLineEnd],
   )
 
   return (
@@ -230,7 +240,7 @@ function SceneContent() {
   const lineStartRef = useRef<{ world: THREE.Vector3; ndc: THREE.Vector2 } | null>(null)
 
   const meshRadius = useMemo(() => (session ? meshBoundingRadius(session.mesh) : 1), [session])
-  const minSampleDistMm = useMemo(() => Math.max(8, meshRadius * 0.01), [meshRadius])
+  const minSampleDistMm = useMemo(() => Math.max(4, meshRadius * 0.004), [meshRadius])
 
   const onStrokeStart = useCallback(
     (x: number, y: number, z: number) => {
@@ -264,7 +274,7 @@ function SceneContent() {
     (ndc: THREE.Vector2) => {
       if (!session || !lineStartRef.current) return
       const start = lineStartRef.current
-      const preview = sampleSurfaceLineScreen(camera, session.visualRoot, start.ndc, ndc, 32)
+      const preview = sampleSurfaceLineScreen(camera, session.visualRoot, start.ndc, ndc, 48)
       setLinePreview(preview.length >= 6 ? preview : [start.world.x, start.world.y, start.world.z])
     },
     [session, camera, setLinePreview],
@@ -274,7 +284,7 @@ function SceneContent() {
     (_x: number, _y: number, _z: number, ndc: THREE.Vector2) => {
       if (!session || !lineStartRef.current) return
       const start = lineStartRef.current
-      const surfacePoints = sampleSurfaceLineScreen(camera, session.visualRoot, start.ndc, ndc, 40)
+      const surfacePoints = sampleSurfaceLineScreen(camera, session.visualRoot, start.ndc, ndc, 56)
       lineStartRef.current = null
       setLinePreview([])
       if (surfacePoints.length >= 6) addSeamFromSurfacePoints(surfacePoints)
@@ -305,6 +315,7 @@ function SceneContent() {
         seams={session.seams}
         activeSeamId={session.activeSeamId}
         previewPoints={session.linePreviewPoints}
+        mesh={session.mesh}
         visualRoot={session.visualRoot}
       />
       <OrbitControls

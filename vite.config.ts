@@ -6,6 +6,10 @@ const appBase = process.env.VITE_APP_BASE ?? '/trimcad1/'
 export default defineConfig({
   plugins: [react()],
   base: appBase,
+  assetsInclude: ['**/*.wasm'],
+  optimizeDeps: {
+    exclude: ['@tx-code/occt-js'],
+  },
   server: {
     open: appBase,
     proxy: {

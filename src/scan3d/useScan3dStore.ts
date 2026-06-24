@@ -132,7 +132,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
       })
     })
 
-    const meshFile = files.find((f) => /\.(obj|stl)$/i.test(f.name))
+    const meshFile = files.find((f) => /\.(obj|stl|step|stp)$/i.test(f.name))
     const session: Scan3dSession = {
       fileName: meshFile?.name ?? 'model',
       mesh: result.mesh,

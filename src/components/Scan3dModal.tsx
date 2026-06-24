@@ -80,8 +80,8 @@ export function Scan3dModal() {
   const handleFiles = useCallback(
     async (fileList: FileList | File[]) => {
       const files = Array.from(fileList)
-      if (!files.some((f) => /\.(obj|stl)$/i.test(f.name))) {
-        setToastMessage('warn:Mindestens eine OBJ- oder STL-Datei wird benötigt.')
+      if (!files.some((f) => /\.(obj|stl|step|stp)$/i.test(f.name))) {
+        setToastMessage('warn:Mindestens eine OBJ-, STL- oder STEP-Datei wird benötigt.')
         return
       }
       if (isLoading) return
@@ -126,7 +126,7 @@ export function Scan3dModal() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".obj,.stl,.mtl,.jpg,.jpeg,.png,.webp,.bmp"
+            accept=".obj,.stl,.step,.stp,.mtl,.jpg,.jpeg,.png,.webp,.bmp"
             multiple
             className="scan3d-hidden-input"
             onChange={onFileChange}
@@ -145,7 +145,7 @@ export function Scan3dModal() {
             disabled={isLoading}
             onClick={() => fileInputRef.current?.click()}
           >
-            OBJ / STL
+            OBJ / STL / STEP
           </button>
           <button
             type="button"
@@ -238,11 +238,12 @@ export function Scan3dModal() {
         >
           <p>
             <strong>OBJ (Polycam):</strong> OBJ und Texturdatei (.jpg/.png) gemeinsam wählen — per Drag &amp; Drop
-            beide Dateien auf einmal ablegen oder „OBJ / STL wählen“. Optional: ganzen Export-Ordner laden
+            beide Dateien auf einmal ablegen oder „OBJ / STL / STEP wählen“. Optional: ganzen Export-Ordner laden
             (enthält oft auch .mtl).
           </p>
           <p>
-            <strong>STL:</strong> Einzelne .stl-Datei (ASCII oder binär) — ohne Textur, grau dargestellt.
+            <strong>STL / STEP:</strong> Einzelne Mesh- oder CAD-Datei (.stl, .step, .stp) — STEP wird im Browser
+            trianguliert, ohne Textur.
           </p>
           <label className="scan3d-field">
             <span>Einheit im Modell</span>
@@ -262,7 +263,7 @@ export function Scan3dModal() {
             disabled={isLoading}
             onClick={() => fileInputRef.current?.click()}
           >
-            OBJ / STL wählen
+            OBJ / STL / STEP wählen
           </button>
           <button
             type="button"

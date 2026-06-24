@@ -1,12 +1,28 @@
 import * as THREE from 'three'
+import type { MeshHandle } from './types'
 
-function collectMeshes(root: THREE.Object3D): THREE.Mesh[] {
-  const meshes: THREE.Mesh[] = []
-  root.updateMatrixWorld(true)
-  root.traverse((child) => {
-    if (child instanceof THREE.Mesh) meshes.push(child)
-  })
-  return meshes
+const _viewDir = new THREE.Vector3()
+const _normal = new THREE.Vector3()
+const _normalMatrix = new THREE.Matrix3()
+
+/** Bevorzugt die zur Kamera gewandte Fläche (verhindert Sprünge auf Rückseiten bei DoubleSide). */
+function pickVisibleSurfaceHit(
+  camera: THREE.Camera,
+  hits: THREE.Intersection[],
+): THREE.Intersection | null {
+  if (hits.length === 0) return null
+
+  camera.getWorldDirection(_viewDir)
+
+  for (const hit of hits) {
+    if (!hit.face) continue
+    _normal.copy(hit.face.normal)
+    _normalMatrix.getNormalMatrix(hit.object.matrixWorld)
+    _normal.applyMatrix3(_normalMatrix).normalize()
+    if (_normal.dot(_viewDir) < 0) return hit
+  }
+
+  return hits[0]
 }
 
 /** Weltpunkt → normalisierte Gerätekoordinaten. */
@@ -24,7 +40,21 @@ export function raycastSurfaceAtNdc(
   const raycaster = new THREE.Raycaster()
   raycaster.setFromCamera(ndc, camera)
   const hits = raycaster.intersectObject(visualRoot, true)
-  return hits[0] ? hits[0].point.clone() : null
+  const hit = pickVisibleSurfaceHit(camera, hits)
+  return hit ? hit.point.clone() : null
+}
+
+function appendSurfacePoint(flat: number[], x: number, y: number, z: number, minDistMm = 0.5): void {
+  if (flat.length >= 3) {
+    const lx = flat[flat.length - 3]
+    const ly = flat[flat.length - 2]
+    const lz = flat[flat.length - 1]
+    const dx = x - lx
+    const dy = y - ly
+    const dz = z - lz
+    if (dx * dx + dy * dy + dz * dz < minDistMm * minDistMm) return
+  }
+  flat.push(x, y, z)
 }
 
 /**
@@ -50,56 +80,68 @@ export function sampleSurfaceLineScreen(
     )
     const hit = raycastSurfaceAtNdc(camera, visualRoot, ndc)
     if (!hit) continue
-    if (flat.length >= 3) {
-      const lx = flat[flat.length - 3]
-      const ly = flat[flat.length - 2]
-      const lz = flat[flat.length - 1]
-      const dx = hit.x - lx
-      const dy = hit.y - ly
-      const dz = hit.z - lz
-      if (dx * dx + dy * dy + dz * dz < 0.25) continue
-    }
-    flat.push(hit.x, hit.y, hit.z)
+    appendSurfacePoint(flat, hit.x, hit.y, hit.z)
   }
   return flat
 }
 
-/** Glättungskurve wieder auf die Mesh-Oberfläche projizieren (entlang Kamera- und Mittelachse). */
-export function projectPointsOntoSurface(
-  visualRoot: THREE.Object3D,
+function samplesForSegment(ax: number, ay: number, az: number, bx: number, by: number, bz: number): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const dz = bz - az
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  return Math.min(32, Math.max(4, Math.ceil(len / 12)))
+}
+
+/**
+ * Anzeige-Punkte für eine Naht: jedes Segment wird per Bildschirm-Raycast auf der Oberfläche verdichtet.
+ * Keine 3D-Kurven-Glättung — die würde bei unebenen Scans durch das Modell schneiden.
+ */
+export function buildSeamDisplayPoints(
   camera: THREE.Camera,
-  points: THREE.Vector3[],
+  visualRoot: THREE.Object3D,
+  flat: number[],
 ): THREE.Vector3[] {
-  const meshes = collectMeshes(visualRoot)
-  if (meshes.length === 0) return points
+  const out: THREE.Vector3[] = []
+  const pointCount = flat.length / 3
+  if (pointCount === 0) return out
 
-  const raycaster = new THREE.Raycaster()
-  const camPos = new THREE.Vector3()
-  camera.getWorldPosition(camPos)
-
-  return points.map((p) => {
-    const toCam = camPos.clone().sub(p)
-    if (toCam.lengthSq() < 1e-8) toCam.set(0, 0, 1)
-    toCam.normalize()
-
-    const fromCenter = p.clone().negate()
-    if (fromCenter.lengthSq() < 1e-8) fromCenter.set(0, 1, 0)
-    fromCenter.normalize()
-
-    const dirs = [toCam, toCam.clone().negate(), fromCenter, fromCenter.clone().negate()]
-    let best: THREE.Vector3 | null = null
-    let bestDist = Infinity
-
-    for (const dir of dirs) {
-      const origin = p.clone().add(dir.clone().multiplyScalar(800))
-      raycaster.set(origin, dir.clone().negate())
-      const hits = raycaster.intersectObjects(meshes, false)
-      if (hits[0] && hits[0].distance < bestDist) {
-        bestDist = hits[0].distance
-        best = hits[0].point.clone()
-      }
+  const push = (x: number, y: number, z: number) => {
+    if (out.length > 0) {
+      const p = out[out.length - 1]
+      const dx = x - p.x
+      const dy = y - p.y
+      const dz = z - p.z
+      if (dx * dx + dy * dy + dz * dz < 0.25) return
     }
+    out.push(new THREE.Vector3(x, y, z))
+  }
 
-    return best ?? p.clone()
+  push(flat[0], flat[1], flat[2])
+
+  for (let i = 0; i + 1 < pointCount; i++) {
+    const ax = flat[i * 3]
+    const ay = flat[i * 3 + 1]
+    const az = flat[i * 3 + 2]
+    const bx = flat[(i + 1) * 3]
+    const by = flat[(i + 1) * 3 + 1]
+    const bz = flat[(i + 1) * 3 + 2]
+
+    const startNdc = worldToNdc(camera, new THREE.Vector3(ax, ay, az))
+    const endNdc = worldToNdc(camera, new THREE.Vector3(bx, by, bz))
+    const seg = sampleSurfaceLineScreen(camera, visualRoot, startNdc, endNdc, samplesForSegment(ax, ay, az, bx, by, bz))
+
+    for (let j = 3; j < seg.length; j += 3) {
+      push(seg[j], seg[j + 1], seg[j + 2])
+    }
+  }
+
+  return out
+}
+
+export function vertexPathToDisplayPoints(mesh: MeshHandle, vertexPath: number[]): THREE.Vector3[] {
+  return vertexPath.map((vi) => {
+    const i = vi * 3
+    return new THREE.Vector3(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2])
   })
 }

@@ -2,6 +2,7 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import * as THREE from 'three'
+import { isStepFileName, loadStepGroup } from './stepImport'
 import type { MeshHandle, ObjImportResult, ObjUnit, Scan3dLoadPhase, Scan3dLoadProgress } from './types'
 
 export type LoadProgressCallback = (progress: Scan3dLoadProgress) => void
@@ -305,7 +306,11 @@ function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
 }
 
 function findMeshFile(files: File[]): File | undefined {
-  return files.find((f) => /\.obj$/i.test(f.name)) ?? files.find((f) => /\.stl$/i.test(f.name))
+  return (
+    files.find((f) => /\.obj$/i.test(f.name)) ??
+    files.find((f) => /\.stl$/i.test(f.name)) ??
+    files.find((f) => isStepFileName(f.name))
+  )
 }
 
 async function finalizeLoadedGroupAsync(
@@ -459,9 +464,10 @@ export async function loadObjAssets(
   const warnings: string[] = []
   const meshFile = findMeshFile(files)
   if (!meshFile) {
-    return { ok: false, error: 'Keine OBJ- oder STL-Datei gefunden.' }
+    return { ok: false, error: 'Keine OBJ-, STL- oder STEP-Datei gefunden.' }
   }
 
+  const isStep = isStepFileName(meshFile.name)
   const isStl = meshFile.name.toLowerCase().endsWith('.stl')
   const { urls, blobUrls } = buildAssetUrlMap(files)
 
@@ -471,7 +477,16 @@ export async function loadObjAssets(
     reportLoadProgress(onProgress, 'reading', 0)
     await yieldToMain()
 
-    if (isStl) {
+    if (isStep) {
+      const buffer = await meshFile.arrayBuffer()
+      reportLoadProgress(onProgress, 'reading', 100)
+      reportLoadProgress(onProgress, 'parsing', 5)
+      await yieldToMain()
+      const loaded = await loadStepGroup(buffer, unit)
+      group = loaded.group
+      warnings.push(...loaded.warnings)
+      reportLoadProgress(onProgress, 'parsing', 100)
+    } else if (isStl) {
       const buffer = await meshFile.arrayBuffer()
       reportLoadProgress(onProgress, 'reading', 100)
       reportLoadProgress(onProgress, 'parsing', 0)
