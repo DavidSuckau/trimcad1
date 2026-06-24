@@ -4,6 +4,12 @@ import { useStore } from '../store/useStore'
 import { useScan3dStore } from '../scan3d/useScan3dStore'
 import type { ObjUnit } from '../scan3d/types'
 
+const SUPPORTED_MESH_RE = /\.(obj|stl|step|stp)$/i
+
+function isSupportedMeshFile(name: string): boolean {
+  return SUPPORTED_MESH_RE.test(name)
+}
+
 const Scan3dViewport = lazy(() =>
   import('./Scan3dViewport').then((m) => ({ default: m.Scan3dViewport })),
 )
@@ -80,8 +86,8 @@ export function Scan3dModal() {
   const handleFiles = useCallback(
     async (fileList: FileList | File[]) => {
       const files = Array.from(fileList)
-      if (!files.some((f) => /\.(obj|stl|step|stp)$/i.test(f.name))) {
-        setToastMessage('warn:Mindestens eine OBJ-, STL- oder STEP-Datei wird benötigt.')
+      if (!files.some((f) => isSupportedMeshFile(f.name))) {
+        setToastMessage('warn:Unterstützt: OBJ, STL, STEP (.step / .stp).')
         return
       }
       if (isLoading) return
@@ -126,7 +132,6 @@ export function Scan3dModal() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".obj,.stl,.step,.stp,.mtl,.jpg,.jpeg,.png,.webp,.bmp"
             multiple
             className="scan3d-hidden-input"
             onChange={onFileChange}
@@ -236,14 +241,18 @@ export function Scan3dModal() {
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
         >
-          <p>
-            <strong>OBJ (Polycam):</strong> OBJ und Texturdatei (.jpg/.png) gemeinsam wählen — per Drag &amp; Drop
-            beide Dateien auf einmal ablegen oder „OBJ / STL / STEP wählen“. Optional: ganzen Export-Ordner laden
-            (enthält oft auch .mtl).
+          <p className="scan3d-format-list">
+            <strong>Unterstützte 3D-Formate:</strong>
+            <br />
+            OBJ (mit Textur) · STL · STEP (.step / .stp)
           </p>
           <p>
-            <strong>STL / STEP:</strong> Einzelne Mesh- oder CAD-Datei (.stl, .step, .stp) — STEP wird im Browser
-            trianguliert, ohne Textur.
+            <strong>OBJ (Polycam):</strong> OBJ und Texturdatei (.jpg/.png) gemeinsam wählen — per Drag &amp; Drop
+            beide Dateien auf einmal ablegen. Optional: ganzen Export-Ordner laden (enthält oft auch .mtl).
+          </p>
+          <p>
+            <strong>STL / STEP:</strong> Einzelne Datei — STEP wird im Browser trianguliert (CAD-Konstruktion).
+            Im Dateidialog ggf. „Alle Dateien“ wählen, falls .step nicht angezeigt wird.
           </p>
           <label className="scan3d-field">
             <span>Einheit im Modell</span>
@@ -263,7 +272,7 @@ export function Scan3dModal() {
             disabled={isLoading}
             onClick={() => fileInputRef.current?.click()}
           >
-            OBJ / STL / STEP wählen
+            3D-Datei wählen (OBJ · STL · STEP)
           </button>
           <button
             type="button"

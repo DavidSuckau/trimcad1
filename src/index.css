@@ -2463,6 +2463,14 @@ body {
   border-color: #4a7c59;
   background: rgba(74, 124, 89, 0.08);
 }
+.scan3d-format-list {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #e8eef2;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
 .scan3d-window-body {
   flex: 1;
   min-height: 0;
