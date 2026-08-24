@@ -1,5 +1,5 @@
-import type { Curve, Notch, PatternPiece, Point } from '../types/model'
-import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
+import type { Curve, Notch, PatternPiece, Point, RoundedCorner } from '../types/model'
+import { useSeamLineForVertexEditing, getSharpMasterCurves } from '../geometry/vertexMaster'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
@@ -64,6 +64,8 @@ function vertexHalfPlane(
   if (Math.abs(cz) < AXIS_CROSS_EPS) return 'axis'
   return pointInKeepHalfPlane(p, axisA, axisB, keepSide) ? 'keep' : 'mirror'
 }
+
+export { vertexHalfPlane }
 
 export function findKeepSidePartnerVertex(
   curves: Curve[],
@@ -441,10 +443,46 @@ export function appendSymmetricMirroredNotches(piece: PatternPiece, notch: Notch
   return [...piece.notches, primary, mirrored]
 }
 
+export function syncRoundedCornersForSymmetry(piece: PatternPiece): PatternPiece {
+  const sc = piece.symmetryConstraint
+  const rounded = piece.roundedCorners
+  if (!sc || !rounded?.length) return piece
+
+  const sharp = getSharpMasterCurves(piece)
+  const byIndex = new Map<number, number>()
+  for (const rc of rounded) {
+    byIndex.set(rc.masterVertexIndex, rc.radiusMm)
+  }
+
+  const result: RoundedCorner[] = []
+  const seen = new Set<number>()
+  for (const rc of rounded) {
+    const pos = getContourVertexPosition(sharp, rc.masterVertexIndex)
+    const hp = vertexHalfPlane(pos, sc.axisA, sc.axisB, sc.keepSide)
+    const keepVi =
+      hp === 'mirror'
+        ? findKeepSidePartnerVertex(sharp, rc.masterVertexIndex, sc.axisA, sc.axisB, sc.keepSide)
+        : rc.masterVertexIndex
+    const radiusMm = byIndex.get(keepVi) ?? rc.radiusMm
+    if (seen.has(keepVi)) continue
+    seen.add(keepVi)
+    result.push({ masterVertexIndex: keepVi, radiusMm })
+    const mirrorVi = findMirrorSidePartnerVertex(sharp, keepVi, sc.axisA, sc.axisB, sc.keepSide)
+    if (mirrorVi !== keepVi && !seen.has(mirrorVi)) {
+      seen.add(mirrorVi)
+      result.push({ masterVertexIndex: mirrorVi, radiusMm })
+    }
+  }
+
+  result.sort((a, b) => a.masterVertexIndex - b.masterVertexIndex)
+  return { ...piece, roundedCorners: result.length > 0 ? result : undefined }
+}
+
 export function finalizePieceContourEdit(
   piece: PatternPiece
 ): { ok: true; piece: PatternPiece } | { ok: false; toastMessage: string } {
-  return syncPieceSymmetryGeometry(piece)
+  const withCorners = syncRoundedCornersForSymmetry(piece)
+  return syncPieceSymmetryGeometry(withCorners)
 }
 
 export function symmetryConstraintFromAxis(

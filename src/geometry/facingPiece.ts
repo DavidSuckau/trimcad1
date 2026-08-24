@@ -2,6 +2,7 @@ import type { Curve, Drill, Notch, PatternPiece, Point } from '../types/model'
 import { bezierAt, curvesBounds, pointAtPathLength, totalPathLength } from './curveToPath'
 import { deriveCutLineForPiece } from './deriveCutLineForPiece'
 import { chamferCutLineCornersInSeamAllowance } from './facingChamfer'
+import { getEffectiveSoftVerticesCut } from './seamUtils'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 
@@ -154,7 +155,7 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
     if (derived.ok) cutForChamfer = derived.cutLine
   }
 
-  const draft: PatternPiece = {
+  const draftBase: PatternPiece = {
     ...parent,
     cutLine: cutForChamfer,
     seamLine,
@@ -163,14 +164,16 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
     grainLine: cloneGrain(parent.grainLine),
     internalLines: cloneCurves(parent.internalLines),
     internalCircles: cloneCircles(parent.internalCircles),
-    // Cut wurde neu abgeleitet → Mutter-softVertices (Cut-Indizes) sind ungültig und
-    // würden nach Parent-Edit falsche Ecken soft/scharf markieren → NZ-Fressen.
     softVertices: [],
     softVerticesMaster: [...(parent.softVerticesMaster ?? [])],
     roundedCorners: parent.roundedCorners ? parent.roundedCorners.map((r) => ({ ...r })) : undefined,
     edgeSeamAllowances: parent.edgeSeamAllowances
       ? parent.edgeSeamAllowances.map((e) => ({ ...e }))
       : undefined,
+  }
+  const draft: PatternPiece = {
+    ...draftBase,
+    softVertices: getEffectiveSoftVerticesCut(draftBase),
   }
 
   let cutLine = chamferCutLineCornersInSeamAllowance(draft)

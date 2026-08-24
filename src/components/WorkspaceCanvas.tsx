@@ -101,9 +101,12 @@ import {
   symmetryAxisEndpointsFromInternalCurve,
   symmetryAxisFromMasterEdgePick,
   symmetryAxisClippedToPieceBounds,
+  getSymmetryHalfPlaneClipPolygons,
+  symmetryClipPolygonPointsAttr,
+  vertexHalfPlane,
   SYMMETRY_INTERNAL_HOVER_MM,
 } from '../symmetry'
-import { getPiecePivotLocal } from '../geometry/pieceTransform'
+import { getPiecePivotLocal, getRotationUiLayout } from '../geometry/pieceTransform'
 import { collectMarqueeTargets, filterBatchTargets, batchTargetKey } from '../workspace/workspaceMarqueeSelection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 import {
@@ -1381,6 +1384,67 @@ const PieceGroup = memo(function PieceGroup({
   const solidFill = solidStrokeOnly ? 'none' : interiorFill
   const solidFillOpacity = solidStrokeOnly ? undefined : interiorFillOpacity
 
+  const sym = piece.symmetryConstraint
+  const symClips =
+    sym && solidPath && !solidStrokeOnly
+      ? getSymmetryHalfPlaneClipPolygons(sym.axisA, sym.axisB, sym.keepSide, cutLine)
+      : null
+  const symKeepClipId = symClips ? `sym-keep-${piece.id}` : null
+  const symMirrorClipId = symClips ? `sym-mirror-${piece.id}` : null
+
+  const renderSplitFill = (
+    pathD: string | null,
+    strokeOnly: boolean,
+    dashed = false,
+  ) => {
+    if (!pathD || strokeOnly) return null
+    if (!symClips || !symKeepClipId || !symMirrorClipId) {
+      return (
+        <path
+          d={pathD}
+          fill={dashed ? dashedFill : solidFill}
+          fillOpacity={dashed ? dashedFillOpacity : solidFillOpacity}
+          stroke="none"
+          pointerEvents="none"
+        />
+      )
+    }
+    const fill = dashed ? dashedFill : solidFill
+    if (fill === 'none' && !symClips) return null
+    const effectiveFill = fill === 'none' ? T.piece.fillSelected : fill
+    if (!symClips || !symKeepClipId || !symMirrorClipId) {
+      return (
+        <path
+          d={pathD}
+          fill={effectiveFill}
+          fillOpacity={dashed ? dashedFillOpacity : solidFillOpacity}
+          stroke="none"
+          pointerEvents="none"
+        />
+      )
+    }
+    return (
+      <>
+        <path
+          d={pathD}
+          fill={effectiveFill}
+          fillOpacity={T.piece.symmetryMirrorFillOpacity}
+          clipPath={`url(#${symMirrorClipId})`}
+          stroke="none"
+          pointerEvents="none"
+        />
+        <path
+          d={pathD}
+          fill={effectiveFill}
+          fillOpacity={T.piece.symmetryKeepFillOpacity}
+          clipPath={`url(#${symKeepClipId})`}
+          stroke="none"
+          pointerEvents="none"
+        />
+      </>
+    )
+  }
+
   const solidStroke = isDialogHighlightActive ? T.piece.strokeDialogHover
     : isHovered ? T.piece.strokeHover
       : isSelected ? T.piece.strokeSelected
@@ -1396,28 +1460,42 @@ const PieceGroup = memo(function PieceGroup({
       onPointerDown={onPointerDown}
       onContextMenu={onContextMenu}
     >
+      {symClips && symKeepClipId && symMirrorClipId && (
+        <defs>
+          <clipPath id={symKeepClipId}>
+            <polygon points={symmetryClipPolygonPointsAttr(symClips.keep)} />
+          </clipPath>
+          <clipPath id={symMirrorClipId}>
+            <polygon points={symmetryClipPolygonPointsAttr(symClips.mirror)} />
+          </clipPath>
+        </defs>
+      )}
       {hasSeam && dashedPath && (
-        <path
-          d={dashedPath}
-          fill={dashedFill}
-          fillOpacity={dashedFillOpacity}
-          stroke={T.piece.strokeDashed}
-          strokeWidth={T.piece.strokeWidthDashed * ptPs}
-          strokeLinecap={dashedStrokeOnly ? 'round' : undefined}
-          opacity={T.piece.dashOpacity}
-          pointerEvents="none"
-        />
+        <>
+          {renderSplitFill(dashedPath, !!dashedStrokeOnly, true)}
+          <path
+            d={dashedPath}
+            fill="none"
+            stroke={T.piece.strokeDashed}
+            strokeWidth={T.piece.strokeWidthDashed * ptPs}
+            strokeLinecap={dashedStrokeOnly ? 'round' : undefined}
+            opacity={T.piece.dashOpacity}
+            pointerEvents="none"
+          />
+        </>
       )}
       {solidPath && (
-        <path
-          d={solidPath}
-          fill={solidFill}
-          fillOpacity={solidFillOpacity}
-          stroke={solidStroke}
-          strokeWidth={solidStrokeWidth * ptPs}
-          strokeLinecap={solidStrokeOnly ? 'round' : undefined}
-          pointerEvents="none"
-        />
+        <>
+          {renderSplitFill(solidPath, !!solidStrokeOnly, false)}
+          <path
+            d={solidPath}
+            fill="none"
+            stroke={solidStroke}
+            strokeWidth={solidStrokeWidth * ptPs}
+            strokeLinecap={solidStrokeOnly ? 'round' : undefined}
+            pointerEvents="none"
+          />
+        </>
       )}
       {hoveredSegmentCurveIndex != null &&
         (hoveredSegmentOnSeam ? seamLine[hoveredSegmentCurveIndex] : cutLine[hoveredSegmentCurveIndex]) && (
@@ -1849,11 +1927,12 @@ const PieceGroup = memo(function PieceGroup({
         />
       )}
       {isSelected && cutLine.length >= 3 && showPivotRotationUi && (() => {
-        const pivot = getPiecePivotLocal(piece)
-        const bounds = curvesBounds(cutLine)
-        if (!bounds) return null
-        const rotationRadius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
-        const handleY = pivot.y - rotationRadius
+        const layout = getRotationUiLayout(piece)
+        if (!layout) return null
+        const { pivot, rotationRadius, handleLocal } = layout
+        const hx = handleLocal.x
+        const hy = handleLocal.y
+        const handleIconRot = (Math.atan2(hy - pivot.y, hx - pivot.x) * 180) / Math.PI + 90
         const ringInteractive = !!isRotationRingHovered || !!isRotationHandleHovered || !!isRotationActive
         const handleScale = isRotationHandleHovered ? 1.1 : 1
         const rs = Math.min(2.5, Math.max(0.5, rotationUiScale))
@@ -1908,48 +1987,52 @@ const PieceGroup = memo(function PieceGroup({
               <g style={{ cursor: isRotationActive ? 'grabbing' : 'grab' }}>
                 <title>Drehgriff: Ziehen zum Drehen des Teils</title>
                 <circle
-                  cx={pivot.x}
-                  cy={handleY}
+                  cx={hx}
+                  cy={hy}
                   r={handleRadius}
                   fill={T.selection.rotationHandleFill}
                   stroke={T.selection.rotationHandleStroke}
                   strokeWidth={1.2 * z}
                 />
-                <path
-                  d={`M ${pivot.x + 5 * z * handleScale} ${handleY} A ${5 * z * handleScale} ${5 * z * handleScale} 0 0 1 ${pivot.x - 5 * z * handleScale} ${handleY}`}
-                  fill="none"
-                  stroke={T.selection.rotationHandleStroke}
-                  strokeWidth={1.1 * z}
-                  strokeLinecap="round"
-                />
-                <path
-                  d={`M ${pivot.x - 5 * z * handleScale} ${handleY} L ${pivot.x - 6 * z * handleScale} ${handleY + 1.2 * z * handleScale} L ${pivot.x - 4.2 * z * handleScale} ${handleY + 0.4 * z * handleScale} Z`}
-                  fill={T.selection.rotationHandleAccent}
-                />
+                <g transform={`rotate(${handleIconRot}, ${hx}, ${hy})`}>
+                  <path
+                    d={`M ${hx + 5 * z * handleScale} ${hy} A ${5 * z * handleScale} ${5 * z * handleScale} 0 0 1 ${hx - 5 * z * handleScale} ${hy}`}
+                    fill="none"
+                    stroke={T.selection.rotationHandleStroke}
+                    strokeWidth={1.1 * z}
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d={`M ${hx - 5 * z * handleScale} ${hy} L ${hx - 6 * z * handleScale} ${hy + 1.2 * z * handleScale} L ${hx - 4.2 * z * handleScale} ${hy + 0.4 * z * handleScale} Z`}
+                    fill={T.selection.rotationHandleAccent}
+                  />
+                </g>
               </g>
             )}
             {!showRotationRing && (
               <g style={{ cursor: 'grab' }}>
                 <title>Drehgriff: Ziehen zum Drehen des Teils</title>
               <circle
-                cx={pivot.x}
-                cy={handleY}
+                cx={hx}
+                cy={hy}
                 r={ROTATION_HANDLE_BASE_RADIUS * z}
                 fill={T.selection.rotationHandleFill}
                 stroke={T.selection.rotationHandleStroke}
                 strokeWidth={1.2 * z}
               />
-              <path
-                d={`M ${pivot.x + 5 * z} ${handleY} A ${5 * z} ${5 * z} 0 0 1 ${pivot.x - 5 * z} ${handleY}`}
-                fill="none"
-                stroke={T.selection.rotationHandleStroke}
-                strokeWidth={1.1 * z}
-                strokeLinecap="round"
-              />
-              <path
-                d={`M ${pivot.x - 5 * z} ${handleY} L ${pivot.x - 6 * z} ${handleY + 1.2 * z} L ${pivot.x - 4.2 * z} ${handleY + 0.4 * z} Z`}
-                fill={T.selection.rotationHandleAccent}
-              />
+              <g transform={`rotate(${handleIconRot}, ${hx}, ${hy})`}>
+                <path
+                  d={`M ${hx + 5 * z} ${hy} A ${5 * z} ${5 * z} 0 0 1 ${hx - 5 * z} ${hy}`}
+                  fill="none"
+                  stroke={T.selection.rotationHandleStroke}
+                  strokeWidth={1.1 * z}
+                  strokeLinecap="round"
+                />
+                <path
+                  d={`M ${hx - 5 * z} ${hy} L ${hx - 6 * z} ${hy + 1.2 * z} L ${hx - 4.2 * z} ${hy + 0.4 * z} Z`}
+                  fill={T.selection.rotationHandleAccent}
+                />
+              </g>
               </g>
             )}
           </>
@@ -3914,11 +3997,9 @@ export function WorkspaceCanvas() {
           for (let i = pieces.length - 1; i >= 0; i--) {
             const p = pieces[i]
             if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-            const bounds = curvesBounds(p.cutLine)
-            if (!bounds) continue
-            const pivot = getPiecePivotLocal(p)
-            const radius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
-            const handleLocal = { x: pivot.x, y: pivot.y - radius }
+            const layout = getRotationUiLayout(p)
+            if (!layout) continue
+            const { pivot, rotationRadius: radius, handleLocal } = layout
             const handleWorld = pieceLocalToWorld(handleLocal, p)
             const distHandle = Math.hypot(world.x - handleWorld.x, world.y - handleWorld.y)
             const pivotWorld = pieceLocalToWorld(pivot, p)
@@ -4647,10 +4728,9 @@ export function WorkspaceCanvas() {
           for (let i = pieces.length - 1; i >= 0; i--) {
             const p = pieces[i]
             if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-            const bounds = curvesBounds(p.cutLine)
-            if (!bounds) continue
-            const pivot = getPiecePivotLocal(p)
-            const radius = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.6
+            const layout = getRotationUiLayout(p)
+            if (!layout) continue
+            const { pivot, rotationRadius: radius, handleLocal } = layout
             if (radius <= 0) continue
             const worldPivot = pieceLocalToWorld(pivot, p)
             const dPivot = Math.hypot(worldImg.x - worldPivot.x, worldImg.y - worldPivot.y)
@@ -4661,7 +4741,7 @@ export function WorkspaceCanvas() {
             if (dRing <= rotationHoverHitMm && (!ringHit || dRing < ringHit.dist)) {
               ringHit = { pieceId: p.id, dist: dRing }
             }
-            const handleWorld = pieceLocalToWorld({ x: pivot.x, y: pivot.y - radius }, p)
+            const handleWorld = pieceLocalToWorld(handleLocal, p)
             const dHandle = Math.hypot(worldImg.x - handleWorld.x, worldImg.y - handleWorld.y)
             if (dHandle <= rotationHoverHitMm && (!handleHit || dHandle < handleHit.dist)) {
               handleHit = { pieceId: p.id, dist: dHandle }
@@ -8251,6 +8331,9 @@ export function WorkspaceCanvas() {
                 return Array.from({ length: n }, (_, vi) => {
                   const vertexPos = vi === 0 ? curvesForVertices[0].start : curvesForVertices[vi - 1].end
                   const w = pieceLocalToWorld(vertexPos, piece)
+                  const sc = piece.symmetryConstraint
+                  const vtxHp = sc ? vertexHalfPlane(vertexPos, sc.axisA, sc.axisB, sc.keepSide) : 'keep'
+                  const symVertexOpacity = vtxHp === 'mirror' ? T.piece.symmetryMirrorVertexOpacity : 1
                   const isSoft =
                     tangentSoftVertices.has(vi) ||
                     (useSeamMaster ? softOnMaster.has(vi) : (piece.softVertices ?? []).includes(vi))
@@ -8269,6 +8352,7 @@ export function WorkspaceCanvas() {
                       fill={isHoveredPt ? stroke : fill}
                       stroke={stroke}
                       strokeWidth={sw}
+                      opacity={symVertexOpacity}
                       pointerEvents="none"
                     />
                   ) : (
@@ -8281,6 +8365,7 @@ export function WorkspaceCanvas() {
                       fill={isHoveredPt ? stroke : fill}
                       stroke={stroke}
                       strokeWidth={sw}
+                      opacity={symVertexOpacity}
                       pointerEvents="none"
                     />
                   )

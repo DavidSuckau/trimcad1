@@ -57,6 +57,12 @@ export const canvasTheme = {
     strokeChangePreview: '#1565c0',
     strokeChangePreviewOlder: '#90a4ae',
     strokeWidthChangePreview: 0.45,
+    /** Symmetrie: editierbare Vorlagen-Seite (normal). */
+    symmetryKeepFillOpacity: 0.82,
+    /** Symmetrie: automatisch gespiegelte Seite (heller). */
+    symmetryMirrorFillOpacity: 0.32,
+    symmetryMirrorStrokeOpacity: 0.55,
+    symmetryMirrorVertexOpacity: 0.42,
   },
 
   // ── Vertex-Farben ────────────────────────────────────────────────
@@ -256,6 +262,10 @@ export const canvasThemeDark: CanvasTheme = {
     strokeChangePreview: '#64b5f6',
     strokeChangePreviewOlder: '#546e7a',
     strokeWidthChangePreview: 0.45,
+    symmetryKeepFillOpacity: 0.82,
+    symmetryMirrorFillOpacity: 0.28,
+    symmetryMirrorStrokeOpacity: 0.5,
+    symmetryMirrorVertexOpacity: 0.38,
   },
 
   vertex: {

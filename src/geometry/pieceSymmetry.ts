@@ -496,6 +496,32 @@ function halfPlaneClipRectangle(
   return [aBack, bFwd, bFar, aFar]
 }
 
+/** Halbebene-Clippolygone für UI (Vorlagen- vs. gespiegelte Seite). */
+export function getSymmetryHalfPlaneClipPolygons(
+  axisA: Point,
+  axisB: Point,
+  keepSide: PieceSymmetryKeepSide,
+  contextCurves: Curve[]
+): { keep: Point[]; mirror: Point[] } | null {
+  const bounds = curvesBounds(contextCurves)
+  if (!bounds) return null
+  const ring: Point[] = [
+    { x: bounds.minX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.maxY },
+    { x: bounds.minX, y: bounds.maxY },
+  ]
+  const keep = halfPlaneClipRectangle(axisA, axisB, keepSide, ring)
+  const mirrorSide: PieceSymmetryKeepSide = keepSide === 'left' ? 'right' : 'left'
+  const mirror = halfPlaneClipRectangle(axisA, axisB, mirrorSide, ring)
+  if (keep.length < 3 || mirror.length < 3) return null
+  return { keep, mirror }
+}
+
+export function symmetryClipPolygonPointsAttr(pts: Point[]): string {
+  return pts.map((p) => `${p.x},${p.y}`).join(' ')
+}
+
 // —— 5. Symmetriealgorithmus ————————————————————————————————————————————————
 
 export type PieceSymmetryContourResult =

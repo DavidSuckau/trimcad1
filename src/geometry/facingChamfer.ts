@@ -55,35 +55,68 @@ function scale(a: Point, s: number): Point {
   return { x: a.x * s, y: a.y * s }
 }
 
+function adjacentEdgeLensAt(curves: Curve[], vi: number): { prev: number; next: number; min: number } {
+  const n = curves.length
+  const prev = curves[(vi - 1 + n) % n]
+  const curr = curves[vi]
+  const prevLen = dist(prev.start, prev.end)
+  const nextLen = dist(curr.start, curr.end)
+  return { prev: prevLen, next: nextLen, min: Math.min(prevLen, nextLen) }
+}
+
+/**
+ * Erwarteter Abstand Naht-Ecke → scharfe Cut-Ecke (Miter) aus Innenwinkel an der Naht.
+ * Bei 90°: SA·√2, nicht SA — sonst gewinnen Tessellations-Knicke näher an S.
+ */
+function expectedCutCornerDistFromSeam(seam: Curve[], seamIndex: number, saMm: number): number {
+  const interiorDeg = interiorAngleAtVertexDegrees(seam, seamIndex)
+  if (interiorDeg == null || interiorDeg >= MAX_INTERIOR_DEG_FOR_CHAMFER) return saMm
+  const halfRad = ((180 - interiorDeg) / 2) * (Math.PI / 180)
+  const sinHalf = Math.sin(halfRad)
+  if (sinHalf < 0.12) return saMm * 2.5
+  return saMm / sinHalf
+}
+
 /**
  * Zur Naht-Ecke S die passende **scharfe** Cut-Ecke (Miter-Spitze).
  * Bei Clipper-Offset auf Kurven liegen Tessellations-Knicke oft näher an S als die echte
- * Miter-Ecke (~NZ-Abstand) — deshalb Kandidat mit Abstand ≈ expectedSa bevorzugen.
+ * Miter-Ecke — deshalb Abstand ≈ expectedDist (aus Naht-Innenwinkel) und stabile Kantenlänge.
  */
 function bestSharpCutCornerForSeamVertex(
   cut: Curve[],
   S: Point,
+  seam: Curve[],
+  seamIndex: number,
   maxPairDist: number,
   softCut: Set<number>,
   expectedSaMm: number,
 ): { index: number; dist: number; C: Point } | null {
   if (cut.length < 3) return null
-  const minDist = Math.max(MIN_CHAMFER_MM, expectedSaMm * 0.35)
-  let best: { index: number; dist: number; C: Point; saErr: number; angle: number } | null = null
+  const expectedDist = expectedCutCornerDistFromSeam(seam, seamIndex, expectedSaMm)
+  const minDist = Math.max(MIN_CHAMFER_MM, expectedDist * 0.48)
+  const maxDist = Math.min(maxPairDist, expectedDist * 1.55)
+  const minEdgeAtCorner = MIN_CHAMFER_MM
+  let best: { index: number; dist: number; C: Point; saErr: number; angle: number; minEdge: number } | null =
+    null
   for (let i = 0; i < cut.length; i++) {
     if (softCut.has(i)) continue
     const C = vertexAt(cut, i)
     const d = Math.hypot(C.x - S.x, C.y - S.y)
-    if (d < minDist || d > maxPairDist) continue
+    if (d < minDist || d > maxDist) continue
     const interiorDeg = interiorAngleAtVertexDegrees(cut, i)
     if (interiorDeg == null || interiorDeg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
-    const saErr = Math.abs(d - expectedSaMm)
+    const { min: minEdge } = adjacentEdgeLensAt(cut, i)
+    if (minEdge < minEdgeAtCorner) continue
+    const saErr = Math.abs(d - expectedDist)
     if (
       !best ||
-      saErr < best.saErr - 1e-6 ||
-      (Math.abs(saErr - best.saErr) < 1e-6 && interiorDeg < best.angle)
+      saErr < best.saErr - 0.4 ||
+      (Math.abs(saErr - best.saErr) <= 0.4 && minEdge > best.minEdge + 0.01) ||
+      (Math.abs(saErr - best.saErr) <= 0.4 &&
+        Math.abs(minEdge - best.minEdge) <= 0.01 &&
+        interiorDeg < best.angle)
     ) {
-      best = { index: i, dist: d, C, saErr, angle: interiorDeg }
+      best = { index: i, dist: d, C, saErr, angle: interiorDeg, minEdge }
     }
   }
   return best ? { index: best.index, dist: best.dist, C: best.C } : null
@@ -205,12 +238,6 @@ function localChamferRingCorner(ring: Point[], cornerIdx: number, S: Point): Poi
   const maxNext = maxTrimForEdge(lenNext)
   if (maxPrev < MIN_CHAMFER_MM || maxNext < MIN_CHAMFER_MM) return null
 
-  // Zu kurze Kanten relativ zur Fase: lieber keine Fase als NZ-Kollaps beim Sync nach Parent-Edit
-  const minEdge = Math.min(lenPrev, lenNext)
-  const depth = Math.hypot(nVec.x, nVec.y)
-  if (minEdge < depth * 1.05) return null
-
-  // Ideal: Fase durch Naht-Ecke S
   const hitPrev = hitPlaneOnSegment(prev, C, S, nVec)
   const hitNext = hitPlaneOnSegment(C, next, S, nVec)
 
@@ -218,6 +245,15 @@ function localChamferRingCorner(ring: Point[], cornerIdx: number, S: Point): Poi
   let trimNext = hitNext ? dist(hitNext.point, C) : maxNext
   trimPrev = Math.min(Math.max(trimPrev, MIN_CHAMFER_MM), maxPrev)
   trimNext = Math.min(Math.max(trimNext, MIN_CHAMFER_MM), maxNext)
+
+  const minEdge = Math.min(lenPrev, lenNext)
+  const depth = Math.hypot(nVec.x, nVec.y)
+  if (minEdge < depth * 1.05) {
+    const scale = Math.max(0.35, minEdge / (depth * 1.05))
+    trimPrev = Math.max(MIN_CHAMFER_MM, Math.min(trimPrev * scale, maxPrev))
+    trimNext = Math.max(MIN_CHAMFER_MM, Math.min(trimNext * scale, maxNext))
+    if (trimPrev < MIN_CHAMFER_MM || trimNext < MIN_CHAMFER_MM) return null
+  }
 
   const tPrev = pointBackFromEnd(prev, C, trimPrev)
   const tNext = add(C, scale(sub(next, C), Math.min(1, trimNext / Math.max(lenNext, 1e-12))))
@@ -270,7 +306,7 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
 
     const S = vertexAt(seam, si)
     const saAtCorner = seamAllowanceAtVertex(piece, si, seam.length)
-    const corner = bestSharpCutCornerForSeamVertex(cut, S, maxPairDist, softCut, saAtCorner)
+    const corner = bestSharpCutCornerForSeamVertex(cut, S, seam, si, maxPairDist, softCut, saAtCorner)
     if (!corner) continue
 
     let ringIndex = corner.index
@@ -289,6 +325,7 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
       ringIndex = best
     }
 
+    if (corners.some((c) => c.ringIndex === ringIndex)) continue
     corners.push({ ringIndex, S: { ...S } })
   }
 

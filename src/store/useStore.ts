@@ -115,6 +115,7 @@ import {
   mirrorSymmetricContourPointInsert,
   appendSymmetricMirroredNotches,
   symmetryConstraintFromAxis,
+  getContourVertexPosition,
 } from '../symmetry/reconcilePieceSymmetry'
 import type { PieceSymmetryKeepSide } from '../geometry/pieceSymmetry'
 import type { PieceSymmetryUiState } from '../symmetry/types'
@@ -3541,26 +3542,40 @@ export const useStore = create<Store>()(
       if (master.length < 3) {
         return { ...s, toastMessage: 'warn:Kontur unvollständig.' }
       }
-      if (masterVertexIndex < 0 || masterVertexIndex >= master.length) {
+      const mappedVertex = mapContourVertexEditForSymmetry(
+        piece,
+        masterVertexIndex,
+        getContourVertexPosition(master, masterVertexIndex),
+      )
+      const effectiveVertexIndex = mappedVertex.vertexIndex
+      if (effectiveVertexIndex < 0 || effectiveVertexIndex >= master.length) {
         return { ...s, toastMessage: 'warn:Ungültiger Eckpunkt.' }
       }
       // Soft-Vertices (blau) sind keine roten Eckpunkte – Rundung nicht erlaubt.
       const softSet = useSeamMaster
         ? new Set(piece.softVerticesMaster ?? [])
         : new Set(piece.softVertices ?? [])
-      if (softSet.has(masterVertexIndex)) {
+      if (softSet.has(effectiveVertexIndex)) {
         return { ...s, toastMessage: 'warn:Rundung nur auf roten Eckpunkten möglich.' }
+      }
+
+      const applyReconciled = (candidate: PatternPiece) => {
+        const reconciled = finalizePieceContourEdit(candidate)
+        if (!reconciled.ok) {
+          return { ok: false as const, toastMessage: reconciled.toastMessage }
+        }
+        return { ok: true as const, piece: reconciled.piece }
       }
 
       // Negativer/zu kleiner Radius → bestehende Rundung entfernen.
       if (!Number.isFinite(radiusMm) || radiusMm < ROUND_CORNER_MIN_RADIUS_MM) {
         const existing = piece.roundedCorners ?? []
-        const filtered = existing.filter((rc) => rc.masterVertexIndex !== masterVertexIndex)
+        const filtered = existing.filter((rc) => rc.masterVertexIndex !== effectiveVertexIndex)
         if (filtered.length === existing.length) {
           // Keine Änderung – kein Update notwendig.
           return s
         }
-        const next: PatternPiece = {
+        let next: PatternPiece = {
           ...piece,
           roundedCorners: filtered.length > 0 ? filtered : undefined,
         }
@@ -3578,11 +3593,17 @@ export const useStore = create<Store>()(
           next.softVertices = softVertices
           next.cutLineDeviatesFromSeamAllowanceOffset = false
         }
+        const reconciled = applyReconciled(next)
+        if (!reconciled.ok) {
+          return { ...s, toastMessage: reconciled.toastMessage }
+        }
         success = true
         return {
           workspace: {
             ...s.workspace,
-            pieces: syncFacingPiecesFromParents(s.workspace.pieces.map((p) => (p.id === pieceId ? next : p))),
+            pieces: syncFacingPiecesFromParents(
+              s.workspace.pieces.map((p) => (p.id === pieceId ? reconciled.piece : p)),
+            ),
           },
         }
       }
@@ -3590,7 +3611,7 @@ export const useStore = create<Store>()(
       const clampedRadius = Math.min(ROUND_CORNER_MAX_RADIUS_MM, Math.max(ROUND_CORNER_MIN_RADIUS_MM, radiusMm))
       // Validation gegen die SCHARFE Master (mit der bereits ggf. anderen Rundungen, die wir
       // aber gerade nicht stören wollen → reine Punkt-Validation).
-      const validation = validateCornerRound(master, masterVertexIndex, clampedRadius)
+      const validation = validateCornerRound(master, effectiveVertexIndex, clampedRadius)
       if (!validation.ok) {
         let msg = 'warn:Rundung nicht möglich.'
         switch (validation.reason) {
@@ -3618,13 +3639,13 @@ export const useStore = create<Store>()(
       }
 
       const existing = piece.roundedCorners ?? []
-      const without = existing.filter((rc) => rc.masterVertexIndex !== masterVertexIndex)
+      const without = existing.filter((rc) => rc.masterVertexIndex !== effectiveVertexIndex)
       const nextRC: RoundedCorner[] = [
         ...without,
-        { masterVertexIndex, radiusMm: clampedRadius },
+        { masterVertexIndex: effectiveVertexIndex, radiusMm: clampedRadius },
       ].sort((a, b) => a.masterVertexIndex - b.masterVertexIndex)
 
-      const next: PatternPiece = { ...piece, roundedCorners: nextRC }
+      let next: PatternPiece = { ...piece, roundedCorners: nextRC }
 
       let toastMessage: string | null = null
       if (useSeamMaster && piece.seamAllowanceMm != null) {
@@ -3645,12 +3666,19 @@ export const useStore = create<Store>()(
         next.softVertices = softVertices
         next.cutLineDeviatesFromSeamAllowanceOffset = false
       }
+      const reconciled = applyReconciled(next)
+      if (!reconciled.ok) {
+        return { ...s, toastMessage: reconciled.toastMessage }
+      }
       success = true
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(s.workspace.pieces.map((p) => (p.id === pieceId ? next : p))),
+          pieces: syncFacingPiecesFromParents(
+            s.workspace.pieces.map((p) => (p.id === pieceId ? reconciled.piece : p)),
+          ),
         },
+        ...(toastMessage ? { toastMessage } : {}),
       }
     })
     return success

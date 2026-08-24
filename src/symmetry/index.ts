@@ -16,7 +16,9 @@ export {
   appendSymmetricMirroredNotches,
   syncPieceSymmetryGeometry,
   syncMasterCurvesByMirroring,
+  syncRoundedCornersForSymmetry,
   symmetryConstraintFromAxis,
+  vertexHalfPlane,
 } from './reconcilePieceSymmetry'
 export {
   crossZ,
@@ -25,5 +27,7 @@ export {
   symmetryAxisEndpointsFromStraightMasterEdge,
   symmetryAxisFromMasterEdgePick,
   symmetryAxisClippedToPieceBounds,
+  getSymmetryHalfPlaneClipPolygons,
+  symmetryClipPolygonPointsAttr,
   type PieceSymmetryKeepSide,
 } from '../geometry/pieceSymmetry'
