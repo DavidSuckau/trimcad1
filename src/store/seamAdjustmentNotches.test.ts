@@ -586,8 +586,8 @@ describe('adjustSeamNotches', () => {
     const pieceA = after.workspace.pieces.find((p) => p.id === 'A')!
     const pieceB = after.workspace.pieces.find((p) => p.id === 'B')!
     const ev = evaluateSeamAdjustment(after.workspace.seamAssignments[0]!, pieceA, pieceB)
-    expect(ev?.canAdjust).toBe(true)
-    // Gerade↔Kurve mit NZ: Restfehler durch Cut↔Master-Abbildung möglich; <0.5 mm reicht fürs Angleichen.
+    expect(ev?.canAdjust).toBe(false)
+    // Gerade↔Kurve mit NZ: Restfehler durch Cut↔Master-Abbildung möglich; <0.5 mm reicht fürs Angleichen.
     expect(ev?.maxMismatchMm ?? 0).toBeLessThan(0.5)
   })
 })

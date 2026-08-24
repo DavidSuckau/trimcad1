@@ -52,7 +52,7 @@ import {
   resolvedSeamAssignmentCurveIndices,
   bestSeamSubSegmentPairing,
   buildNotchTargetArcPositionsFromSubLengths,
-  materializeNotchAtEdgeArcLength,
+  materializeNotchAtEdgeArcLengthExact,
   deriveNotchRoleRangeOnEdge,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
@@ -1914,32 +1914,18 @@ export const useStore = create<Store>()(
       const notchId = tgtNotches[i].notchId
       const n0 = tgtPiece.notches.find((nn) => nn.id === notchId)
       if (!n0 || i >= targetArcPositions.length) continue
-      const desiredArc = targetArcPositions[i]
-      let tryArc = desiredArc
-      let materialized: Notch | null = null
-      // Closed-loop: Cut↔Master drift auf Kurven mit NZ ausgleichen
-      for (let iter = 0; iter < 6; iter++) {
-        materialized = materializeNotchAtEdgeArcLength(
-          {
-            ...n0,
-            vertexIndex: undefined,
-            sNormalized: undefined,
-            arcLengthMm: undefined,
-          },
-          tgtPiece,
-          tgtIndices,
-          tryArc,
-        )
-        if (!materialized) break
-        const got = getNotchesOnEdge({ ...tgtPiece, notches: [materialized] }, tgtIndices).find(
-          (x) => x.notchId === notchId
-        )
-        if (!got) break
-        const err = desiredArc - got.arcLength
-        if (Math.abs(err) <= SEAM_ADJUSTMENT_NOTCH_ALIGNED_EPS_MM) break
-        tryArc += err
-        if (tryArc < -1 || tryArc > tgtTotalLen + 1) break
-      }
+      const materialized = materializeNotchAtEdgeArcLengthExact(
+        {
+          ...n0,
+          vertexIndex: undefined,
+          sNormalized: undefined,
+          arcLengthMm: undefined,
+        },
+        tgtPiece,
+        tgtIndices,
+        targetArcPositions[i],
+        SEAM_ADJUSTMENT_NOTCH_ALIGNED_EPS_MM,
+      )
       if (!materialized) continue
       targetNotches.push({ notchId, notch: materialized })
     }

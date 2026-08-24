@@ -563,49 +563,167 @@ export function getSubSegments(
 }
 
 /**
- * Liefert die Notch-IDs die auf einer Kante (curveIndices) liegen,
- * in der Reihenfolge ihrer Bogenlängen-Position vom Kantenstart.
- *
- * Bei Nahtzugabe: Cut-Position auf **diese Kante** (nicht die ganze Master-Kontur) projizieren,
- * sonst landen Kurven-Kerben nach Gerade→Kurve-Anpassung oft auf Nachbarkanten / mit Drift.
+ * Cut-Position → Master-Bogenlänge auf einer zugewiesenen Kante.
+ * Bei NZ: Korrespondenz über Außennormale (wie materialize), nicht nur euklidisch —
+ * sonst driftet Gerade→Kurve-Angleich um Zehntelmillimeter.
  */
-export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): { notchId: string; arcLength: number }[] {
-  if (curveIndices.length === 0) return []
+function masterArcLengthFromCutPositionOnEdge(
+  cutPos: Point,
+  piece: PatternPiece,
+  curveIndices: number[],
+  curvs: Curve[],
+): number | null {
+  const edgeOnly = curveIndices.map((ci) => curvs[ci]).filter(Boolean)
+  if (edgeOnly.length === 0) return null
 
-  const curvs = curves ?? getCurvesForSeamEdge(piece)
   const cumLengths: number[] = [0]
   for (const ci of curveIndices) {
     const seg = curvs[ci]
     if (!seg) continue
     cumLengths.push(cumLengths[cumLengths.length - 1] + curveSegmentArcLength(seg, 0, 1))
   }
+  const total = cumLengths[cumLengths.length - 1]
+  if (total <= 0) return null
 
+  const maxDist = Math.max(MAP_CUT_TO_MASTER_EPS_MM, (piece.seamAllowanceMm ?? 0) * 1.5 + 2)
+  const sa = piece.seamAllowanceMm ?? 0
+  const useNormalCorr =
+    sa > 0 &&
+    piece.seamLine.length >= 3 &&
+    piece.cutLine.length >= 3 &&
+    curvs === piece.seamLine
+
+  const arcFromLocal = (localCi: number, t: number): number => {
+    const globalCi = curveIndices[localCi]
+    if (globalCi == null || !curvs[globalCi]) return 0
+    return cumLengths[localCi]! + curveSegmentArcLength(curvs[globalCi]!, 0, t)
+  }
+
+  if (!useNormalCorr) {
+    const onEdge = nearestCurveIndexAndPoint(cutPos, edgeOnly)
+    if (!onEdge || onEdge.distance > maxDist) return null
+    return arcFromLocal(onEdge.curveIndex, onEdge.t ?? 0)
+  }
+
+  const scoreAtArc = (arc: number): number => {
+    const pt = pointAtPathLength(edgeOnly, Math.max(0, Math.min(total, arc)))
+    if (!pt) return Infinity
+    const globalCi = curveIndices[pt.curveIndex]
+    if (globalCi == null || !curvs[globalCi]) return Infinity
+    const nDeg = outwardNormalAngleAt(curvs, globalCi, pt.t)
+    const rad = (nDeg * Math.PI) / 180
+    const nx = Math.cos(rad)
+    const ny = Math.sin(rad)
+    const ideal = { x: pt.point.x + nx * sa, y: pt.point.y + ny * sa }
+    return Math.hypot(ideal.x - cutPos.x, ideal.y - cutPos.y)
+  }
+
+  const nSamples = Math.max(80, Math.ceil(total * 3))
+  let bestArc = 0
+  let bestScore = Infinity
+  for (let i = 0; i <= nSamples; i++) {
+    const arc = (i / nSamples) * total
+    const s = scoreAtArc(arc)
+    if (s < bestScore) {
+      bestScore = s
+      bestArc = arc
+    }
+  }
+  // Lokale Verfeinerung (golden-section-ähnlich)
+  let lo = Math.max(0, bestArc - total / nSamples)
+  let hi = Math.min(total, bestArc + total / nSamples)
+  for (let iter = 0; iter < 20; iter++) {
+    const m1 = lo + (hi - lo) / 3
+    const m2 = hi - (hi - lo) / 3
+    if (scoreAtArc(m1) < scoreAtArc(m2)) hi = m2
+    else lo = m1
+  }
+  bestArc = (lo + hi) / 2
+  bestScore = scoreAtArc(bestArc)
+
+  // Fallback euklidisch, falls Normale-Match zu schlecht (Ecken/Miter)
+  if (bestScore > maxDist) {
+    const onEdge = nearestCurveIndexAndPoint(cutPos, edgeOnly)
+    if (!onEdge || onEdge.distance > maxDist) return null
+    return arcFromLocal(onEdge.curveIndex, onEdge.t ?? 0)
+  }
+  return bestArc
+}
+
+/**
+ * Kerbe an Master-Bogenlänge materialisieren und per Messung nachjustieren,
+ * bis getNotchesOnEdge die Ziel-Bogenlänge (innerhalb eps) zurückgibt.
+ */
+export function materializeNotchAtEdgeArcLengthExact(
+  notch: Notch,
+  piece: PatternPiece,
+  curveIndices: number[],
+  desiredMasterArcMm: number,
+  epsMm: number = 0.02,
+): Notch | null {
+  const edgeCurves = curveIndices.map((ci) => getCurvesForSeamEdge(piece)[ci]).filter(Boolean)
+  const total = totalPathLength(edgeCurves)
+  if (total <= 0) return null
+
+  const measure = (n: Notch): number | null => {
+    const row = getNotchesOnEdge({ ...piece, notches: [n] }, curveIndices).find((x) => x.notchId === n.id)
+    return row?.arcLength ?? null
+  }
+
+  let tryArc = Math.max(0, Math.min(total, desiredMasterArcMm))
+  let best = materializeNotchAtEdgeArcLength(notch, piece, curveIndices, tryArc)
+  if (!best) return null
+  let got = measure(best)
+  if (got != null && Math.abs(got - desiredMasterArcMm) <= epsMm) return best
+
+  // Binärsuche: tryArc so wählen, dass gemessene Master-Bogenlänge = Soll
+  let lo = Math.max(0, desiredMasterArcMm - Math.max(12, (piece.seamAllowanceMm ?? 0) * 2))
+  let hi = Math.min(total, desiredMasterArcMm + Math.max(12, (piece.seamAllowanceMm ?? 0) * 2))
+  let bestErr = got != null ? Math.abs(got - desiredMasterArcMm) : Infinity
+
+  for (let iter = 0; iter < 28; iter++) {
+    const mid = (lo + hi) / 2
+    const cand = materializeNotchAtEdgeArcLength(notch, piece, curveIndices, mid)
+    if (!cand) break
+    const m = measure(cand)
+    if (m == null) break
+    const err = Math.abs(m - desiredMasterArcMm)
+    if (err < bestErr) {
+      bestErr = err
+      best = cand
+    }
+    if (err <= epsMm) return cand
+    if (m < desiredMasterArcMm) lo = mid
+    else hi = mid
+  }
+  return best
+}
+
+/**
+ * Liefert die Notch-IDs die auf einer Kante (curveIndices) liegen,
+ * in der Reihenfolge ihrer Bogenlängen-Position vom Kantenstart.
+ *
+ * Bei Nahtzugabe: Cut→Master über Normalen-Korrespondenz auf **dieser Kante**.
+ */
+export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): { notchId: string; arcLength: number }[] {
+  if (curveIndices.length === 0) return []
+
+  const curvs = curves ?? getCurvesForSeamEdge(piece)
+  const ciSet = new Set(curveIndices)
   const ciToIdx = new Map<number, number>()
   for (let i = 0; i < curveIndices.length; i++) ciToIdx.set(curveIndices[i], i)
 
-  const ciSet = new Set(curveIndices)
-  const edgeOnly = curveIndices.map((ci) => curvs[ci]).filter(Boolean)
-  const maxDist = Math.max(MAP_CUT_TO_MASTER_EPS_MM, (piece.seamAllowanceMm ?? 0) * 1.5 + 2)
   const result: { notchId: string; arcLength: number }[] = []
 
   for (const n of piece.notches) {
     if (isNotchOnInternalLine(n)) continue
 
-    // Primär: Cut-Lage → Projektion nur auf die zugewiesene Kante (stabil bei NZ + Kurven).
-    if (piece.cutLine.length >= 3 && edgeOnly.length > 0) {
+    if (piece.cutLine.length >= 3) {
       const { position } = getNotchPositionAndAngle(n, piece.cutLine)
-      const onEdge = nearestCurveIndexAndPoint(position, edgeOnly)
-      if (onEdge && onEdge.distance <= maxDist) {
-        const localIdx = onEdge.curveIndex
-        const globalCi = curveIndices[localIdx]
-        if (globalCi != null && curvs[globalCi]) {
-          const t = onEdge.t ?? 0
-          result.push({
-            notchId: n.id,
-            arcLength: cumLengths[localIdx] + curveSegmentArcLength(curvs[globalCi], 0, t),
-          })
-          continue
-        }
+      const arc = masterArcLengthFromCutPositionOnEdge(position, piece, curveIndices, curvs)
+      if (arc != null) {
+        result.push({ notchId: n.id, arcLength: arc })
+        continue
       }
     }
 
@@ -613,7 +731,15 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
     if (ct && ciSet.has(ct.curveIndex)) {
       const idx = ciToIdx.get(ct.curveIndex)
       if (idx != null) {
-        result.push({ notchId: n.id, arcLength: cumLengths[idx] + curveSegmentArcLength(curvs[ct.curveIndex], 0, ct.t) })
+        let acc = 0
+        for (let i = 0; i < idx; i++) {
+          const seg = curvs[curveIndices[i]!]
+          if (seg) acc += curveSegmentArcLength(seg, 0, 1)
+        }
+        result.push({
+          notchId: n.id,
+          arcLength: acc + curveSegmentArcLength(curvs[ct.curveIndex]!, 0, ct.t),
+        })
       }
     }
   }
