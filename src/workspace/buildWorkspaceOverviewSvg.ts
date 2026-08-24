@@ -11,6 +11,7 @@ import {
   computeWorkspaceOverviewViewBox,
   type OverviewImageSession,
 } from './workspaceOverviewBounds'
+import { sortPiecesFacingBehind } from '../geometry/facingPiece'
 import { canvasTheme as T } from '../theme/canvasTheme'
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
@@ -49,7 +50,7 @@ export function buildWorkspaceOverviewSvgDocument(
       `<image href="${escapeXmlAttr(imageDataUrl)}" x="${imgBounds.minX}" y="${imgBounds.minY}" width="${iw}" height="${ih}" opacity="0.42" preserveAspectRatio="xMidYMid meet"/>`,
     )
   }
-  for (const p of pieces) {
+  for (const p of sortPiecesFacingBehind(pieces)) {
     const tx = pieceGroupTransform(p)
     const useFill = p.fillInterior != null && p.fillInterior !== false
     const materialFill = pieceInteriorFillFromMaterial(p.material, false)

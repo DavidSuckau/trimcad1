@@ -119,7 +119,7 @@ import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasT
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
-import { isFacingDerivedPiece } from '../geometry/facingPiece'
+import { isFacingDerivedPiece, sortPiecesFacingBehind } from '../geometry/facingPiece'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 
 let T: CanvasTheme = canvasTheme
@@ -2244,7 +2244,8 @@ export function WorkspaceCanvas() {
   const ct = (base: number) => canvasTextSize(base, uiTextScale)
   T = canvasThemeMode === 'dark' ? canvasThemeDark : canvasTheme
   const { COLOR_ECKPUNKT, COLOR_SOFT_PUNKT, COLOR_PUNKT_AUF_KURVE, NOTCH_STROKE } = getVertexColors()
-  const { pieces, view, notes: workspaceNotesList } = workspace
+  const { pieces: piecesStoreOrder, view, notes: workspaceNotesList } = workspace
+  const pieces = useMemo(() => sortPiecesFacingBehind(piecesStoreOrder), [piecesStoreOrder])
   const seamAssignments = workspace.seamAssignments ?? []
   const profileAssignments = workspace.profileAssignments ?? []
   const pastStates = useZustandStore(useStore.temporal, (s) => s.pastStates)

@@ -164,3 +164,18 @@ export function facingChildIds(pieces: PatternPiece[], parentId: string): string
 export function isFacingDerivedPiece(piece: PatternPiece | null | undefined): boolean {
   return !!piece && (piece.kind === 'facing' || !!piece.facingParentId)
 }
+
+/**
+ * Zeichen-/Hit-Reihenfolge: Kaschierungen zuerst (unten), normale Teile danach (oben).
+ * Relative Reihenfolge innerhalb jeder Gruppe bleibt erhalten.
+ */
+export function sortPiecesFacingBehind(pieces: PatternPiece[]): PatternPiece[] {
+  const behind: PatternPiece[] = []
+  const front: PatternPiece[] = []
+  for (const p of pieces) {
+    if (isFacingDerivedPiece(p)) behind.push(p)
+    else front.push(p)
+  }
+  if (behind.length === 0) return pieces
+  return behind.length + front.length === pieces.length ? [...behind, ...front] : pieces
+}
