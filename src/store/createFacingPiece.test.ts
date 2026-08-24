@@ -115,4 +115,15 @@ describe('createFacingPiece', () => {
     expect(after.cutLine[0].start.x).toBe(before.cutLine[0].start.x)
     expect(useStore.getState().toastMessage).toMatch(/synchronisiert/)
   })
+
+  it('erlaubt Material an der Kaschierung und behält es beim Sync', () => {
+    const childId = useStore.getState().createFacingPiece('parent')!
+    useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Futterstoff')
+
+    useStore.getState().updateVertex('parent', 0, { x: -20, y: -10 })
+    const childAfter = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
+    expect(childAfter.material).toBe('Futterstoff')
+    expect(childAfter.facingParentId).toBe('parent')
+  })
 })

@@ -117,7 +117,7 @@ export function facingOffsetBesideParent(parent: PatternPiece): Point {
 
 /**
  * Synchronisiert alle Kaschierungen in der Piece-Liste aus ihren Mutterteilen.
- * Behält Transform, id, number, name und facingParentId der Kinder.
+ * Behält Transform, id, number, name, material und facingParentId der Kinder.
  */
 export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
@@ -134,6 +134,7 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       id: p.id,
       number: p.number,
       name: p.name,
+      material: p.material ?? '',
       transform: { ...p.transform },
       facingParentId: parentId,
       kind: 'facing',
