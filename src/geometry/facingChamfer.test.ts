@@ -112,7 +112,7 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
     }
     const piece = basePiece(cut, seam, 10)
     const out = chamferCutLineCornersInSeamAllowance(piece)
-    // Tessellationspunkte auf der Kurvenmitte bleiben; Ecken bekommen Fasen (Segmentzahl kann sinken)
+    // Tessellationspunkte auf der Kurve bleiben; Ecken bekommen lokale Fasen
     expect(out.length).toBeGreaterThanOrEqual(8)
     const midLeft = out.find(
       (c) =>
@@ -125,10 +125,24 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
     if (midLeft && midLeft.type === 'line') {
       expect(Math.min(midLeft.start.x, midLeft.end.x)).toBeLessThan(-5)
     }
-    // Fase an (0,0) geht durch Naht-Ecke (10,10)
-    const cornerChamfer = out.find(
-      (c) => c.type === 'line' && distPointToSegLine({ x: 10, y: 10 }, c.start, c.end) < 0.1
-    )
-    expect(cornerChamfer).toBeTruthy()
+    // Gerade Kanten: NZ an der Mitte bleibt (~10 mm)
+    for (const edge of [seam[0], seam[1], seam[2]]) {
+      const mid = { x: (edge.start.x + edge.end.x) / 2, y: (edge.start.y + edge.end.y) / 2 }
+      let best = Infinity
+      for (const s of out) {
+        if (s.type !== 'line') continue
+        const ax = s.start.x,
+          ay = s.start.y,
+          bx = s.end.x,
+          by = s.end.y
+        const dx = bx - ax,
+          dy = by - ay
+        const len2 = dx * dx + dy * dy
+        let t = len2 < 1e-12 ? 0 : ((mid.x - ax) * dx + (mid.y - ay) * dy) / len2
+        t = Math.max(0, Math.min(1, t))
+        best = Math.min(best, Math.hypot(mid.x - (ax + t * dx), mid.y - (ay + t * dy)))
+      }
+      expect(best).toBeGreaterThan(8)
+    }
   })
 })

@@ -8,6 +8,7 @@ import {
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
+import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
 import {
   buildSymmetricContour,
   mirrorPointAcrossLine,
@@ -49,7 +50,13 @@ export function applyPieceSymmetryToPiece(
         return { ok: false, toastMessage: `warn:${symCut.message}` }
       }
       seamLine = sym.curves
-      cutLine = symCut.curves
+      const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)
+      cutLine = preferStableCutAfterGeometricMirror(
+        seamLine,
+        symCut.curves,
+        derived.ok ? derived.cutLine : null,
+        piece.seamAllowanceMm
+      )
     } else {
       seamLine = sym.curves
       const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)

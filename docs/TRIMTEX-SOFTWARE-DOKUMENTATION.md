@@ -1,6 +1,6 @@
 # TrimTex – Software-Dokumentation
 
-**Version:** 0.0.7 (Stand laut `package.json`)
+**Version:** 1.0.0 (Stand laut `package.json`)
 **Format:** Markdown (technisches Handbuch zur bestehenden Anwendung)
 
 TrimTex ist eine **webbasierte 2D-Pattern-Software** für Schnittmuster (z. B. Automotive-Textilien). Die Geometrie wird in einem eigenen Datenmodell in **Millimetern** geführt; **SVG** dient ausschließlich der Darstellung und Interaktion – die „Wahrheit“ liegt nicht im DOM, sondern im Store.

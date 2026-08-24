@@ -8,6 +8,50 @@ export const GRAIN_SNAP_TO_EDGE_MM = 14
 /** Feste Schaftlänge beim ersten Anlegen der Laufrichtung (mm); ändert sich danach nicht automatisch. */
 export const GRAIN_LINE_DEFAULT_LENGTH_MM = 100
 
+/** Minimale Schaftlänge beim Ziehen von Anfang/Ende (mm). */
+export const GRAIN_LINE_MIN_LENGTH_MM = 10
+
+/**
+ * Verschiebt Anfang oder Ende der Laufrichtung; Richtung folgt dem Punkt,
+ * Länge wird auf mindestens {@link GRAIN_LINE_MIN_LENGTH_MM} gehalten.
+ */
+export function grainLineWithMovedEndpoint(
+  line: Line,
+  which: 'start' | 'end',
+  point: Point,
+  minLengthMm: number = GRAIN_LINE_MIN_LENGTH_MM
+): Line {
+  const fixed = which === 'start' ? line.end : line.start
+  let next = { ...point }
+  const dx = next.x - fixed.x
+  const dy = next.y - fixed.y
+  const len = Math.hypot(dx, dy)
+  if (len < minLengthMm) {
+    if (len < 1e-9) {
+      const prev = which === 'start' ? line.start : line.end
+      const pdx = prev.x - fixed.x
+      const pdy = prev.y - fixed.y
+      const pLen = Math.hypot(pdx, pdy)
+      if (pLen < 1e-9) {
+        next = { x: fixed.x, y: fixed.y + minLengthMm }
+      } else {
+        next = {
+          x: fixed.x + (pdx / pLen) * minLengthMm,
+          y: fixed.y + (pdy / pLen) * minLengthMm,
+        }
+      }
+    } else {
+      next = {
+        x: fixed.x + (dx / len) * minLengthMm,
+        y: fixed.y + (dy / len) * minLengthMm,
+      }
+    }
+  }
+  return which === 'start'
+    ? { start: next, end: { ...line.end } }
+    : { start: { ...line.start }, end: next }
+}
+
 /** Pfeilkopf und Querstrich: feste mm-Größe, unabhängig von Schaftlänge. */
 export const GRAIN_ARROW_HEAD_WIDTH_MM = 6
 export const GRAIN_ARROW_HEAD_HEIGHT_MM = 8

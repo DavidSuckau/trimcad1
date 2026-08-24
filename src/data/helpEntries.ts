@@ -184,7 +184,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Laufrichtung (Grain) Kontextmenü',
     description:
-      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln, Löschen, Kopieren, Kaschierung erzeugen und Teil-Eigenschaften. „Kaschierung erzeugen“ legt ein abhängiges Tochterteil neben der Mutter an (gefüllte Schraffur, Außenecken in der Nahtzugabe angephast); Kontur/Notches folgen der Mutter, Position der Kaschierung bleibt lokal. Nur im Layout-Modus (Kontur bearbeiten aus): Teil ausgewählt, am Schaft (nicht Pfeilkopf/Querstrich) ziehen, um die Linie parallel zu verschieben. Loslassen mit Linienmitte nahe einer Schnittkontur-Kante: parallel zur Kante ausrichten und auf die Kante legen. Umschalt beim Loslassen: kein Snappen. Im Kontur-Bearbeitungsmodus ist die Laufrichtung nicht verschiebbar.',
+      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln, Löschen, Kopieren, Kaschierung erzeugen und Teil-Eigenschaften. „Kaschierung erzeugen“ legt ein abhängiges Tochterteil neben der Mutter an (gefüllte Schraffur, Außenecken in der Nahtzugabe angephast); Kontur/Notches folgen der Mutter, Position der Kaschierung bleibt lokal. Nur im Layout-Modus (Kontur bearbeiten aus): Teil ausgewählt, am Schaft ziehen zum parallelen Verschieben; an Anfang oder Ende (Punkte) ziehen, um die Linie länger/kürzer zu machen und die Richtung anzupassen. Loslassen mit Linienmitte nahe einer Schnittkontur-Kante: parallel zur Kante ausrichten und auf die Kante legen. Umschalt beim Loslassen: kein Snappen. Im Kontur-Bearbeitungsmodus ist die Laufrichtung nicht verschiebbar.',
     access: 'Laufrichtungspfeil mit Maus anfahren → Leertaste bzw. Ziehen',
     shortcut: 'Leertaste',
   },

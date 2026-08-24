@@ -72,6 +72,60 @@ describe('createFacingPiece', () => {
     expect(child.seamLine).toHaveLength(4)
   })
 
+  it('behält Kanten-Nahtzugabe beim Erzeugen', () => {
+    const id = useStore.getState().createFacingPiece('parent')!
+    const child = useStore.getState().workspace.pieces.find((p) => p.id === id)!
+    for (const edge of child.seamLine) {
+      const mid = {
+        x: (edge.start.x + edge.end.x) / 2,
+        y: (edge.start.y + edge.end.y) / 2,
+      }
+      let best = Infinity
+      for (const s of child.cutLine) {
+        if (s.type !== 'line') continue
+        const ax = s.start.x,
+          ay = s.start.y,
+          bx = s.end.x,
+          by = s.end.y
+        const dx = bx - ax,
+          dy = by - ay
+        const len2 = dx * dx + dy * dy
+        let t = len2 < 1e-12 ? 0 : ((mid.x - ax) * dx + (mid.y - ay) * dy) / len2
+        t = Math.max(0, Math.min(1, t))
+        best = Math.min(best, Math.hypot(mid.x - (ax + t * dx), mid.y - (ay + t * dy)))
+      }
+      expect(best).toBeGreaterThan(8)
+    }
+  })
+
+  it('behält Kanten-NZ nach Mutter-Edit (Sync)', () => {
+    const childId = useStore.getState().createFacingPiece('parent')!
+    useStore.getState().updateVertex('parent', 0, { x: -15, y: -5 })
+    useStore.getState().updateVertex('parent', 2, { x: 110, y: 105 })
+    const child = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
+    for (const edge of child.seamLine) {
+      const mid = {
+        x: (edge.start.x + edge.end.x) / 2,
+        y: (edge.start.y + edge.end.y) / 2,
+      }
+      let best = Infinity
+      for (const s of child.cutLine) {
+        if (s.type !== 'line') continue
+        const ax = s.start.x,
+          ay = s.start.y,
+          bx = s.end.x,
+          by = s.end.y
+        const dx = bx - ax,
+          dy = by - ay
+        const len2 = dx * dx + dy * dy
+        let t = len2 < 1e-12 ? 0 : ((mid.x - ax) * dx + (mid.y - ay) * dy) / len2
+        t = Math.max(0, Math.min(1, t))
+        best = Math.min(best, Math.hypot(mid.x - (ax + t * dx), mid.y - (ay + t * dy)))
+      }
+      expect(best).toBeGreaterThan(7)
+    }
+  })
+
   it('erzeugt keine Kaschierung aus einer Kaschierung', () => {
     const childId = useStore.getState().createFacingPiece('parent')!
     const nested = useStore.getState().createFacingPiece(childId)

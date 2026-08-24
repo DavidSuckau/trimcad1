@@ -491,4 +491,103 @@ describe('adjustSeamNotches', () => {
     expect(ev?.needsDialog).toBe(false)
     expect(ev?.maxMismatchMm ?? 0).toBeLessThan(0.5)
   })
+
+  it('gleicht Gerade↔Kurve mit NZ an (Normalen-Mapping)', () => {
+    // Leichte Bézier (~100 mm), damit Gesamtlängen vergleichbar bleiben (sonst canAdjust=false).
+    const seamLine: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 50 } },
+      { type: 'line', start: { x: 100, y: 50 }, end: { x: 0, y: 50 } },
+      { type: 'line', start: { x: 0, y: 50 }, end: { x: 0, y: 0 } },
+    ]
+    const seamCurve: Curve[] = [
+      { type: 'bezier', start: { x: 0, y: 0 }, cp1: { x: 33, y: 1 }, cp2: { x: 66, y: -1 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 50 } },
+      { type: 'line', start: { x: 100, y: 50 }, end: { x: 0, y: 50 } },
+      { type: 'line', start: { x: 0, y: 50 }, end: { x: 0, y: 0 } },
+    ]
+    const base = {
+      drills: [] as [],
+      grainLine: null,
+      internalLines: [] as [],
+      internalCircles: [] as [],
+      layer: 'CUT' as const,
+      transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+      softVertices: [] as number[],
+      fillInterior: true,
+      material: '',
+      bomQuantity: 1,
+      seamAllowanceMm: 10 as number | null,
+      cutLine: seamLine,
+      seamLine: [] as Curve[],
+    }
+    const workspace: Workspace = {
+      id: 'ws-line-curve',
+      name: 'Test',
+      pieces: [
+        { ...base, id: 'A', number: '001', name: 'Gerade', notches: [], cutLine: seamLine },
+        { ...base, id: 'B', number: '002', name: 'Kurve', notches: [], cutLine: seamCurve },
+      ],
+      view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [
+        {
+          id: 's-lc',
+          pieceIdA: 'A',
+          curveIndicesA: [0],
+          clickedCurveA: 0,
+          pieceIdB: 'B',
+          curveIndicesB: [0],
+          clickedCurveB: 0,
+        },
+      ],
+    }
+    useStore.setState({ workspace, seamAdjustmentDialog: 's-lc', seamAdjustmentAcknowledged: {} })
+    useStore.getState().updatePiece('A', { seamAllowanceMm: 10 })
+    useStore.getState().updatePiece('B', { seamAllowanceMm: 10 })
+
+    const pieceA0 = useStore.getState().workspace.pieces.find((p) => p.id === 'A')!
+    const pieceB0 = useStore.getState().workspace.pieces.find((p) => p.id === 'B')!
+    const a1 = materializeNotchAtEdgeArcLength(
+      { id: 'a1', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceA0,
+      [0],
+      25,
+    )!
+    const a2 = materializeNotchAtEdgeArcLength(
+      { id: 'a2', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceA0,
+      [0],
+      75,
+    )!
+    const b1 = materializeNotchAtEdgeArcLength(
+      { id: 'b1', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceB0,
+      [0],
+      40,
+    )!
+    const b2 = materializeNotchAtEdgeArcLength(
+      { id: 'b2', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceB0,
+      [0],
+      70,
+    )!
+    useStore.setState((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === 'A' ? { ...p, notches: [a1, a2] } : p.id === 'B' ? { ...p, notches: [b1, b2] } : p
+        ),
+      },
+      seamAdjustmentDialog: 's-lc',
+    }))
+
+    useStore.getState().adjustSeamNotches('s-lc', 'A')
+    const after = useStore.getState()
+    const pieceA = after.workspace.pieces.find((p) => p.id === 'A')!
+    const pieceB = after.workspace.pieces.find((p) => p.id === 'B')!
+    const ev = evaluateSeamAdjustment(after.workspace.seamAssignments[0]!, pieceA, pieceB)
+    expect(ev?.canAdjust).toBe(true)
+    // Gerade↔Kurve mit NZ: Restfehler durch Cut↔Master-Abbildung möglich; <0.5 mm reicht fürs Angleichen.
+    expect(ev?.maxMismatchMm ?? 0).toBeLessThan(0.5)
+  })
 })

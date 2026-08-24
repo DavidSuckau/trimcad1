@@ -1,7 +1,8 @@
 import type { PatternPiece, Point, Curve, Notch } from '../types/model'
-import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength } from './curveToPath'
+import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
+import { isNotchOnInternalLine } from './notchOnInternalLine'
 import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
 import { vertexPosition as vertexPositionOnClosedCurves } from './geometryConstants'
@@ -365,10 +366,57 @@ export function buildNotchTargetArcPositionsFromSubLengths(
 }
 
 /**
+ * Schnitt des Strahls origin + t * (nx,ny), t∈[minT,maxT], mit der Cut-Kontur.
+ * Bevorzugt Treffer nahe der erwarteten NZ (Mitte des Intervalls).
+ */
+function intersectOutwardRayWithCut(
+  origin: Point,
+  nx: number,
+  ny: number,
+  cutLine: Curve[],
+  minT: number,
+  maxT: number,
+  preferT?: number,
+): Point | null {
+  const want = preferT ?? (minT + maxT) / 2
+  let best: { point: Point; score: number } | null = null
+
+  const considerSeg = (a: Point, b: Point) => {
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const cross = nx * dy - ny * dx
+    if (Math.abs(cross) < 1e-12) return
+    const ox = a.x - origin.x
+    const oy = a.y - origin.y
+    const tRay = (ox * dy - oy * dx) / cross
+    const tSeg = (ox * ny - oy * nx) / cross
+    if (tRay < minT || tRay > maxT || tSeg < -1e-9 || tSeg > 1 + 1e-9) return
+    const point = { x: origin.x + nx * tRay, y: origin.y + ny * tRay }
+    const score = Math.abs(tRay - want)
+    if (!best || score < best.score) best = { point, score }
+  }
+
+  for (const c of cutLine) {
+    if (c.type === 'line') {
+      considerSeg(c.start, c.end)
+    } else {
+      const steps = 32
+      let prev = c.start
+      for (let i = 1; i <= steps; i++) {
+        const q = bezierAt(c, i / steps)
+        considerSeg(prev, q)
+        prev = q
+      }
+    }
+  }
+  return best?.point ?? null
+}
+
+/**
  * Kerbe an einer Bogenlänge entlang der Naht-Master-Kante materialisieren.
- * Bei Nahtzugabe: Fußpunkt auf der cutLine vom Master-Punkt (nicht gleicher t-Parameter) —
- * sonst weicht die Rückprojektion Cut→Master auf Kurven oft um mm ab und die Nahtanpassung
- * schließt nie exakt.
+ * Bei Nahtzugabe: Cut-Punkt entlang der Außennormale suchen (nicht nur euklidisch nächster
+ * Punkt vom Master) — sonst driftet die Rückprojektion Cut→Master auf Kurven, und
+ * Nahtanpassung Gerade→Kurve lässt Teilstrecken ungleich.
  */
 export function materializeNotchAtEdgeArcLength(
   notch: Notch,
@@ -384,12 +432,48 @@ export function materializeNotchAtEdgeArcLength(
   if (!pt) return null
 
   const cutLine = piece.cutLine
-  // Cut↔Master haben nach Clipper-Offset (Bézier → viele Linien) keine gemeinsamen Indizes.
-  // Gleicher Segmentindex würde alle Kerben auf das erste Cut-Stück (oft eine Ecke) ziehen.
+  let cutPosition = pt.point
+
+  if (master !== cutLine && piece.seamLine.length >= 3 && cutLine.length >= 3) {
+    const edgeLocalCi = pt.curveIndex
+    const globalCi = curveIndices[edgeLocalCi]
+    if (globalCi != null && master[globalCi]) {
+      const nDeg = outwardNormalAngleAt(master, globalCi, pt.t)
+      const rad = (nDeg * Math.PI) / 180
+      const nx = Math.cos(rad)
+      const ny = Math.sin(rad)
+      const sa = Math.max(piece.seamAllowanceMm ?? 0, 1)
+      // Strahl-Schnitt mit Cut-Segmenten (sauberer als Probe+Nearest bei Kurven)
+      const hit = intersectOutwardRayWithCut(pt.point, nx, ny, cutLine, sa * 0.15, sa * 3.5, sa)
+      if (hit) {
+        cutPosition = hit
+      } else {
+        let bestPoint = pt.point
+        let bestScore = Infinity
+        for (let k = 0; k <= 48; k++) {
+          const dist = (sa * 3.0 * k) / 48
+          const probe = { x: pt.point.x + nx * dist, y: pt.point.y + ny * dist }
+          const near = nearestCurveIndexAndPoint(probe, cutLine)
+          if (!near) continue
+          const back = nearestCurveIndexAndPoint(near.point, edgeCurves)
+          if (!back) continue
+          const err = Math.hypot(back.point.x - pt.point.x, back.point.y - pt.point.y)
+          const saErr = Math.abs(Math.hypot(near.point.x - pt.point.x, near.point.y - pt.point.y) - sa)
+          const score = err * 4 + saErr * 0.25
+          if (score < bestScore) {
+            bestScore = score
+            bestPoint = near.point
+          }
+        }
+        cutPosition = bestPoint
+      }
+    }
+  }
+
   return materializeNotchAnchorsOnCutLine(
     {
       ...notch,
-      position: pt.point,
+      position: cutPosition,
       vertexIndex: undefined,
       sNormalized: undefined,
       arcLengthMm: undefined,
@@ -477,6 +561,9 @@ export function getSubSegments(
 /**
  * Liefert die Notch-IDs die auf einer Kante (curveIndices) liegen,
  * in der Reihenfolge ihrer Bogenlängen-Position vom Kantenstart.
+ *
+ * Bei Nahtzugabe: Cut-Position auf **diese Kante** (nicht die ganze Master-Kontur) projizieren,
+ * sonst landen Kurven-Kerben nach Gerade→Kurve-Anpassung oft auf Nachbarkanten / mit Drift.
  */
 export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): { notchId: string; arcLength: number }[] {
   if (curveIndices.length === 0) return []
@@ -493,9 +580,31 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
   for (let i = 0; i < curveIndices.length; i++) ciToIdx.set(curveIndices[i], i)
 
   const ciSet = new Set(curveIndices)
+  const edgeOnly = curveIndices.map((ci) => curvs[ci]).filter(Boolean)
+  const maxDist = Math.max(MAP_CUT_TO_MASTER_EPS_MM, (piece.seamAllowanceMm ?? 0) * 1.5 + 2)
   const result: { notchId: string; arcLength: number }[] = []
 
   for (const n of piece.notches) {
+    if (isNotchOnInternalLine(n)) continue
+
+    // Primär: Cut-Lage → Projektion nur auf die zugewiesene Kante (stabil bei NZ + Kurven).
+    if (piece.cutLine.length >= 3 && edgeOnly.length > 0) {
+      const { position } = getNotchPositionAndAngle(n, piece.cutLine)
+      const onEdge = nearestCurveIndexAndPoint(position, edgeOnly)
+      if (onEdge && onEdge.distance <= maxDist) {
+        const localIdx = onEdge.curveIndex
+        const globalCi = curveIndices[localIdx]
+        if (globalCi != null && curvs[globalCi]) {
+          const t = onEdge.t ?? 0
+          result.push({
+            notchId: n.id,
+            arcLength: cumLengths[localIdx] + curveSegmentArcLength(curvs[globalCi], 0, t),
+          })
+          continue
+        }
+      }
+    }
+
     const ct = resolveNotchOnMasterCurves(n, piece, curvs)
     if (ct && ciSet.has(ct.curveIndex)) {
       const idx = ciToIdx.get(ct.curveIndex)

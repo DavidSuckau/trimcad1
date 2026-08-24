@@ -1,6 +1,7 @@
 import type { Curve, Notch, PatternPiece, Point } from '../types/model'
 import { useSeamLineForVertexEditing } from '../geometry/vertexMaster'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
+import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
 import { offsetCurvesInwardForSeam } from '../geometry/offset'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { splitBezierAt } from '../geometry/curveToPath'
@@ -272,7 +273,14 @@ function applyMasterContourToPiece(piece: PatternPiece, masterCurves: Curve[]): 
     const seamLine = masterCurves
     if (piece.cutLineDeviatesFromSeamAllowanceOffset === true && piece.cutLine.length >= 3) {
       const sc = piece.symmetryConstraint!
-      const cutLine = syncMasterCurvesByMirroring(piece.cutLine, sc.axisA, sc.axisB, sc.keepSide)
+      const mirroredCut = syncMasterCurvesByMirroring(piece.cutLine, sc.axisA, sc.axisB, sc.keepSide)
+      const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)
+      const cutLine = preferStableCutAfterGeometricMirror(
+        seamLine,
+        mirroredCut,
+        derived.ok ? derived.cutLine : null,
+        piece.seamAllowanceMm
+      )
       return { ...piece, seamLine, cutLine }
     }
     const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm)

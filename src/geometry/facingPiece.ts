@@ -1,6 +1,8 @@
 import type { Curve, Drill, Notch, PatternPiece, Point } from '../types/model'
-import { curvesBounds } from './curveToPath'
+import { bezierAt, curvesBounds, pointAtPathLength, totalPathLength } from './curveToPath'
+import { deriveCutLineForPiece } from './deriveCutLineForPiece'
 import { chamferCutLineCornersInSeamAllowance } from './facingChamfer'
+import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 
 function cloneCurves(curves: Curve[]): Curve[] {
@@ -37,6 +39,54 @@ function cloneCircles(circles: PatternPiece['internalCircles']): PatternPiece['i
   return circles.map((c) => ({ ...c, center: { ...c.center } }))
 }
 
+/**
+ * Abstände Naht→Schnitt entlang jeder Naht-Kurve (mehrere Proben, nicht nur Mitte).
+ * So fällt „NZ verschwindet zum Teil“ auf einer Kante auf.
+ */
+export function seamToCutSampleDistances(seam: Curve[], cut: Curve[], samplesPerCurve = 3): number[] {
+  const out: number[] = []
+  if (cut.length < 3) return out
+  for (const c of seam) {
+    const len = totalPathLength([c])
+    if (len < 1e-9) continue
+    for (let s = 1; s <= samplesPerCurve; s++) {
+      const t = s / (samplesPerCurve + 1)
+      const pt =
+        c.type === 'line'
+          ? { x: c.start.x + (c.end.x - c.start.x) * t, y: c.start.y + (c.end.y - c.start.y) * t }
+          : bezierAt(c, t)
+      // Bei Einzelsegment-Bézier: pointAtPathLength auf [c] ist robuster für t entlang Bogen
+      const along = pointAtPathLength([c], t * len)
+      const p = along?.point ?? pt
+      const d = nearestCurveIndexAndPoint(p, cut)?.distance
+      if (d != null) out.push(d)
+    }
+  }
+  return out
+}
+
+/** true, wenn Chamfer die Kanten-NZ gegenüber der parallelen Cut-Kontur merklich auffrisst. */
+export function chamferCollapsesSeamAllowance(
+  seam: Curve[],
+  cutBefore: Curve[],
+  cutAfter: Curve[],
+  expectedSaMm: number
+): boolean {
+  if (seam.length < 3 || cutBefore.length < 3 || cutAfter.length < 3) return false
+  const before = seamToCutSampleDistances(seam, cutBefore)
+  const after = seamToCutSampleDistances(seam, cutAfter)
+  if (before.length === 0 || after.length !== before.length) return true
+
+  const floor = Math.max(1, expectedSaMm * 0.75)
+  for (let i = 0; i < after.length; i++) {
+    // Absolut: NZ sollte nahe der erwarteten Zugabe bleiben (außer Kurven-Ausbuchtung > SA)
+    if (before[i] >= floor && after[i] < floor) return true
+    // Relativ pro Probe: kein starker Einbruch durch Fase
+    if (before[i] > 1 && after[i] < before[i] * 0.85) return true
+  }
+  return false
+}
+
 /** Geometrie der Kaschierung aus der Mutter (ohne Transform/Id/Nummer). */
 export function buildFacingGeometryFromParent(parent: PatternPiece): {
   cutLine: Curve[]
@@ -61,17 +111,37 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
   kind: 'facing'
 } {
   const seamLine = cloneCurves(parent.seamLine)
-  const cutBefore = cloneCurves(parent.cutLine)
+  const parentCut = cloneCurves(parent.cutLine)
+  // Nach Flip/Edit kann die Mutter-cutLine topologisch unzuverlässig sein.
+  // Kaschierung immer aus der Naht (+ NZ) neu ableiten, dann erst chamfern.
+  let cutForChamfer = parentCut
+  const sa = parent.seamAllowanceMm
+  if (sa != null && sa > 0 && seamLine.length >= 3) {
+    const derived = deriveCutLineForPiece(
+      {
+        ...parent,
+        cutLine: parentCut,
+        seamLine,
+        cutLineDeviatesFromSeamAllowanceOffset: false,
+      },
+      seamLine,
+      sa
+    )
+    if (derived.ok) cutForChamfer = derived.cutLine
+  }
+
   const draft: PatternPiece = {
     ...parent,
-    cutLine: cutBefore,
+    cutLine: cutForChamfer,
     seamLine,
     notches: cloneNotches(parent.notches),
     drills: cloneDrills(parent.drills),
     grainLine: cloneGrain(parent.grainLine),
     internalLines: cloneCurves(parent.internalLines),
     internalCircles: cloneCircles(parent.internalCircles),
-    softVertices: [...(parent.softVertices ?? [])],
+    // Cut wurde neu abgeleitet → Mutter-softVertices (Cut-Indizes) sind ungültig und
+    // würden nach Parent-Edit falsche Ecken soft/scharf markieren → NZ-Fressen.
+    softVertices: [],
     softVerticesMaster: [...(parent.softVerticesMaster ?? [])],
     roundedCorners: parent.roundedCorners ? parent.roundedCorners.map((r) => ({ ...r })) : undefined,
     edgeSeamAllowances: parent.edgeSeamAllowances
@@ -79,8 +149,16 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
       : undefined,
   }
 
-  const cutLine = chamferCutLineCornersInSeamAllowance(draft)
-  const notches = resyncNotchesAfterCutLineRebuilt(draft.notches, cutBefore, cutLine)
+  let cutLine = chamferCutLineCornersInSeamAllowance(draft)
+  if (
+    sa != null &&
+    sa > 0 &&
+    seamLine.length >= 3 &&
+    chamferCollapsesSeamAllowance(seamLine, cutForChamfer, cutLine, sa)
+  ) {
+    cutLine = cutForChamfer
+  }
+  const notches = resyncNotchesAfterCutLineRebuilt(draft.notches, parentCut, cutLine)
 
   return {
     cutLine,

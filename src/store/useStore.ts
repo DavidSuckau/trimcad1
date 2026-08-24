@@ -91,6 +91,7 @@ import { getDefaultConfiguratorParts } from '../configurators/registry'
 import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../workspace/workspaceMarqueeSelection'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
+import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
 import { formatProfileEdgeGeometryWarnings, mergeWarnToasts } from '../profile/profileEdgeWarnings'
 import {
   computeProfileFitAdjustTarget,
@@ -1913,17 +1914,32 @@ export const useStore = create<Store>()(
       const notchId = tgtNotches[i].notchId
       const n0 = tgtPiece.notches.find((nn) => nn.id === notchId)
       if (!n0 || i >= targetArcPositions.length) continue
-      const materialized = materializeNotchAtEdgeArcLength(
-        {
-          ...n0,
-          vertexIndex: undefined,
-          sNormalized: undefined,
-          arcLengthMm: undefined,
-        },
-        tgtPiece,
-        tgtIndices,
-        targetArcPositions[i],
-      )
+      const desiredArc = targetArcPositions[i]
+      let tryArc = desiredArc
+      let materialized: Notch | null = null
+      // Closed-loop: Cut↔Master drift auf Kurven mit NZ ausgleichen
+      for (let iter = 0; iter < 6; iter++) {
+        materialized = materializeNotchAtEdgeArcLength(
+          {
+            ...n0,
+            vertexIndex: undefined,
+            sNormalized: undefined,
+            arcLengthMm: undefined,
+          },
+          tgtPiece,
+          tgtIndices,
+          tryArc,
+        )
+        if (!materialized) break
+        const got = getNotchesOnEdge({ ...tgtPiece, notches: [materialized] }, tgtIndices).find(
+          (x) => x.notchId === notchId
+        )
+        if (!got) break
+        const err = desiredArc - got.arcLength
+        if (Math.abs(err) <= SEAM_ADJUSTMENT_NOTCH_ALIGNED_EPS_MM) break
+        tryArc += err
+        if (tryArc < -1 || tryArc > tgtTotalLen + 1) break
+      }
       if (!materialized) continue
       targetNotches.push({ notchId, notch: materialized })
     }
@@ -3875,7 +3891,13 @@ export const useStore = create<Store>()(
       if (useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3) {
         seamLine = piece.seamLine.map((c) => mirrorCurve(c, cx))
         if (piece.cutLineDeviatesFromSeamAllowanceOffset === true) {
-          cutLine = mirroredCutLine
+          const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
+          cutLine = preferStableCutAfterGeometricMirror(
+            seamLine,
+            mirroredCutLine,
+            derived.ok ? derived.cutLine : null,
+            piece.seamAllowanceMm!
+          )
         } else {
           const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
           cutLine = derived.ok ? derived.cutLine : mirroredCutLine
@@ -3943,7 +3965,13 @@ export const useStore = create<Store>()(
       if (useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3) {
         seamLine = piece.seamLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
         if (piece.cutLineDeviatesFromSeamAllowanceOffset === true) {
-          cutLine = mirroredCutLine
+          const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
+          cutLine = preferStableCutAfterGeometricMirror(
+            seamLine,
+            mirroredCutLine,
+            derived.ok ? derived.cutLine : null,
+            piece.seamAllowanceMm!
+          )
         } else {
           const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
           cutLine = derived.ok ? derived.cutLine : mirroredCutLine

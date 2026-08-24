@@ -110,6 +110,7 @@ import {
   getPieceGrainLine,
   getGrainArrowLayout,
   GRAIN_SNAP_TO_EDGE_MM,
+  grainLineWithMovedEndpoint,
   snapGrainLineToContourEdge,
 } from '../geometry/grainArrowLayout'
 import type { PatternPiece, Point, Line, Curve, Notch, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType, NotchRole } from '../types/model'
@@ -612,12 +613,15 @@ function minDistToTriangleEdgesMm(p: Point, t1: Point, t2: Point, t3: Point): nu
 const GRAIN_HIT_SHAFT_HALF_MM = 5
 const GRAIN_HIT_TICK_HALF_MM = 4
 const GRAIN_HIT_HEAD_MM = 4.5
+const GRAIN_HIT_ENDPOINT_MM = 8
 
 /** Prüft, ob ein Punkt (Teilkoordinaten) im Klick-/Hover-Bereich des Laufrichtungspfeils liegt. */
 function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
   const g = getGrainArrowLayout(piece)
   if (!g) return false
   const { line, tickStart, tickEnd, tickBaseLeft, tickBaseRight, endTip, baseLeft, baseRight } = g
+  if (Math.hypot(local.x - line.start.x, local.y - line.start.y) <= GRAIN_HIT_ENDPOINT_MM) return true
+  if (Math.hypot(local.x - line.end.x, local.y - line.end.y) <= GRAIN_HIT_ENDPOINT_MM) return true
   const shaft = distPointToSegmentMm(local, line.start, line.end)
   if (shaft.d <= GRAIN_HIT_SHAFT_HALF_MM) return true
   const tick = distPointToSegmentMm(local, tickStart, tickEnd)
@@ -3951,6 +3955,7 @@ export function WorkspaceCanvas() {
         }
         if (!contourEditEnabled) {
         const GRAIN_SHAFT_HIT = 14
+        const GRAIN_ENDPOINT_HIT = 16
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
           if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
@@ -3962,7 +3967,14 @@ export function WorkspaceCanvas() {
           const endW = pieceLocalToWorld(grain.end, p)
           const dStart = Math.hypot(world.x - startW.x, world.y - startW.y)
           const dEnd = Math.hypot(world.x - endW.x, world.y - endW.y)
-          if (dStart < GRAIN_SHAFT_HIT || dEnd < GRAIN_SHAFT_HIT) continue
+          // Anfang/Ende zuerst: Linie länger/kürzer machen und Richtung anpassen
+          if (dStart < GRAIN_ENDPOINT_HIT || dEnd < GRAIN_ENDPOINT_HIT) {
+            const which: 'start' | 'end' =
+              dStart <= dEnd ? 'start' : 'end'
+            setDragging({ kind: 'grainPoint', pieceId: p.id, which })
+            containerRef.current?.setPointerCapture?.(e.pointerId)
+            return
+          }
           const shaftHit = distPointToSegmentMm(local, grain.start, grain.end)
           if (shaftHit.d > GRAIN_SHAFT_HIT) continue
           setDragging({
@@ -5417,10 +5429,7 @@ export function WorkspaceCanvas() {
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
         const currentLine = piece.grainLine ?? getPieceGrainLine(piece)
-        setGrainLine(dragging.pieceId, {
-          ...currentLine,
-          [dragging.which]: local,
-        })
+        setGrainLine(dragging.pieceId, grainLineWithMovedEndpoint(currentLine, dragging.which, local))
       } else if (dragging.kind === 'grainLine') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
@@ -6971,7 +6980,7 @@ export function WorkspaceCanvas() {
                 : 'default',
       } as React.CSSProperties}
     >
-      <div className="workspace-version">Aktuell V. 0.0.7</div>
+      <div className="workspace-version">V. 1.0.0</div>
       <CanvasToolbar />
       {notchEditTarget &&
         tool === 'select' &&

@@ -3,6 +3,7 @@ import { bezierAt, outwardNormalAngleAt, signedAreaCurves, curvesBounds } from '
 import { samePoint } from './geometryConstants'
 // @ts-expect-error clipper-lib has no types
 import ClipperLib from 'clipper-lib'
+import { inflatePaths, JoinType as Clipper2JoinType, EndType as Clipper2EndType } from 'clipper2-ts'
 
 /** Höhere Auflösung reduziert sichtbare „Stufen“ bei Nahtzugabe (Clipper arbeitet mit Integer-Koordinaten). */
 const SCALE = 100000
@@ -14,6 +15,10 @@ const SCALE = 100000
  * Nur die abgeleitete Schnittkontur (cutLine), nicht die Nahtlinie.
  */
 export const CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET = 3
+
+/** Clipper1 = Default (stabil im Produkt); Clipper2 opt-in hinter Flag. */
+export type OffsetEngine = 'clipper1' | 'clipper2'
+export const DEFAULT_OFFSET_ENGINE: OffsetEngine = 'clipper1'
 
 type IntPoint = { X: number; Y: number }
 
@@ -40,6 +45,8 @@ export type OffsetOptions = {
    * Douglas-Peucker auf der Schnittkontur unterdrückt, damit Tangentialität und Radius nicht verwischt werden.
    */
   cutCornerFillet?: boolean
+  /** Offset-Backend; Default Clipper1. Clipper2 nur explizit (A/B, Experimente). */
+  offsetEngine?: OffsetEngine
 }
 
 /** Kurven in Punktliste umwandeln; Bézier wird fein abgetastet, damit die Naht oben der Kurve folgt. */
@@ -148,6 +155,7 @@ export type ClipperOffsetClosedResult = {
 
 /**
  * Clipper-Offset einer geschlossenen Kontur; liefert Segmentanzahl der Lösung für Validierung (Seam-as-Master).
+ * Default: Clipper1. Optional `options.offsetEngine: 'clipper2'` (sync TS-Port, kein WASM).
  */
 export function clipperOffsetClosedPolygon(
   curves: Curve[],
@@ -157,24 +165,64 @@ export function clipperOffsetClosedPolygon(
   if (curves.length === 0) {
     return { lineCurves: [], solutionPathCount: 0 }
   }
-  const pts = curvesToPoints(curves)
+  // Clipper: positives Delta expandiert zuverlässiger bei CCW. CW-Eingabe → kurz umkehren.
+  let input = curves
+  let inputReversed = false
+  if (deltaMm > 0 && signedAreaCurves(curves) < 0) {
+    input = reverseCurves(curves)
+    inputReversed = true
+  }
+  const pts = curvesToPoints(input)
   if (pts.length < 3) {
     return { lineCurves: [], solutionPathCount: 0 }
   }
-  const path = pts.map(toIntPoint)
-  const co = new ClipperLib.ClipperOffset()
-  const jt = options?.joinType === 'miter' ? ClipperLib.JoinType.jtMiter
-    : options?.joinType === 'square' ? ClipperLib.JoinType.jtSquare
-    : ClipperLib.JoinType.jtRound
-  if (options?.miterLimit != null) co.MiterLimit = options.miterLimit
-  co.AddPath(path, jt, ClipperLib.EndType.etClosedPolygon)
-  const solution: IntPoint[][] = []
-  co.Execute(solution, deltaMm * SCALE)
-  const solutionPathCount = solution.length
-  if (solution.length === 0 || solution[0].length < 2) {
-    return { lineCurves: [], solutionPathCount }
+
+  const engine = options?.offsetEngine ?? DEFAULT_OFFSET_ENGINE
+  let outPts: Point[]
+  let solutionPathCount: number
+
+  if (engine === 'clipper2') {
+    const jt =
+      options?.joinType === 'miter'
+        ? Clipper2JoinType.Miter
+        : options?.joinType === 'square'
+          ? Clipper2JoinType.Square
+          : Clipper2JoinType.Round
+    const miterLimit = options?.miterLimit ?? 2
+    const solution = inflatePaths([pts.map((p) => ({ x: p.x, y: p.y }))], deltaMm, jt, Clipper2EndType.Polygon, miterLimit)
+    solutionPathCount = solution.length
+    if (solution.length === 0 || !solution[0] || solution[0].length < 2) {
+      return { lineCurves: [], solutionPathCount }
+    }
+    // Größten Ring wählen (bei Zerfall mehrere Pfade)
+    let best = solution[0]!
+    let bestArea = Math.abs(signedAreaOfRing(best))
+    for (let i = 1; i < solution.length; i++) {
+      const ring = solution[i]!
+      const a = Math.abs(signedAreaOfRing(ring))
+      if (a > bestArea) {
+        best = ring
+        bestArea = a
+      }
+    }
+    outPts = best.map((p) => ({ x: p.x, y: p.y }))
+  } else {
+    const path = pts.map(toIntPoint)
+    const co = new ClipperLib.ClipperOffset()
+    const jt = options?.joinType === 'miter' ? ClipperLib.JoinType.jtMiter
+      : options?.joinType === 'square' ? ClipperLib.JoinType.jtSquare
+      : ClipperLib.JoinType.jtRound
+    if (options?.miterLimit != null) co.MiterLimit = options.miterLimit
+    co.AddPath(path, jt, ClipperLib.EndType.etClosedPolygon)
+    const solution: IntPoint[][] = []
+    co.Execute(solution, deltaMm * SCALE)
+    solutionPathCount = solution.length
+    if (solution.length === 0 || solution[0].length < 2) {
+      return { lineCurves: [], solutionPathCount }
+    }
+    outPts = solution[0].map(fromIntPoint)
   }
-  let outPts = solution[0].map(fromIntPoint)
+
   if (outPts.length > 1 && outPts[0].x === outPts[outPts.length - 1].x && outPts[0].y === outPts[outPts.length - 1].y) {
     outPts.pop()
   }
@@ -182,11 +230,24 @@ export function clipperOffsetClosedPolygon(
   if (tol > 0) {
     outPts = simplifyClosedPolygon(outPts, tol)
   }
-  const segs = pointsToLineCurves(outPts)
+  let segs = pointsToLineCurves(outPts)
   if (outPts.length >= 3) {
     segs.push({ type: 'line', start: outPts[outPts.length - 1], end: outPts[0] })
   }
+  if (inputReversed && segs.length >= 3) {
+    segs = reverseCurves(segs)
+  }
   return { lineCurves: segs, solutionPathCount }
+}
+
+function signedAreaOfRing(pts: { x: number; y: number }[]): number {
+  let a = 0
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]!
+    const q = pts[(i + 1) % pts.length]!
+    a += p.x * q.y - q.x * p.y
+  }
+  return a / 2
 }
 
 /**
