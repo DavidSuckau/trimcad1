@@ -1,178 +1,177 @@
 import type { Curve, PatternPiece, Point } from '../types/model'
-import { bezierAt, curveSegmentArcLength, splitBezierAt } from './curveToPath'
+import { bezierAt } from './curveToPath'
 import { getEffectiveSoftVerticesCut } from './seamUtils'
-import { getAllowanceForCurveIndex } from './edgeEnumeration'
 import { interiorAngleAtVertexDegrees } from './softVertexPromotion'
 
 const MIN_CHAMFER_MM = 0.5
-const EDGE_FRAC = 0.45
 /**
  * Nur echte Knicke chamfern. Tessellationspunkte entlang einer Kurve (Clipper-Offset)
  * sind nahezu kollinear (~180°) und würden sonst die gesamte Nahtzugabe „auffressen“.
  */
 const MAX_INTERIOR_DEG_FOR_CHAMFER = 165
 
-function cloneCurve(c: Curve): Curve {
-  if (c.type === 'line') {
-    return { type: 'line', start: { ...c.start }, end: { ...c.end } }
-  }
-  return {
-    type: 'bezier',
-    start: { ...c.start },
-    end: { ...c.end },
-    cp1: { ...c.cp1 },
-    cp2: { ...c.cp2 },
-  }
+function cloneCurves(curves: Curve[]): Curve[] {
+  return curves.map((c) =>
+    c.type === 'line'
+      ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
+      : {
+          type: 'bezier' as const,
+          start: { ...c.start },
+          end: { ...c.end },
+          cp1: { ...c.cp1 },
+          cp2: { ...c.cp2 },
+        }
+  )
 }
 
-function curveLen(c: Curve): number {
-  return curveSegmentArcLength(c, 0, 1)
+function vertexAt(curves: Curve[], vi: number): Point {
+  const n = curves.length
+  const i = ((vi % n) + n) % n
+  return { ...curves[i].start }
 }
 
-/** Parameter t ∈ [0,1] für Bogenlänge vom Segmentstart. */
-function tAtArcFromStart(c: Curve, arcMm: number): number {
-  const total = curveLen(c)
-  if (total <= 1e-12) return 0
-  const target = Math.max(0, Math.min(total, arcMm))
-  if (c.type === 'line') return target / total
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 28; i++) {
-    const mid = (lo + hi) / 2
-    if (curveSegmentArcLength(c, 0, mid) < target) lo = mid
-    else hi = mid
-  }
-  return (lo + hi) / 2
-}
-
-function pointAtT(c: Curve, t: number): Point {
-  const tt = Math.max(0, Math.min(1, t))
-  if (c.type === 'line') {
-    return {
-      x: c.start.x + tt * (c.end.x - c.start.x),
-      y: c.start.y + tt * (c.end.y - c.start.y),
+function nearestSeamVertex(seam: Curve[], cutCorner: Point): Point | null {
+  if (seam.length < 3) return null
+  let best: Point | null = null
+  let bestD = Infinity
+  for (let i = 0; i < seam.length; i++) {
+    const p = vertexAt(seam, i)
+    const d = Math.hypot(p.x - cutCorner.x, p.y - cutCorner.y)
+    if (d < bestD) {
+      bestD = d
+      best = p
     }
   }
-  return bezierAt(c, tt)
+  return best
 }
 
-function trimFromStart(c: Curve, distMm: number): Curve | null {
-  const total = curveLen(c)
-  if (distMm >= total - MIN_CHAMFER_MM) return null
-  if (distMm <= 1e-9) return cloneCurve(c)
-  const t = tAtArcFromStart(c, distMm)
-  if (c.type === 'line') {
-    return { type: 'line', start: pointAtT(c, t), end: { ...c.end } }
+/** Geschlossene Kontur → Punktring (Start jedes Segments). Bézier werden grob abgetastet. */
+function curvesToRing(curves: Curve[]): Point[] {
+  const ring: Point[] = []
+  for (const c of curves) {
+    if (c.type === 'line') {
+      ring.push({ ...c.start })
+    } else {
+      const steps = 12
+      for (let i = 0; i < steps; i++) {
+        const t = i / steps
+        ring.push(bezierAt(c, t))
+      }
+    }
   }
-  const [, right] = splitBezierAt(c, t)
-  return right
+  return ring
 }
 
-function trimFromEnd(c: Curve, distMm: number): Curve | null {
-  const total = curveLen(c)
-  if (distMm >= total - MIN_CHAMFER_MM) return null
-  if (distMm <= 1e-9) return cloneCurve(c)
-  const t = tAtArcFromStart(c, total - distMm)
-  if (c.type === 'line') {
-    return { type: 'line', start: { ...c.start }, end: pointAtT(c, t) }
+function ringToLineCurves(ring: Point[]): Curve[] {
+  if (ring.length < 3) return []
+  const out: Curve[] = []
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]
+    const b = ring[(i + 1) % ring.length]
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 1e-9) continue
+    out.push({ type: 'line', start: { ...a }, end: { ...b } })
   }
-  const [left] = splitBezierAt(c, t)
-  return left
+  return out.length >= 3 ? out : []
 }
 
-function endPoint(c: Curve): Point {
-  return { ...c.end }
+function dot(a: Point, b: Point): number {
+  return a.x * b.x + a.y * b.y
 }
 
-function startPoint(c: Curve): Point {
-  return { ...c.start }
-}
-
-function allowanceForCutEdge(piece: PatternPiece, cutCurveIndex: number): number {
-  const saDefault = piece.seamAllowanceMm ?? 0
-  const masterLen = piece.seamLine.length >= 3 ? piece.seamLine.length : piece.cutLine.length
-  if (piece.cutLine.length === masterLen) {
-    return getAllowanceForCurveIndex(piece, cutCurveIndex)
-  }
-  return saDefault
+function sub(a: Point, b: Point): Point {
+  return { x: a.x - b.x, y: a.y - b.y }
 }
 
 /**
- * Schneidet scharfe Ecken der **Schnittkontur** in der Nahtzugabe ab (~45° bei rechten Winkeln).
- * Die Nahtlinie bleibt unverändert. Weiche Vertices und Stellen ohne NZ werden übersprungen.
+ * Sutherland–Hodgman: behält Punkte mit (P − S) · n ≤ 0
+ * (Naht-Ecke S auf der Grenze, Cut-Ecke C mit (C−S)·n > 0 wird abgeschnitten).
+ */
+function clipRingByHalfPlane(ring: Point[], S: Point, n: Point): Point[] {
+  if (ring.length < 3) return ring
+  const nLen = Math.hypot(n.x, n.y)
+  if (nLen < 1e-12) return ring
+
+  const inside = (p: Point) => dot(sub(p, S), n) <= 1e-9
+  const intersect = (a: Point, b: Point): Point => {
+    const da = dot(sub(a, S), n)
+    const db = dot(sub(b, S), n)
+    const t = da / (da - db)
+    return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) }
+  }
+
+  const out: Point[] = []
+  for (let i = 0; i < ring.length; i++) {
+    const cur = ring[i]
+    const prev = ring[(i - 1 + ring.length) % ring.length]
+    const curIn = inside(cur)
+    const prevIn = inside(prev)
+    if (curIn) {
+      if (!prevIn) out.push(intersect(prev, cur))
+      out.push({ ...cur })
+    } else if (prevIn) {
+      out.push(intersect(prev, cur))
+    }
+  }
+  return out
+}
+
+/**
+ * Schneidet scharfe Ecken der **Schnittkontur** maximal in der Nahtzugabe ab:
+ * die Fase ist die Gerade durch den Naht-Eckpunkt, senkrecht zu (Cut-Ecke − Naht-Ecke).
+ * Die Nahtlinie bleibt unverändert.
  */
 export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve[] {
   const cut = piece.cutLine
   const n = cut.length
-  if (n < 3) return cut.map(cloneCurve)
+  if (n < 3) return cloneCurves(cut)
 
   const soft = new Set(getEffectiveSoftVerticesCut(piece))
   const saDefault = piece.seamAllowanceMm ?? 0
   if (saDefault <= 0 && !(piece.edgeSeamAllowances && piece.edgeSeamAllowances.length > 0)) {
-    return cut.map(cloneCurve)
+    return cloneCurves(cut)
   }
 
-  type ChamferSpec = { dIn: number; dOut: number }
-  const specs: (ChamferSpec | null)[] = new Array(n).fill(null)
+  const seam = piece.seamLine.length >= 3 ? piece.seamLine : null
+  if (!seam) return cloneCurves(cut)
+
+  type Plane = { S: Point; n: Point }
+  const planes: Plane[] = []
 
   for (let i = 0; i < n; i++) {
     if (soft.has(i)) continue
     const interiorDeg = interiorAngleAtVertexDegrees(cut, i)
-    // Nahezu gestreckt (Tessellation auf Kurven) → kein Chamfer
     if (interiorDeg == null || interiorDeg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
-    const inCi = (i - 1 + n) % n
-    const outCi = i
-    const incoming = cut[inCi]
-    const outgoing = cut[outCi]
-    const lenIn = curveLen(incoming)
-    const lenOut = curveLen(outgoing)
-    const saIn = allowanceForCutEdge(piece, inCi)
-    const saOut = allowanceForCutEdge(piece, outCi)
-    const dIn = Math.min(Math.max(saIn, 0), EDGE_FRAC * lenIn)
-    const dOut = Math.min(Math.max(saOut, 0), EDGE_FRAC * lenOut)
-    if (dIn < MIN_CHAMFER_MM || dOut < MIN_CHAMFER_MM) continue
-    specs[i] = { dIn, dOut }
+
+    const C = vertexAt(cut, i)
+    const S = seam.length === n ? vertexAt(seam, i) : nearestSeamVertex(seam, C)
+    if (!S) continue
+    const nVec = sub(C, S)
+    if (Math.hypot(nVec.x, nVec.y) < MIN_CHAMFER_MM) continue
+    planes.push({ S: { ...S }, n: nVec })
   }
 
-  if (specs.every((s) => s == null)) return cut.map(cloneCurve)
+  if (planes.length === 0) return cloneCurves(cut)
 
-  const out: Curve[] = []
-  for (let i = 0; i < n; i++) {
-    const startSpec = specs[i]
-    const endSpec = specs[(i + 1) % n]
-    let seg: Curve | null = cloneCurve(cut[i])
-    if (startSpec) {
-      seg = trimFromStart(seg, startSpec.dOut)
-      if (!seg) continue
-    }
-    if (endSpec) {
-      seg = trimFromEnd(seg, endSpec.dIn)
-      if (!seg) continue
-    }
-    if (curveLen(seg) < MIN_CHAMFER_MM * 0.5) continue
-    out.push(seg)
-
-    if (endSpec) {
-      const a = endPoint(seg)
-      const nextOrig = cut[(i + 1) % n]
-      const b = pointAtT(nextOrig, tAtArcFromStart(nextOrig, endSpec.dOut))
-      if (Math.hypot(b.x - a.x, b.y - a.y) >= MIN_CHAMFER_MM * 0.25) {
-        out.push({ type: 'line', start: a, end: b })
-      }
-    }
+  let ring = curvesToRing(cut)
+  for (const pl of planes) {
+    ring = clipRingByHalfPlane(ring, pl.S, pl.n)
+    if (ring.length < 3) return cloneCurves(cut)
   }
 
-  if (out.length >= 3) {
-    const first = startPoint(out[0])
-    const last = endPoint(out[out.length - 1])
-    if (Math.hypot(first.x - last.x, first.y - last.y) > 1e-6) {
-      const lastC = out[out.length - 1]
-      out[out.length - 1] =
-        lastC.type === 'line'
-          ? { type: 'line', start: { ...lastC.start }, end: { ...first } }
-          : { ...lastC, end: { ...first } }
-    }
+  // Nahe beieinander liegende Punkte zusammenfassen (numerische Schnittpunkte)
+  const cleaned: Point[] = []
+  for (const p of ring) {
+    const prev = cleaned[cleaned.length - 1]
+    if (!prev || Math.hypot(p.x - prev.x, p.y - prev.y) >= 1e-4) cleaned.push(p)
+  }
+  if (
+    cleaned.length >= 2 &&
+    Math.hypot(cleaned[0].x - cleaned[cleaned.length - 1].x, cleaned[0].y - cleaned[cleaned.length - 1].y) <
+      1e-4
+  ) {
+    cleaned.pop()
   }
 
-  return out.length >= 3 ? out : cut.map(cloneCurve)
+  const out = ringToLineCurves(cleaned)
+  return out.length >= 3 ? out : cloneCurves(cut)
 }

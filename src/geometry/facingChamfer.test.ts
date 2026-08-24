@@ -3,12 +3,14 @@ import type { Curve, PatternPiece } from '../types/model'
 import { chamferCutLineCornersInSeamAllowance } from './facingChamfer'
 import { curveSegmentArcLength } from './curveToPath'
 
-function square(size: number): Curve[] {
+function square(size: number, origin = 0): Curve[] {
+  const o = origin
+  const s = size
   return [
-    { type: 'line', start: { x: 0, y: 0 }, end: { x: size, y: 0 } },
-    { type: 'line', start: { x: size, y: 0 }, end: { x: size, y: size } },
-    { type: 'line', start: { x: size, y: size }, end: { x: 0, y: size } },
-    { type: 'line', start: { x: 0, y: size }, end: { x: 0, y: 0 } },
+    { type: 'line', start: { x: o, y: o }, end: { x: o + s, y: o } },
+    { type: 'line', start: { x: o + s, y: o }, end: { x: o + s, y: o + s } },
+    { type: 'line', start: { x: o + s, y: o + s }, end: { x: o, y: o + s } },
+    { type: 'line', start: { x: o, y: o + s }, end: { x: o, y: o } },
   ]
 }
 
@@ -34,6 +36,15 @@ function basePiece(cutLine: Curve[], seamLine: Curve[], sa: number | null): Patt
   }
 }
 
+/** Abstand Punkt → Gerade durch a–b */
+function distPointToSegLine(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y)
+  return Math.abs(dx * (a.y - p.y) - dy * (a.x - p.x)) / len
+}
+
 describe('chamferCutLineCornersInSeamAllowance', () => {
   it('ohne NZ bleibt cutLine unverändert (4 Segmente)', () => {
     const cut = square(100)
@@ -42,52 +53,57 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
     expect(out).toHaveLength(4)
   })
 
-  it('Rechteck mit NZ 10 mm: 8 Segmente (4 Kanten + 4 Chamfers), Naht unverändert', () => {
-    const seam = square(100)
-    // Außenkontur 10 mm größer (vereinfacht als 120er Quadrat)
-    const cut = square(120)
+  it('Rechteck mit NZ 10 mm: Fase geht durch Naht-Ecke (maximal)', () => {
+    // Konzentrisch: Naht 10…110, Schnitt 0…120 → SA 10 mm
+    const seam = square(100, 10)
+    const cut = square(120, 0)
     const piece = basePiece(cut, seam, 10)
     const out = chamferCutLineCornersInSeamAllowance(piece)
     expect(out.length).toBe(8)
-    // Erste Kante (unten) wurde an beiden Enden um 10 mm gekürzt → Länge 100
-    const bottom = out[0]
-    expect(bottom.type).toBe('line')
-    if (bottom.type === 'line') {
-      expect(curveSegmentArcLength(bottom, 0, 1)).toBeCloseTo(100, 0)
+    // Untere Kante: von (20,0) bis (100,0) → Länge 80 (Trim je 20 mm = 2×SA)
+    const bottom = out.find(
+      (c) =>
+        c.type === 'line' &&
+        Math.abs(c.start.y) < 1e-6 &&
+        Math.abs(c.end.y) < 1e-6 &&
+        Math.min(c.start.x, c.end.x) > 15
+    )
+    expect(bottom).toBeTruthy()
+    if (bottom && bottom.type === 'line') {
+      expect(curveSegmentArcLength(bottom, 0, 1)).toBeCloseTo(80, 0)
     }
-    // Erster Chamfer ist eine Diagonale ~14.14 mm
-    const chamfer = out[1]
-    expect(chamfer.type).toBe('line')
-    if (chamfer.type === 'line') {
-      expect(curveSegmentArcLength(chamfer, 0, 1)).toBeCloseTo(Math.SQRT2 * 10, 0)
+    // Fase durch Naht-Ecke (10,10), Länge 20√2
+    const chamfer = out.find(
+      (c) =>
+        c.type === 'line' &&
+        distPointToSegLine({ x: 10, y: 10 }, c.start, c.end) < 0.05 &&
+        curveSegmentArcLength(c, 0, 1) > 20
+    )
+    expect(chamfer).toBeTruthy()
+    if (chamfer && chamfer.type === 'line') {
+      expect(curveSegmentArcLength(chamfer, 0, 1)).toBeCloseTo(Math.SQRT2 * 20, 0)
     }
   })
 
   it('weiche Ecke wird nicht abgeschrägt', () => {
-    const cut = square(120)
-    const piece = basePiece(cut, square(100), 10)
+    const cut = square(120, 0)
+    const piece = basePiece(cut, square(100, 10), 10)
     piece.softVertices = [0, 1, 2, 3]
     const out = chamferCutLineCornersInSeamAllowance(piece)
     expect(out).toHaveLength(4)
   })
 
   it('tessellierte Kurve: Zwischenpunkte nicht chamfern, NZ bleibt erhalten', () => {
-    // Außenkontur: drei gerade Kanten + eine in viele kurze Segmente zerlegte „Kurve“ (wie Clipper-Offset)
-    const seam = square(100)
+    const seam = square(100, 10)
     const cut: Curve[] = []
-    // unten
     cut.push({ type: 'line', start: { x: 0, y: 0 }, end: { x: 120, y: 0 } })
-    // rechts
     cut.push({ type: 'line', start: { x: 120, y: 0 }, end: { x: 120, y: 120 } })
-    // oben
     cut.push({ type: 'line', start: { x: 120, y: 120 }, end: { x: 0, y: 120 } })
-    // links: konvexe Tessellation (ausbauchend), viele fast-kollineare Punkte
     const leftPts: { x: number; y: number }[] = []
     const steps = 12
     for (let i = 0; i <= steps; i++) {
       const t = i / steps
       const y = 120 - t * 120
-      // Ausbauchung nach links (x negativ relativ zu 0)
       const bulge = 15 * Math.sin(Math.PI * t)
       leftPts.push({ x: -bulge, y })
     }
@@ -96,9 +112,8 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
     }
     const piece = basePiece(cut, seam, 10)
     const out = chamferCutLineCornersInSeamAllowance(piece)
-    // Nur die 4 echten Ecken bekommen Chamfers → +4 Segmente, Tessellationspunkte bleiben
-    expect(out.length).toBe(cut.length + 4)
-    // Mittelpunkt der tessellierten linken Kante sollte noch deutlich außerhalb der Naht liegen (NZ)
+    // Tessellationspunkte auf der Kurvenmitte bleiben; Ecken bekommen Fasen (Segmentzahl kann sinken)
+    expect(out.length).toBeGreaterThanOrEqual(8)
     const midLeft = out.find(
       (c) =>
         c.type === 'line' &&
@@ -110,5 +125,10 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
     if (midLeft && midLeft.type === 'line') {
       expect(Math.min(midLeft.start.x, midLeft.end.x)).toBeLessThan(-5)
     }
+    // Fase an (0,0) geht durch Naht-Ecke (10,10)
+    const cornerChamfer = out.find(
+      (c) => c.type === 'line' && distPointToSegLine({ x: 10, y: 10 }, c.start, c.end) < 0.1
+    )
+    expect(cornerChamfer).toBeTruthy()
   })
 })
