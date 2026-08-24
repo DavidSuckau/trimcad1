@@ -16,9 +16,9 @@ const SCALE = 100000
  */
 export const CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET = 3
 
-/** Clipper1 = Default (stabil im Produkt); Clipper2 opt-in hinter Flag. */
+/** Clipper2 = Default (sync TS-Port); Clipper1 nur noch als Fallback per Flag. */
 export type OffsetEngine = 'clipper1' | 'clipper2'
-export const DEFAULT_OFFSET_ENGINE: OffsetEngine = 'clipper1'
+export const DEFAULT_OFFSET_ENGINE: OffsetEngine = 'clipper2'
 
 type IntPoint = { X: number; Y: number }
 
@@ -45,7 +45,7 @@ export type OffsetOptions = {
    * Douglas-Peucker auf der Schnittkontur unterdrückt, damit Tangentialität und Radius nicht verwischt werden.
    */
   cutCornerFillet?: boolean
-  /** Offset-Backend; Default Clipper1. Clipper2 nur explizit (A/B, Experimente). */
+  /** Offset-Backend; Default Clipper2. Optional `offsetEngine: 'clipper1'` als Fallback. */
   offsetEngine?: OffsetEngine
 }
 
@@ -155,7 +155,7 @@ export type ClipperOffsetClosedResult = {
 
 /**
  * Clipper-Offset einer geschlossenen Kontur; liefert Segmentanzahl der Lösung für Validierung (Seam-as-Master).
- * Default: Clipper1. Optional `options.offsetEngine: 'clipper2'` (sync TS-Port, kein WASM).
+ * Default: Clipper2 (clipper2-ts). Optional `options.offsetEngine: 'clipper1'`.
  */
 export function clipperOffsetClosedPolygon(
   curves: Curve[],
@@ -188,7 +188,7 @@ export function clipperOffsetClosedPolygon(
         : options?.joinType === 'square'
           ? Clipper2JoinType.Square
           : Clipper2JoinType.Round
-    const miterLimit = options?.miterLimit ?? 2
+    const miterLimit = options?.miterLimit ?? CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET
     const solution = inflatePaths([pts.map((p) => ({ x: p.x, y: p.y }))], deltaMm, jt, Clipper2EndType.Polygon, miterLimit)
     solutionPathCount = solution.length
     if (solution.length === 0 || !solution[0] || solution[0].length < 2) {
@@ -252,7 +252,7 @@ function signedAreaOfRing(pts: { x: number; y: number }[]): number {
 
 /**
  * Offset a closed path by delta mm (positive = outward).
- * Uses clipper-lib; curves are flattened to line segments.
+ * Uses Clipper2 (Default) bzw. Clipper1; Kurven werden zu Liniensegmenten abgetastet.
  * Default join type is round (besser für Textil-Schnittmuster).
  */
 export function offsetCurves(curves: Curve[], deltaMm: number, options?: OffsetOptions): Curve[] {
