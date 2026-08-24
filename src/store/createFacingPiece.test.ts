@@ -126,4 +126,15 @@ describe('createFacingPiece', () => {
     expect(childAfter.material).toBe('Futterstoff')
     expect(childAfter.facingParentId).toBe('parent')
   })
+
+  it('erlaubt Laufrichtung an der Kaschierung und behält sie beim Sync', () => {
+    const childId = useStore.getState().createFacingPiece('parent')!
+    const grain = { start: { x: 10, y: 10 }, end: { x: 10, y: 90 } }
+    useStore.getState().setGrainLine(childId, grain)
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.grainLine).toEqual(grain)
+
+    useStore.getState().updateVertex('parent', 0, { x: -15, y: -5 })
+    const childAfter = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
+    expect(childAfter.grainLine).toEqual(grain)
+  })
 })

@@ -260,7 +260,6 @@ const FACING_GEOMETRY_UPDATE_KEYS: (keyof PatternPiece)[] = [
   'softVertices',
   'softVerticesMaster',
   'roundedCorners',
-  'grainLine',
   'cutLineDeviatesFromSeamAllowanceOffset',
   'symmetryConstraint',
 ]
@@ -4070,18 +4069,14 @@ export const useStore = create<Store>()(
     get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),
 
   setGrainLine: (pieceId, line) =>
-    set((s) => {
-      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
-      if (facingBlock) return facingBlock
-      return {
+    set((s) => ({
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) =>
           p.id === pieceId ? { ...p, grainLine: line } : p
         ),
       },
-    }
-    }),
+    })),
 
   materializeMissingGrainLines: () =>
     set((s) => {

@@ -192,7 +192,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Kaschierung erzeugen',
     description:
-      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt ein abhängiges Kaschierungsteil neben dem Mutterteil. Die Schnittkontur erhält an scharfen Ecken Chamfers maximal bis zum Naht-Eckpunkt; die Nahtlinie bleibt eckig. Die Kaschierung wird nur von der Mutter synchronisiert – Kontur, Kerben und Internals sind dort nicht manuell editierbar (Position/Drehung und Material schon). Aus einer Kaschierung kann keine weitere erzeugt werden; Löschen der Mutter entfernt auch die Kaschierung.',
+      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt ein abhängiges Kaschierungsteil neben dem Mutterteil. Die Schnittkontur erhält an scharfen Ecken Chamfers maximal bis zum Naht-Eckpunkt; die Nahtlinie bleibt eckig. Die Kaschierung wird nur von der Mutter synchronisiert – Kontur, Kerben und Internals sind dort nicht manuell editierbar (Position/Drehung, Material und Laufrichtung schon; Laufrichtung im Layout-Modus verschieben). Aus einer Kaschierung kann keine weitere erzeugt werden; Löschen der Mutter entfernt auch die Kaschierung.',
     access: 'Laufrichtungspfeil anfahren → Leertaste → Kaschierung erzeugen',
     shortcut: 'Leertaste',
   },
