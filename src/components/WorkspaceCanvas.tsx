@@ -1355,9 +1355,13 @@ const PieceGroup = memo(function PieceGroup({
   )
   const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
   const isDialogHighlightActive = isDialogHovered
-  const interiorFill =
-    isDialogHighlightActive
-      ? T.piece.fillDialogHover
+  const isFacing = piece.kind === 'facing' || !!piece.facingParentId
+  const facingHatchFill =
+    _themeMode === 'dark' ? 'url(#facing-hatch-dark)' : 'url(#facing-hatch-light)'
+  const interiorFill = isDialogHighlightActive
+    ? T.piece.fillDialogHover
+    : isFacing
+      ? facingHatchFill
       : piece.fillInterior != null && piece.fillInterior !== false
         ? typeof piece.fillInterior === 'string'
           ? piece.fillInterior
@@ -1365,7 +1369,8 @@ const PieceGroup = memo(function PieceGroup({
         : isSelected
           ? T.piece.fillSelected
           : T.piece.fill
-  const interiorFillOpacity = interiorFill === 'none' ? undefined : (isSelected && T.piece.fill === 'none' ? 1 : 0.82)
+  const interiorFillOpacity =
+    interiorFill === 'none' ? undefined : isFacing ? 1 : isSelected && T.piece.fill === 'none' ? 1 : 0.82
   const dashedFill = dashedStrokeOnly ? 'none' : interiorFill
   const dashedFillOpacity = dashedStrokeOnly ? undefined : interiorFillOpacity
   const solidFill = solidStrokeOnly ? 'none' : interiorFill
@@ -2025,6 +2030,7 @@ export function WorkspaceCanvas() {
     updateNotch,
     addDrill,
     addPiece,
+    createFacingPiece,
     setTool,
     insertPointOnCutLine,
     updateVertex,
@@ -2161,6 +2167,7 @@ export function WorkspaceCanvas() {
       updateNotch: s.updateNotch,
       addDrill: s.addDrill,
       addPiece: s.addPiece,
+      createFacingPiece: s.createFacingPiece,
       setTool: s.setTool,
       insertPointOnCutLine: s.insertPointOnCutLine,
       updateVertex: s.updateVertex,
@@ -7406,6 +7413,36 @@ export function WorkspaceCanvas() {
             >
               Teil kopieren
             </button>
+            {(() => {
+              const menuPiece = pieces.find((p) => p.id === grainContextMenu.pieceId)
+              const isFacingPiece = !!menuPiece && (menuPiece.kind === 'facing' || !!menuPiece.facingParentId)
+              if (isFacingPiece) return null
+              return (
+                <button
+                  type="button"
+                  title="Abhängiges Kaschierungsteil neben der Mutter anlegen (Kontur folgt der Mutter)"
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    padding: '6px 16px',
+                    background: 'none',
+                    border: 'none',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontSize: fs(13),
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                  onClick={() => {
+                    createFacingPiece(grainContextMenu.pieceId)
+                    setGrainContextMenu(null)
+                    setGrainFlipHover(null)
+                  }}
+                >
+                  Kaschierung erzeugen
+                </button>
+              )
+            })()}
             <button
               type="button"
               style={{
@@ -7669,6 +7706,28 @@ export function WorkspaceCanvas() {
             </g>
           </>
         )}
+        <defs>
+          <pattern
+            id="facing-hatch-light"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width="10" height="10" fill="#e8d4bc" />
+            <path d="M0 0 H10" stroke="#9a6b3f" strokeWidth="2.2" opacity="0.55" />
+          </pattern>
+          <pattern
+            id="facing-hatch-dark"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width="10" height="10" fill="#3d3228" />
+            <path d="M0 0 H10" stroke="#c4a882" strokeWidth="2.2" opacity="0.5" />
+          </pattern>
+        </defs>
         <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>
           {imageDigitizeSession &&
             imageDigitizeSession.imageDataUrl &&

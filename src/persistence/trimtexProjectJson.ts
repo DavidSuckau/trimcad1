@@ -270,6 +270,14 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
         keepSide,
       }
     })(),
+    ...(() => {
+      const parentId = (raw as { facingParentId?: unknown }).facingParentId
+      const kind = (raw as { kind?: unknown }).kind
+      const out: { facingParentId?: string; kind?: 'facing' } = {}
+      if (typeof parentId === 'string' && parentId.length > 0) out.facingParentId = parentId
+      if (kind === 'facing') out.kind = 'facing'
+      return out
+    })(),
   }
   return applySharpCornerPromotion(base)
 }

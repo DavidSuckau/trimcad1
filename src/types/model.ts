@@ -175,6 +175,13 @@ export type PatternPiece = {
    * Bei Konturänderungen wird die Vorlagen-Halbebene gespiegelt und beide Seiten synchron gehalten.
    */
   symmetryConstraint?: PieceSymmetryConstraint
+  /**
+   * Wenn gesetzt: dieses Teil ist eine **Kaschierung** (Tochter) des Mutterteils mit dieser ID.
+   * Geometrie wird aus der Mutter abgeleitet (inkl. Cut-Eckenabschrägung in der Nahtzugabe).
+   */
+  facingParentId?: string
+  /** Semantik des Teils; `facing` = Kaschierung / Beleg. */
+  kind?: 'facing'
 }
 
 export type ViewState = {
