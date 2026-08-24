@@ -70,4 +70,45 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
     const out = chamferCutLineCornersInSeamAllowance(piece)
     expect(out).toHaveLength(4)
   })
+
+  it('tessellierte Kurve: Zwischenpunkte nicht chamfern, NZ bleibt erhalten', () => {
+    // Außenkontur: drei gerade Kanten + eine in viele kurze Segmente zerlegte „Kurve“ (wie Clipper-Offset)
+    const seam = square(100)
+    const cut: Curve[] = []
+    // unten
+    cut.push({ type: 'line', start: { x: 0, y: 0 }, end: { x: 120, y: 0 } })
+    // rechts
+    cut.push({ type: 'line', start: { x: 120, y: 0 }, end: { x: 120, y: 120 } })
+    // oben
+    cut.push({ type: 'line', start: { x: 120, y: 120 }, end: { x: 0, y: 120 } })
+    // links: konvexe Tessellation (ausbauchend), viele fast-kollineare Punkte
+    const leftPts: { x: number; y: number }[] = []
+    const steps = 12
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const y = 120 - t * 120
+      // Ausbauchung nach links (x negativ relativ zu 0)
+      const bulge = 15 * Math.sin(Math.PI * t)
+      leftPts.push({ x: -bulge, y })
+    }
+    for (let i = 0; i < leftPts.length - 1; i++) {
+      cut.push({ type: 'line', start: { ...leftPts[i] }, end: { ...leftPts[i + 1] } })
+    }
+    const piece = basePiece(cut, seam, 10)
+    const out = chamferCutLineCornersInSeamAllowance(piece)
+    // Nur die 4 echten Ecken bekommen Chamfers → +4 Segmente, Tessellationspunkte bleiben
+    expect(out.length).toBe(cut.length + 4)
+    // Mittelpunkt der tessellierten linken Kante sollte noch deutlich außerhalb der Naht liegen (NZ)
+    const midLeft = out.find(
+      (c) =>
+        c.type === 'line' &&
+        Math.abs((c.start.y + c.end.y) / 2 - 60) < 8 &&
+        c.start.x < 5 &&
+        c.end.x < 5
+    )
+    expect(midLeft).toBeTruthy()
+    if (midLeft && midLeft.type === 'line') {
+      expect(Math.min(midLeft.start.x, midLeft.end.x)).toBeLessThan(-5)
+    }
+  })
 })

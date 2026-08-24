@@ -2,9 +2,15 @@ import type { Curve, PatternPiece, Point } from '../types/model'
 import { bezierAt, curveSegmentArcLength, splitBezierAt } from './curveToPath'
 import { getEffectiveSoftVerticesCut } from './seamUtils'
 import { getAllowanceForCurveIndex } from './edgeEnumeration'
+import { interiorAngleAtVertexDegrees } from './softVertexPromotion'
 
 const MIN_CHAMFER_MM = 0.5
 const EDGE_FRAC = 0.45
+/**
+ * Nur echte Knicke chamfern. Tessellationspunkte entlang einer Kurve (Clipper-Offset)
+ * sind nahezu kollinear (~180°) und würden sonst die gesamte Nahtzugabe „auffressen“.
+ */
+const MAX_INTERIOR_DEG_FOR_CHAMFER = 165
 
 function cloneCurve(c: Curve): Curve {
   if (c.type === 'line') {
@@ -111,6 +117,9 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
 
   for (let i = 0; i < n; i++) {
     if (soft.has(i)) continue
+    const interiorDeg = interiorAngleAtVertexDegrees(cut, i)
+    // Nahezu gestreckt (Tessellation auf Kurven) → kein Chamfer
+    if (interiorDeg == null || interiorDeg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
     const inCi = (i - 1 + n) % n
     const outCi = i
     const incoming = cut[inCi]
