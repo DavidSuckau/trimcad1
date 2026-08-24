@@ -56,6 +56,23 @@ describe('facing SA after parent-like rebuild', () => {
     for (const d of dists) expect(d).toBeGreaterThan(7)
   })
 
+  it('Chamfer bleibt nach Mutter-Edit (kein Rollback an Kantenmitte)', () => {
+    const editedSeam: Curve[] = [
+      { type: 'line', start: { x: -15, y: -5 }, end: { x: 90, y: 10 } },
+      { type: 'line', start: { x: 90, y: 10 }, end: { x: 110, y: 105 } },
+      { type: 'line', start: { x: 110, y: 105 }, end: { x: 10, y: 90 } },
+      { type: 'line', start: { x: 10, y: 90 }, end: { x: -15, y: -5 } },
+    ]
+    const draft = base(editedSeam, [])
+    const derived = deriveCutLineForPiece(draft, editedSeam, 10)
+    expect(derived.ok).toBe(true)
+    if (!derived.ok) return
+    const parent = { ...draft, cutLine: derived.cutLine }
+    const facing = buildFacingGeometryFromParent(parent)
+    expect(chamferCollapsesSeamAllowance(editedSeam, derived.cutLine, facing.cutLine, 10)).toBe(false)
+    expect(facing.cutLine.length).toBeGreaterThanOrEqual(8)
+  })
+
   it('chamferCollapsesSeamAllowance erkennt Einbruch pro Probe', () => {
     const cutOk: Curve[] = [
       { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },

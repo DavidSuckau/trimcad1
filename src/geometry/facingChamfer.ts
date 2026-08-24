@@ -68,7 +68,7 @@ function bestSharpCutCornerForSeamVertex(
   expectedSaMm: number,
 ): { index: number; dist: number; C: Point } | null {
   if (cut.length < 3) return null
-  const minDist = Math.max(MIN_CHAMFER_MM, expectedSaMm * 0.45)
+  const minDist = Math.max(MIN_CHAMFER_MM, expectedSaMm * 0.35)
   let best: { index: number; dist: number; C: Point; saErr: number; angle: number } | null = null
   for (let i = 0; i < cut.length; i++) {
     if (softCut.has(i)) continue
@@ -162,6 +162,23 @@ function pointBackFromEnd(a: Point, b: Point, trimMm: number): Point {
   return add(a, scale(sub(b, a), t))
 }
 
+/** Kantenlänge ab Ecke — bei kurzen Tessellations-Stücken nächste Segmente mitzählen. */
+function edgeLenFromCorner(ring: Point[], cornerIdx: number, direction: -1 | 1, minAccum = 0): number {
+  const n = ring.length
+  let total = 0
+  let i = cornerIdx
+  for (let step = 0; step < 12; step++) {
+    const a = ring[i]!
+    const nextI = (i + direction + n) % n
+    if (nextI === cornerIdx && step > 0) break
+    const b = ring[nextI]!
+    total += dist(a, b)
+    i = nextI
+    if (total >= minAccum) break
+  }
+  return total
+}
+
 function maxTrimForEdge(edgeLen: number): number {
   if (edgeLen < MIN_CHAMFER_MM * 2) return 0
   const minFlat = Math.min(Math.max(MIN_EDGE_FLAT_MM, edgeLen * MIN_EDGE_FLAT_FRAC), edgeLen * 0.5)
@@ -182,8 +199,8 @@ function localChamferRingCorner(ring: Point[], cornerIdx: number, S: Point): Poi
   const nVec = sub(C, S)
   if (Math.hypot(nVec.x, nVec.y) < MIN_CHAMFER_MM) return null
 
-  const lenPrev = dist(prev, C)
-  const lenNext = dist(C, next)
+  const lenPrev = Math.max(dist(prev, C), edgeLenFromCorner(ring, cornerIdx, -1, MIN_CHAMFER_MM))
+  const lenNext = Math.max(dist(C, next), edgeLenFromCorner(ring, cornerIdx, 1, MIN_CHAMFER_MM))
   const maxPrev = maxTrimForEdge(lenPrev)
   const maxNext = maxTrimForEdge(lenNext)
   if (maxPrev < MIN_CHAMFER_MM || maxNext < MIN_CHAMFER_MM) return null
@@ -191,7 +208,7 @@ function localChamferRingCorner(ring: Point[], cornerIdx: number, S: Point): Poi
   // Zu kurze Kanten relativ zur Fase: lieber keine Fase als NZ-Kollaps beim Sync nach Parent-Edit
   const minEdge = Math.min(lenPrev, lenNext)
   const depth = Math.hypot(nVec.x, nVec.y)
-  if (minEdge < depth * 1.25) return null
+  if (minEdge < depth * 1.05) return null
 
   // Ideal: Fase durch Naht-Ecke S
   const hitPrev = hitPlaneOnSegment(prev, C, S, nVec)

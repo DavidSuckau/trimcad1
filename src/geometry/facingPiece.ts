@@ -40,6 +40,24 @@ function cloneCircles(circles: PatternPiece['internalCircles']): PatternPiece['i
 }
 
 /**
+ * Abstand Naht→Schnitt an der **Kantenmitte** (eine Probe pro Naht-Segment).
+ * Für Chamfer-Rollback: Ecken-Proben würden absichtlich kleiner werden.
+ */
+export function seamToCutMidEdgeDistances(seam: Curve[], cut: Curve[]): number[] {
+  const out: number[] = []
+  if (cut.length < 3) return out
+  for (const c of seam) {
+    const pt =
+      c.type === 'line'
+        ? { x: (c.start.x + c.end.x) / 2, y: (c.start.y + c.end.y) / 2 }
+        : bezierAt(c, 0.5)
+    const d = nearestCurveIndexAndPoint(pt, cut)?.distance
+    if (d != null) out.push(d)
+  }
+  return out
+}
+
+/**
  * Abstände Naht→Schnitt entlang jeder Naht-Kurve (mehrere Proben, nicht nur Mitte).
  * So fällt „NZ verschwindet zum Teil“ auf einer Kante auf.
  */
@@ -65,7 +83,7 @@ export function seamToCutSampleDistances(seam: Curve[], cut: Curve[], samplesPer
   return out
 }
 
-/** true, wenn Chamfer die Kanten-NZ gegenüber der parallelen Cut-Kontur merklich auffrisst. */
+/** true, wenn Chamfer die parallele Kanten-NZ (Mitte je Kante) merklich auffrisst. */
 export function chamferCollapsesSeamAllowance(
   seam: Curve[],
   cutBefore: Curve[],
@@ -73,15 +91,21 @@ export function chamferCollapsesSeamAllowance(
   expectedSaMm: number
 ): boolean {
   if (seam.length < 3 || cutBefore.length < 3 || cutAfter.length < 3) return false
-  const before = seamToCutSampleDistances(seam, cutBefore)
-  const after = seamToCutSampleDistances(seam, cutAfter)
+  const before = seamToCutMidEdgeDistances(seam, cutBefore)
+  const after = seamToCutMidEdgeDistances(seam, cutAfter)
   if (before.length === 0 || after.length !== before.length) return true
 
   const floor = Math.max(1, expectedSaMm * 0.75)
   for (let i = 0; i < after.length; i++) {
-    // Absolut: NZ sollte nahe der erwarteten Zugabe bleiben (außer Kurven-Ausbuchtung > SA)
+    const edge = seam[i]
+    const isBezier = edge?.type === 'bezier'
+    if (isBezier) {
+      // Auf Wölbung kann NZ > SA sein; nur totaler Kollaps zählt
+      if (after[i] < Math.max(1, expectedSaMm * 0.35)) return true
+      if (before[i] > 2 && after[i] < before[i] * 0.65) return true
+      continue
+    }
     if (before[i] >= floor && after[i] < floor) return true
-    // Relativ pro Probe: kein starker Einbruch durch Fase
     if (before[i] > 1 && after[i] < before[i] * 0.85) return true
   }
   return false
