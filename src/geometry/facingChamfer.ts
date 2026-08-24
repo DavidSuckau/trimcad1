@@ -57,27 +57,49 @@ function scale(a: Point, s: number): Point {
 
 /**
  * Zur Naht-Ecke S die passende **scharfe** Cut-Ecke (Miter-Spitze).
- * Unter scharfen Kandidaten die **nächste** (nicht die fernste): bei großer NZ könnten
- * sonst Nachbar-Ecken in Reichweite liegen und die Fase die NZ abschneiden.
+ * Bei Clipper-Offset auf Kurven liegen Tessellations-Knicke oft näher an S als die echte
+ * Miter-Ecke (~NZ-Abstand) — deshalb Kandidat mit Abstand ≈ expectedSa bevorzugen.
  */
 function bestSharpCutCornerForSeamVertex(
   cut: Curve[],
   S: Point,
   maxPairDist: number,
-  softCut: Set<number>
+  softCut: Set<number>,
+  expectedSaMm: number,
 ): { index: number; dist: number; C: Point } | null {
   if (cut.length < 3) return null
-  let best: { index: number; dist: number; C: Point } | null = null
+  const minDist = Math.max(MIN_CHAMFER_MM, expectedSaMm * 0.45)
+  let best: { index: number; dist: number; C: Point; saErr: number; angle: number } | null = null
   for (let i = 0; i < cut.length; i++) {
     if (softCut.has(i)) continue
     const C = vertexAt(cut, i)
     const d = Math.hypot(C.x - S.x, C.y - S.y)
-    if (d < MIN_CHAMFER_MM || d > maxPairDist) continue
+    if (d < minDist || d > maxPairDist) continue
     const interiorDeg = interiorAngleAtVertexDegrees(cut, i)
     if (interiorDeg == null || interiorDeg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
-    if (!best || d < best.dist) best = { index: i, dist: d, C }
+    const saErr = Math.abs(d - expectedSaMm)
+    if (
+      !best ||
+      saErr < best.saErr - 1e-6 ||
+      (Math.abs(saErr - best.saErr) < 1e-6 && interiorDeg < best.angle)
+    ) {
+      best = { index: i, dist: d, C, saErr, angle: interiorDeg }
+    }
   }
-  return best
+  return best ? { index: best.index, dist: best.dist, C: best.C } : null
+}
+
+function seamAllowanceAtVertex(piece: PatternPiece, seamIndex: number, seamLen: number): number {
+  const base = piece.seamAllowanceMm ?? 0
+  const edges = piece.edgeSeamAllowances
+  if (!edges?.length || seamLen < 1) return base
+  const prevEdge = (seamIndex - 1 + seamLen) % seamLen
+  let max = base
+  for (const ei of [prevEdge, seamIndex]) {
+    const e = edges.find((x) => x.edgeIndex === ei)
+    if (e && Number.isFinite(e.allowanceMm)) max = Math.max(max, e.allowanceMm)
+  }
+  return max
 }
 
 function maxSeamAllowanceMm(piece: PatternPiece): number {
@@ -230,7 +252,8 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
     if (interiorDeg == null || interiorDeg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
 
     const S = vertexAt(seam, si)
-    const corner = bestSharpCutCornerForSeamVertex(cut, S, maxPairDist, softCut)
+    const saAtCorner = seamAllowanceAtVertex(piece, si, seam.length)
+    const corner = bestSharpCutCornerForSeamVertex(cut, S, maxPairDist, softCut, saAtCorner)
     if (!corner) continue
 
     let ringIndex = corner.index

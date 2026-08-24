@@ -114,6 +114,62 @@ function simplifyPoints(pts: Point[], tolerance: number): Point[] {
   return [first, last]
 }
 
+/** Nach Clipper2-Offset: Mikro-Knicke auf Kurvenabschnitten entfernen, echte Miter-Ecken behalten. */
+const CLIPPER2_MICRO_MERGE_MM = 0.045
+/** Winkel < dieser Schwelle = echte Ecke → nie zusammenlegen. */
+const CLIPPER2_MICRO_MERGE_MAX_CORNER_ANGLE_DEG = 160
+/** Winkel > dieser Schwelle (fast gerade) → Punkt darf zusammengelegt werden. */
+const CLIPPER2_MICRO_MERGE_MIN_ANGLE_DEG = 168
+
+/**
+ * Entfernt fast kollineare Zwischenpunkte auf geschlossenen Ringen (typisch Clipper2-Offset auf Bézier).
+ * Echte Ecken (spitzer Winkel) bleiben erhalten — anders als Douglas-Peucker mit großer Toleranz.
+ */
+function mergeNearCollinearClosedPolygon(
+  pts: Point[],
+  distTolMm: number,
+  minStraightAngleDeg: number = CLIPPER2_MICRO_MERGE_MIN_ANGLE_DEG,
+): Point[] {
+  if (pts.length <= 3 || distTolMm <= 0) return pts
+  let ring = [...pts]
+  let changed = true
+  while (changed && ring.length > 3) {
+    changed = false
+    for (let i = 0; i < ring.length; i++) {
+      const prev = ring[(i - 1 + ring.length) % ring.length]!
+      const cur = ring[i]!
+      const next = ring[(i + 1) % ring.length]!
+      const dx = next.x - prev.x
+      const dy = next.y - prev.y
+      const lenSq = dx * dx + dy * dy
+      let dist: number
+      if (lenSq < 1e-12) {
+        dist = Math.hypot(cur.x - prev.x, cur.y - prev.y)
+      } else {
+        const t = ((cur.x - prev.x) * dx + (cur.y - prev.y) * dy) / lenSq
+        const px = prev.x + t * dx
+        const py = prev.y + t * dy
+        dist = Math.hypot(cur.x - px, cur.y - py)
+      }
+      const v1x = prev.x - cur.x
+      const v1y = prev.y - cur.y
+      const v2x = next.x - cur.x
+      const v2y = next.y - cur.y
+      const l1 = Math.hypot(v1x, v1y) || 1
+      const l2 = Math.hypot(v2x, v2y) || 1
+      const dot = Math.max(-1, Math.min(1, (v1x / l1) * (v2x / l2) + (v1y / l1) * (v2y / l2)))
+      const angleDeg = (Math.acos(dot) * 180) / Math.PI
+      if (angleDeg < CLIPPER2_MICRO_MERGE_MAX_CORNER_ANGLE_DEG) continue
+      if (dist <= distTolMm && angleDeg >= minStraightAngleDeg) {
+        ring.splice(i, 1)
+        changed = true
+        break
+      }
+    }
+  }
+  return ring.length >= 3 ? ring : pts
+}
+
 /** Simplify a closed polygon: apply Douglas-Peucker on the ring. */
 function simplifyClosedPolygon(pts: Point[], tolerance: number): Point[] {
   if (pts.length <= 3) return pts
@@ -189,7 +245,17 @@ export function clipperOffsetClosedPolygon(
           ? Clipper2JoinType.Square
           : Clipper2JoinType.Round
     const miterLimit = options?.miterLimit ?? CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET
-    const solution = inflatePaths([pts.map((p) => ({ x: p.x, y: p.y }))], deltaMm, jt, Clipper2EndType.Polygon, miterLimit)
+    const path64 = pts.map((p) => ({
+      x: Math.round(p.x * SCALE),
+      y: Math.round(p.y * SCALE),
+    }))
+    const solution = inflatePaths(
+      [path64],
+      deltaMm * SCALE,
+      jt,
+      Clipper2EndType.Polygon,
+      miterLimit,
+    )
     solutionPathCount = solution.length
     if (solution.length === 0 || !solution[0] || solution[0].length < 2) {
       return { lineCurves: [], solutionPathCount }
@@ -205,7 +271,8 @@ export function clipperOffsetClosedPolygon(
         bestArea = a
       }
     }
-    outPts = best.map((p) => ({ x: p.x, y: p.y }))
+    outPts = best.map((p) => ({ x: p.x / SCALE, y: p.y / SCALE }))
+    outPts = mergeNearCollinearClosedPolygon(outPts, CLIPPER2_MICRO_MERGE_MM)
   } else {
     const path = pts.map(toIntPoint)
     const co = new ClipperLib.ClipperOffset()
