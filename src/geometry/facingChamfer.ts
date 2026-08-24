@@ -83,7 +83,9 @@ function bestSharpCutCornerForSeamVertex(
 function maxSeamAllowanceMm(piece: PatternPiece): number {
   let max = piece.seamAllowanceMm ?? 0
   for (const e of piece.edgeSeamAllowances ?? []) {
-    if (typeof e.mm === 'number' && Number.isFinite(e.mm)) max = Math.max(max, e.mm)
+    if (typeof e.allowanceMm === 'number' && Number.isFinite(e.allowanceMm)) {
+      max = Math.max(max, e.allowanceMm)
+    }
   }
   return max
 }

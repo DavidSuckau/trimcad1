@@ -379,7 +379,8 @@ function intersectOutwardRayWithCut(
   preferT?: number,
 ): Point | null {
   const want = preferT ?? (minT + maxT) / 2
-  let best: { point: Point; score: number } | null = null
+  let bestPoint: Point | null = null
+  let bestScore = Infinity
 
   const considerSeg = (a: Point, b: Point) => {
     const dx = b.x - a.x
@@ -393,7 +394,10 @@ function intersectOutwardRayWithCut(
     if (tRay < minT || tRay > maxT || tSeg < -1e-9 || tSeg > 1 + 1e-9) return
     const point = { x: origin.x + nx * tRay, y: origin.y + ny * tRay }
     const score = Math.abs(tRay - want)
-    if (!best || score < best.score) best = { point, score }
+    if (score < bestScore) {
+      bestScore = score
+      bestPoint = point
+    }
   }
 
   for (const c of cutLine) {
@@ -409,7 +413,7 @@ function intersectOutwardRayWithCut(
       }
     }
   }
-  return best?.point ?? null
+  return bestPoint
 }
 
 /**
