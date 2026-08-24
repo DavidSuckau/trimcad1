@@ -664,6 +664,31 @@ export function offsetSegmentPoints(
   }
 }
 
+/**
+ * Parallele zum Segment als eigene Kurve (interne Linie): Linie oder Bézier,
+ * je nach Quellsegment. Abstand = Außen-Offset wie {@link offsetSegmentPoints}.
+ */
+export function parallelCurveFromSegment(
+  curves: Curve[],
+  curveIndex: number,
+  deltaMm: number
+): Curve | null {
+  if (curveIndex < 0 || curveIndex >= curves.length) return null
+  const src = curves[curveIndex]
+  const pts = offsetSegmentPoints(curves, curveIndex, deltaMm)
+  if (!pts) return null
+  if (src.type === 'bezier' && pts.cp1 && pts.cp2) {
+    return {
+      type: 'bezier',
+      start: pts.start,
+      end: pts.end,
+      cp1: pts.cp1,
+      cp2: pts.cp2,
+    }
+  }
+  return { type: 'line', start: pts.start, end: pts.end }
+}
+
 // ---------------------------------------------------------------------------
 // Variable offset: per-segment allowance with miter intersection at corners
 // ---------------------------------------------------------------------------

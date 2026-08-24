@@ -1,4 +1,4 @@
-import type { PatternPiece, SeamAssignment } from '../types/model'
+import type { PatternPiece, Point, SeamAssignment } from '../types/model'
 import { isInternalSeamAssignment } from './internalSeamAssignment'
 import {
   bestSeamSubSegmentPairing,
@@ -6,6 +6,7 @@ import {
   getNotchesOnEdgeInRange,
   getSubSegments,
   resolvedSeamAssignmentCurveIndices,
+  type SeamSubSegmentPairing,
 } from './seamUtils'
 
 /** Mindestabweichung eines Subsegments (mm), ab der der Anpassungsdialog erscheint. */
@@ -139,6 +140,69 @@ export function evaluateSeamAdjustment(
     diffs,
     canAdjust: diffs.length > 0,
     maxMismatchMm: pairing.maxSegmentMismatchMm,
+  }
+}
+
+export type SeamAssignmentDisplayMetrics = {
+  lenA: number
+  lenB: number
+  diffMm: number
+  notchCountA: number
+  notchCountB: number
+  notchMismatch: boolean
+  subPairing: SeamSubSegmentPairing | null
+  subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null
+  subSegMismatch: boolean
+}
+
+/** Längen- und Kerben-Metriken für die Nahtzuordnungs-Anzeige (mit Notch-Range). */
+export function getSeamAssignmentDisplayMetrics(
+  assignment: SeamAssignment,
+  pieceA: PatternPiece,
+  pieceB: PatternPiece,
+): SeamAssignmentDisplayMetrics | null {
+  if (isInternalSeamAssignment(assignment)) return null
+
+  const idxA = resolvedSeamAssignmentCurveIndices(pieceA, assignment.curveIndicesA)
+  const idxB = resolvedSeamAssignmentCurveIndices(pieceB, assignment.curveIndicesB)
+  if (idxA.length === 0 || idxB.length === 0) return null
+
+  const lenA = edgeLengthInNotchRange(pieceA, idxA, assignment.notchRangeA)
+  const lenB = edgeLengthInNotchRange(pieceB, idxB, assignment.notchRangeB)
+  const notchCountA = getNotchesOnEdgeInRange(pieceA, idxA, assignment.notchRangeA).length
+  const notchCountB = getNotchesOnEdgeInRange(pieceB, idxB, assignment.notchRangeB).length
+  const notchMismatch = notchCountA !== notchCountB
+  const subsA = getSubSegments(pieceA, idxA, undefined, assignment.notchRangeA)
+  const subsB = getSubSegments(pieceB, idxB, undefined, assignment.notchRangeB)
+  const subPairing = bestSeamSubSegmentPairing(subsA, subsB)
+
+  let subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null = null
+  if (!notchMismatch && subPairing && subsA.length >= 2) {
+    const rev = subPairing.reverseB
+    subDiffs = subsA.map((sa, i) => {
+      const sb = rev ? subsB[subsB.length - 1 - i] : subsB[i]
+      return {
+        lenA: sa.length,
+        lenB: sb.length,
+        midA: sa.midpoint,
+        midB: sb.midpoint,
+      }
+    })
+  }
+
+  const subSegMismatch =
+    !notchMismatch && subPairing != null && subsA.length >= 2 && subPairing.maxSegmentMismatchMm >= SEAM_ADJUSTMENT_MISMATCH_TOLERANCE_MM
+
+  return {
+    lenA,
+    lenB,
+    diffMm: Math.abs(lenA - lenB),
+    notchCountA,
+    notchCountB,
+    notchMismatch,
+    subPairing,
+    subDiffs,
+    subSegMismatch,
   }
 }
 

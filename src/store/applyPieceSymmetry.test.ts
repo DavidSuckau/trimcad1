@@ -45,6 +45,11 @@ describe('applyPieceSymmetry', () => {
     useStore.getState().applyPieceSymmetry('p1', { x: 50, y: 0 }, { x: 50, y: 100 }, 'left')
     const p = useStore.getState().workspace.pieces[0]
     expect(p.cutLine.length).toBeGreaterThanOrEqual(3)
+    expect(p.symmetryConstraint).toEqual({
+      axisA: { x: 50, y: 0 },
+      axisB: { x: 50, y: 100 },
+      keepSide: 'left',
+    })
     expect(useStore.getState().pieceSymmetryState).toBeNull()
   })
 

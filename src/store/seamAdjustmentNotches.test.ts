@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
 import { getNotchPositionAndAngle } from '../geometry/notchOnCurve'
+import { evaluateSeamAdjustment } from '../geometry/seamAdjustmentCheck'
+import { materializeNotchAtEdgeArcLength } from '../geometry/seamUtils'
 import type { Workspace, Curve } from '../types/model'
 
 function square(size: number): Curve[] {
@@ -273,5 +275,96 @@ describe('adjustSeamNotches', () => {
     expect(Math.min(p1.x, p2.x)).toBeCloseTo(20, 3)
     expect(Math.max(p1.x, p2.x)).toBeCloseTo(70, 3)
     expect(st.seamAdjustmentDialog).toBeNull()
+  })
+
+  it('gleicht bei Nahtzugabe + Bézier exakt an und öffnet Dialog nicht erneut', () => {
+    const seamLine: Curve[] = [
+      { type: 'bezier', start: { x: 0, y: 0 }, cp1: { x: 30, y: 40 }, cp2: { x: 70, y: -40 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 50 } },
+      { type: 'line', start: { x: 100, y: 50 }, end: { x: 0, y: 50 } },
+      { type: 'line', start: { x: 0, y: 50 }, end: { x: 0, y: 0 } },
+    ]
+    const cutLine: Curve[] = [
+      { type: 'bezier', start: { x: 0, y: -10 }, cp1: { x: 25, y: 50 }, cp2: { x: 75, y: -50 }, end: { x: 100, y: -10 } },
+      { type: 'line', start: { x: 100, y: -10 }, end: { x: 110, y: 50 } },
+      { type: 'line', start: { x: 110, y: 50 }, end: { x: -10, y: 50 } },
+      { type: 'line', start: { x: -10, y: 50 }, end: { x: 0, y: -10 } },
+    ]
+    const base = {
+      drills: [] as [],
+      grainLine: null,
+      internalLines: [] as [],
+      internalCircles: [] as [],
+      layer: 'CUT' as const,
+      transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+      softVertices: [] as number[],
+      fillInterior: true,
+      material: '',
+      bomQuantity: 1,
+      seamAllowanceMm: 10,
+      cutLine,
+      seamLine,
+    }
+    const emptyA = { ...base, id: 'A', number: '001', name: 'Teil A', notches: [] as [] }
+    const emptyB = { ...base, id: 'B', number: '002', name: 'Teil B', notches: [] as [] }
+    const a1 = materializeNotchAtEdgeArcLength(
+      { id: 'a1', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      emptyA,
+      [0],
+      25,
+    )!
+    const a2 = materializeNotchAtEdgeArcLength(
+      { id: 'a2', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      emptyA,
+      [0],
+      70,
+    )!
+    const b1 = materializeNotchAtEdgeArcLength(
+      { id: 'b1', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      emptyB,
+      [0],
+      40,
+    )!
+    const b2 = materializeNotchAtEdgeArcLength(
+      { id: 'b2', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      emptyB,
+      [0],
+      55,
+    )!
+    const workspace: Workspace = {
+      id: 'ws-seam-allow',
+      name: 'Test',
+      pieces: [
+        { ...emptyA, notches: [a1, a2] },
+        { ...emptyB, notches: [b1, b2] },
+      ],
+      view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [
+        {
+          id: 's3',
+          pieceIdA: 'A',
+          curveIndicesA: [0],
+          clickedCurveA: 0,
+          pieceIdB: 'B',
+          curveIndicesB: [0],
+          clickedCurveB: 0,
+        },
+      ],
+    }
+    useStore.setState({ workspace, seamAdjustmentDialog: 's3', seamAdjustmentAcknowledged: {} })
+
+    useStore.getState().adjustSeamNotches('s3', 'A')
+    const after = useStore.getState()
+    expect(after.seamAdjustmentDialog).toBeNull()
+
+    const pieceA = after.workspace.pieces.find((p) => p.id === 'A')!
+    const pieceB = after.workspace.pieces.find((p) => p.id === 'B')!
+    const assignment = after.workspace.seamAssignments[0]!
+    const ev = evaluateSeamAdjustment(assignment, pieceA, pieceB)
+    expect(ev?.needsDialog).toBe(false)
+    expect(ev?.maxMismatchMm ?? 0).toBeLessThan(0.1)
+
+    useStore.getState().checkSeamAdjustment()
+    expect(useStore.getState().seamAdjustmentDialog).toBeNull()
   })
 })

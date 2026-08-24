@@ -27,7 +27,7 @@ import {
 } from '../geometry/measurementStations'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { internalLineEndpointsTouch } from '../geometry/internalLineJunctions'
-import { offsetSegmentPoints } from '../geometry/offset'
+import { parallelCurveFromSegment } from '../geometry/offset'
 import {
   getNotchPositionAndAngle,
   getNotchPositionAndAngleOnCutLine,
@@ -54,8 +54,6 @@ import {
 import { isPointInClosedCurves, isPointInPolygon } from '../geometry/pointInPolygon'
 import {
   getCornerRange,
-  countNotchesOnEdge,
-  getSubSegments,
   getSeamEdgeCurves,
   getCurvesForSeamEdge,
   deriveContourProfileBoundaryRangeAtArcLength,
@@ -65,10 +63,9 @@ import {
   mapMasterVertexIndexToCutVertexIndex,
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
-  bestSeamSubSegmentPairing,
   masterSoftVertexIndexSet,
 } from '../geometry/seamUtils'
-import { dragTriggersSeamAdjustmentCheck } from '../geometry/seamAdjustmentCheck'
+import { dragTriggersSeamAdjustmentCheck, getSeamAssignmentDisplayMetrics } from '../geometry/seamAdjustmentCheck'
 import {
   useSeamLineForVertexEditing,
   useSeamLineForPointCurveEditing,
@@ -103,6 +100,7 @@ import {
   crossZ,
   symmetryAxisEndpointsFromInternalCurve,
   symmetryAxisFromMasterEdgePick,
+  symmetryAxisClippedToPieceBounds,
   SYMMETRY_INTERNAL_HOVER_MM,
 } from '../symmetry'
 import { getPiecePivotLocal } from '../geometry/pieceTransform'
@@ -1470,6 +1468,25 @@ const PieceGroup = memo(function PieceGroup({
           />
         )
       })}
+      {piece.symmetryConstraint && (() => {
+        const { axisA, axisB } = piece.symmetryConstraint
+        const clipped = symmetryAxisClippedToPieceBounds(axisA, axisB, cutLine)
+        if (!clipped) return null
+        return (
+          <line
+            key="piece-symmetry-constraint-axis"
+            x1={clipped.p1.x}
+            y1={clipped.p1.y}
+            x2={clipped.p2.x}
+            y2={clipped.p2.y}
+            stroke="#0d9488"
+            strokeWidth={2.4 * ptPs}
+            strokeDasharray={scaleSvgDashArray('8 5', ptPs)}
+            pointerEvents="none"
+            opacity={0.9}
+          />
+        )
+      })()}
       {showNotches !== false && notches.map((n) => {
         if (notchIdBeingDragged === n.id) return null
         const depth = n.depth
@@ -6266,8 +6283,8 @@ export function WorkspaceCanvas() {
           const p = pieces.find((x) => x.id === segmentActive.pieceId)
           if (p) {
             const masterSeg = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-            const pts = offsetSegmentPoints(masterSeg, segmentActive.curveIndex, mm)
-            if (pts) addInternalLine(segmentActive.pieceId, { type: 'line', start: pts.start, end: pts.end })
+            const parallel = parallelCurveFromSegment(masterSeg, segmentActive.curveIndex, mm)
+            if (parallel) addInternalLine(segmentActive.pieceId, parallel)
           }
           closeSegmentMenu()
           e.preventDefault()
@@ -7609,10 +7626,8 @@ export function WorkspaceCanvas() {
               const p = pieces.find((x) => x.id === segmentForMenu.pieceId)
               if (p) {
                 const masterSeg = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-                const pts = offsetSegmentPoints(masterSeg, segmentForMenu.curveIndex, mm)
-                if (pts) {
-                  addInternalLine(segmentForMenu.pieceId, { type: 'line', start: pts.start, end: pts.end })
-                }
+                const parallel = parallelCurveFromSegment(masterSeg, segmentForMenu.curveIndex, mm)
+                if (parallel) addInternalLine(segmentForMenu.pieceId, parallel)
               }
               closeSegmentMenu()
             }}
@@ -9145,17 +9160,13 @@ export function WorkspaceCanvas() {
             const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
             if (!piece || !pieceSymmetryState.axisA) return null
             const wa = pieceLocalToWorld(pieceSymmetryState.axisA, piece)
-            const EXT = 80000
             if (pieceSymmetryState.phase === 'pickSide' && pieceSymmetryState.axisB) {
               const a = pieceSymmetryState.axisA
               const b = pieceSymmetryState.axisB
-              const dx = b.x - a.x
-              const dy = b.y - a.y
-              const d = Math.hypot(dx, dy) || 1
-              const ux = (dx / d) * EXT
-              const uy = (dy / d) * EXT
-              const w1 = pieceLocalToWorld({ x: a.x - ux, y: a.y - uy }, piece)
-              const w2 = pieceLocalToWorld({ x: b.x + ux, y: b.y + uy }, piece)
+              const clipped = symmetryAxisClippedToPieceBounds(a, b, piece.cutLine)
+              if (!clipped) return null
+              const w1 = pieceLocalToWorld(clipped.p1, piece)
+              const w2 = pieceLocalToWorld(clipped.p2, piece)
               return (
                 <line
                   key="piece-symmetry-axis"
@@ -9422,33 +9433,22 @@ export function WorkspaceCanvas() {
               const segsA = idxA.map((ci) => curvesA[ci]).filter(Boolean)
               const segsB = idxB.map((ci) => curvesB[ci]).filter(Boolean)
               if (segsA.length === 0 || segsB.length === 0) return null
-              const lenA = segsA.reduce((sum, s) => sum + curveSegmentArcLength(s, 0, 1), 0)
-              const lenB = segsB.reduce((sum, s) => sum + curveSegmentArcLength(s, 0, 1), 0)
-              const diffMm = Math.abs(lenA - lenB)
+
+              const metrics = getSeamAssignmentDisplayMetrics(a, pieceA, pieceB)
+              if (!metrics) return null
+
+              const {
+                diffMm,
+                notchCountA,
+                notchCountB,
+                notchMismatch,
+                subPairing,
+                subDiffs,
+                subSegMismatch,
+              } = metrics
               const showLengthDiff = diffMm >= 0.1
-              const notchCountA = countNotchesOnEdge(pieceA, idxA)
-              const notchCountB = countNotchesOnEdge(pieceB, idxB)
-              const notchMismatch = notchCountA !== notchCountB
-              const subsA = getSubSegments(pieceA, idxA)
-              const subsB = getSubSegments(pieceB, idxB)
-              const subPairing = bestSeamSubSegmentPairing(subsA, subsB)
-              let subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null = null
-              if (!notchMismatch && subPairing && subsA.length >= 2) {
-                const rev = subPairing.reverseB
-                subDiffs = subsA.map((sa, i) => {
-                  const sb = rev ? subsB[subsB.length - 1 - i] : subsB[i]
-                  return {
-                    lenA: sa.length,
-                    lenB: sb.length,
-                    midA: pieceLocalToWorld(sa.midpoint, pieceA),
-                    midB: pieceLocalToWorld(sb.midpoint, pieceB),
-                  }
-                })
-              }
-              const subSegMismatch =
-                !notchMismatch && subPairing && subsA.length >= 2 && subPairing.maxSegmentMismatchMm >= 0.1
-              const midResultA = pointAtPathLength(segsA, lenA / 2)
-              const midResultB = pointAtPathLength(segsB, lenB / 2)
+              const midResultA = pointAtPathLength(segsA, metrics.lenA / 2)
+              const midResultB = pointAtPathLength(segsB, metrics.lenB / 2)
               const midALocal = midResultA ? midResultA.point : curveMidpoint(segsA[Math.floor(segsA.length / 2)])
               const midBLocal = midResultB ? midResultB.point : curveMidpoint(segsB[Math.floor(segsB.length / 2)])
               const midA = pieceLocalToWorld(midALocal, pieceA)
@@ -9566,10 +9566,12 @@ export function WorkspaceCanvas() {
                     const color = isMatch ? T.accent.success : T.accent.error
                     const labelA = isMatch ? '✓' : `${sd.lenA.toFixed(1)}`
                     const labelB = isMatch ? '✓' : `${sd.lenB.toFixed(1)}`
+                    const subMidA = pieceLocalToWorld(sd.midA, pieceA)
+                    const subMidB = pieceLocalToWorld(sd.midB, pieceB)
                     return (
                       <g key={`sub-${i}`} pointerEvents="none">
-                        <text x={sd.midA.x} y={sd.midA.y - 5} textAnchor="middle" fontSize={ct(8)} fill={color} fontWeight="600" fontFamily="sans-serif">{labelA}</text>
-                        <text x={sd.midB.x} y={sd.midB.y - 5} textAnchor="middle" fontSize={ct(8)} fill={color} fontWeight="600" fontFamily="sans-serif">{labelB}</text>
+                        <text x={subMidA.x} y={subMidA.y - 5} textAnchor="middle" fontSize={ct(8)} fill={color} fontWeight="600" fontFamily="sans-serif">{labelA}</text>
+                        <text x={subMidB.x} y={subMidB.y - 5} textAnchor="middle" fontSize={ct(8)} fill={color} fontWeight="600" fontFamily="sans-serif">{labelB}</text>
                       </g>
                     )
                   })}

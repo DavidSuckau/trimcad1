@@ -1,7 +1,7 @@
-import type { PatternPiece, Point, Curve } from '../types/model'
-import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength } from './curveToPath'
+import type { PatternPiece, Point, Curve, Notch } from '../types/model'
+import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
-import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion } from './notchOnCurve'
+import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
 import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
 import { vertexPosition as vertexPositionOnClosedCurves } from './geometryConstants'
@@ -338,6 +338,106 @@ export function bestSeamSubSegmentPairing(
 }
 
 /**
+ * Ziel-Bogenpositionen für Kerben aus Referenz-Teilstreckenlängen (nicht aus gespeicherten arcLength-Werten).
+ * Skaliert bei leicht unterschiedlicher Gesamtlänge; berücksichtigt gegenläufige Kantenorientierung.
+ */
+export function buildNotchTargetArcPositionsFromSubLengths(
+  refSubLengths: number[],
+  tgtTotalLen: number,
+  reverse: boolean,
+): number[] | null {
+  const nNotches = refSubLengths.length - 1
+  if (nNotches <= 0 || tgtTotalLen <= 1e-9) return []
+
+  const refTotal = refSubLengths.reduce((a, b) => a + b, 0)
+  if (refTotal <= 1e-9) return null
+
+  const scale = tgtTotalLen / refTotal
+  const ordered = reverse ? [...refSubLengths].reverse() : refSubLengths
+
+  const positions: number[] = []
+  let acc = 0
+  for (let i = 0; i < nNotches; i++) {
+    acc += ordered[i] * scale
+    positions.push(acc)
+  }
+  return positions
+}
+
+/**
+ * Kerbe an einer Bogenlänge entlang der Naht-Master-Kante materialisieren.
+ * Bei Nahtzugabe: Fußpunkt auf der cutLine vom Master-Punkt (nicht gleicher t-Parameter) —
+ * sonst weicht die Rückprojektion Cut→Master auf Kurven oft um mm ab und die Nahtanpassung
+ * schließt nie exakt.
+ */
+export function materializeNotchAtEdgeArcLength(
+  notch: Notch,
+  piece: PatternPiece,
+  curveIndices: number[],
+  arcLengthMm: number,
+): Notch | null {
+  if (curveIndices.length === 0) return null
+
+  const master = getCurvesForSeamEdge(piece)
+  const edgeCurves = curveIndices.map((ci) => master[ci]).filter(Boolean)
+  const pt = pointAtPathLength(edgeCurves, arcLengthMm)
+  if (!pt) return null
+
+  const cutLine = piece.cutLine
+  if (master === cutLine || cutLine.length < 3 || piece.seamLine.length === 0) {
+    return materializeNotchAnchorsOnCutLine(
+      {
+        ...notch,
+        position: pt.point,
+        vertexIndex: undefined,
+        sNormalized: undefined,
+        arcLengthMm: undefined,
+      },
+      cutLine,
+    )
+  }
+
+  const cutTotal = totalPathLength(cutLine)
+  if (cutTotal <= 0) return null
+
+  // Bevorzugt denselben Segmentindex (parallele Offset-Topologie), sonst globale Näherung.
+  const globalCi = curveIndices[pt.curveIndex]
+  let cutCi: number
+  let cutT: number
+  let position: Point
+  if (globalCi != null && globalCi < cutLine.length) {
+    const onSeg = nearestCurveIndexAndPoint(pt.point, [cutLine[globalCi]])
+    if (onSeg) {
+      cutCi = globalCi
+      cutT = onSeg.t ?? 0
+      position = onSeg.point
+    } else {
+      const near = nearestCurveIndexAndPoint(pt.point, cutLine)
+      if (!near) return null
+      cutCi = near.curveIndex
+      cutT = near.t ?? 0
+      position = near.point
+    }
+  } else {
+    const near = nearestCurveIndexAndPoint(pt.point, cutLine)
+    if (!near) return null
+    cutCi = near.curveIndex
+    cutT = near.t ?? 0
+    position = near.point
+  }
+
+  const cutArc = pathLengthAt(cutLine, cutCi, cutT)
+  return {
+    ...notch,
+    vertexIndex: undefined,
+    sNormalized: cutArc / cutTotal,
+    arcLengthMm: cutArc,
+    position,
+    angle: outwardNormalAngleAt(cutLine, cutCi, cutT) + 180,
+  }
+}
+
+/**
  * Teilt eine Eckpunkt→Eckpunkt-Kante an den Notch-Positionen in Teilstrecken auf.
  * Rückgabe: je Teilstrecke die Länge (mm) und den Mittelpunkt (piece-local).
  */
@@ -368,15 +468,16 @@ export function getSubSegments(
   const notchesOnEdge = getNotchesOnEdge(piece, curveIndices, curvs)
   const startArc = range ? notchesOnEdge.find((n) => n.notchId === range.startNotchId)?.arcLength : undefined
   const endArc = range ? notchesOnEdge.find((n) => n.notchId === range.endNotchId)?.arcLength : undefined
+  const hasRange =
+    startArc != null && endArc != null && endArc > startArc + 1e-9
+  const rangeStart = hasRange ? startArc : 0
+  const rangeEnd = hasRange ? endArc : totalLen
   const notchPositions = notchesOnEdge
     .map((n) => n.arcLength)
-    .filter((L) => {
-      if (startArc == null || endArc == null || endArc <= startArc) return true
-      return L > startArc && L < endArc
-    })
+    .filter((L) => L > rangeStart + 1e-9 && L < rangeEnd - 1e-9)
 
   notchPositions.sort((a, b) => a - b)
-  const positions = [0, ...notchPositions, totalLen]
+  const positions = [rangeStart, ...notchPositions, rangeEnd]
 
   const pointAtArcLen = (L: number): Point => {
     let acc = 0

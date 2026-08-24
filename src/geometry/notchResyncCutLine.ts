@@ -1,11 +1,15 @@
 import type { Curve, Notch, Point } from '../types/model'
-import { outwardNormalAngleAt, totalPathLength, pointAtPathLength } from './curveToPath'
+import { bezierAt, outwardNormalAngleAt, totalPathLength, pointAtPathLength } from './curveToPath'
 import {
   getNotchPositionAndAngle,
   getNotchCutLineParameter,
   materializeNotchAnchorsOnCutLine,
 } from './notchOnCurve'
-import { isNotchOnInternalLine } from './notchOnInternalLine'
+import {
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+  resolveNotchInternalLineAnchor,
+} from './notchOnInternalLine'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { ENDPOINT_EPS_MM, CORNER_T_EPS } from './geometryConstants'
 
@@ -24,19 +28,53 @@ function isTopologyCompatibleForIndexT(oldCutLine: Curve[], newCutLine: Curve[])
   return true
 }
 
+function endpointsMatch(a: Point, b: Point): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) < ENDPOINT_EPS_MM
+}
+
+/**
+ * Gleiche logische Kante (beide Endpunkte), ggf. umgekehrte Laufrichtung.
+ * Ein gemeinsamer Eckpunkt allein reicht nicht — sonst springen Kerben nahe Ecken auf die Nachbarkante.
+ */
+function segmentsSameLogicalEdge(
+  a: Curve,
+  b: Curve
+): { ok: true; reversed: boolean } | { ok: false } {
+  if (endpointsMatch(a.start, b.start) && endpointsMatch(a.end, b.end)) {
+    return { ok: true, reversed: false }
+  }
+  if (endpointsMatch(a.start, b.end) && endpointsMatch(a.end, b.start)) {
+    return { ok: true, reversed: true }
+  }
+  return { ok: false }
+}
+
+/** Lockern: gemeinsamer Endpunkt (nur Seam-Fallback). */
 function segmentsShareEndpoint(a: Curve, b: Curve): boolean {
   return (
-    Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) < ENDPOINT_EPS_MM ||
-    Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y) < ENDPOINT_EPS_MM
+    endpointsMatch(a.start, b.start) ||
+    endpointsMatch(a.end, b.end) ||
+    endpointsMatch(a.start, b.end) ||
+    endpointsMatch(a.end, b.start)
   )
 }
 
 /** Gleiche logische Kante: Start- und Endpunkt passen (z. B. Linie → degenerierte Bezier beim Kurvenpunkt-Tool). */
 function segmentsSameEndpoints(a: Curve, b: Curve): boolean {
-  return (
-    Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) < ENDPOINT_EPS_MM &&
-    Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y) < ENDPOINT_EPS_MM
-  )
+  return endpointsMatch(a.start, b.start) && endpointsMatch(a.end, b.end)
+}
+
+function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point | null {
+  if (curveIndex < 0 || curveIndex >= curves.length) return null
+  const c = curves[curveIndex]
+  const tt = Math.max(0, Math.min(1, t))
+  if (c.type === 'line') {
+    return {
+      x: c.start.x + tt * (c.end.x - c.start.x),
+      y: c.start.y + tt * (c.end.y - c.start.y),
+    }
+  }
+  return bezierAt(c, tt)
 }
 
 function projectOntoSingleSegment(pos: Point, curves: Curve[], ci: number): Nr | null {
@@ -79,24 +117,29 @@ export function tryAnchorFromScalar(notch: Notch, cutLine: Curve[]): Nr | null {
 
 type ResyncCandidate = { nr: Nr; priority: number }
 
-/** Wählt den Kandidaten mit kleinstem Sprung; bevorzugt Kandidaten unter `maxJump` in Prioritätsreihenfolge. */
+/** Wählt unter `maxJump` den Kandidaten mit kleinstem Abstand zu oldCanon (Priorität nur als Tie-Break). */
 function selectResyncAnchor(
   candidates: ResyncCandidate[],
   oldCanon: Point,
   maxJump: number
 ): Nr | null {
   if (candidates.length === 0) return null
-  const sorted = [...candidates].sort((a, b) => a.priority - b.priority)
-  for (const c of sorted) {
-    if (distMm(c.nr.point, oldCanon) <= maxJump) return c.nr
+  const within = candidates
+    .map((c) => ({ c, d: distMm(c.nr.point, oldCanon) }))
+    .filter((x) => x.d <= maxJump)
+  if (within.length > 0) {
+    within.sort((a, b) => a.d - b.d || a.c.priority - b.c.priority)
+    return within[0].c.nr
   }
-  let best = sorted[0].nr
+  let best = candidates[0].nr
   let bestD = distMm(best.point, oldCanon)
-  for (let i = 1; i < sorted.length; i++) {
-    const d = distMm(sorted[i].nr.point, oldCanon)
-    if (d < bestD) {
+  let bestPri = candidates[0].priority
+  for (let i = 1; i < candidates.length; i++) {
+    const d = distMm(candidates[i].nr.point, oldCanon)
+    if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && candidates[i].priority < bestPri)) {
       bestD = d
-      best = sorted[i].nr
+      best = candidates[i].nr
+      bestPri = candidates[i].priority
     }
   }
   return best
@@ -114,20 +157,23 @@ function collectResyncCandidates(
 
   if (topoCompat && oldParam != null && oldParam.curveIndex >= 0 && oldParam.curveIndex < newCutLine.length) {
     const ci = oldParam.curveIndex
-    if (segmentsShareEndpoint(oldCutLine[ci], newCutLine[ci])) {
-      const seg = projectOntoSingleSegment(oldCanon, newCutLine, ci)
-      if (seg) candidates.push({ nr: seg, priority: 0 })
+    const edge = segmentsSameLogicalEdge(oldCutLine[ci], newCutLine[ci])
+    if (edge.ok) {
+      const t = edge.reversed ? 1 - oldParam.t : oldParam.t
+      const point = pointOnCurveAt(newCutLine, ci, t)
+      if (point) candidates.push({ nr: { point, curveIndex: ci, t }, priority: 0 })
     }
   }
 
+  // sNormalized/arcLength nur bei stabiler Topologie — sonst driftet der Konturstart (Clipper) und Kerben springen.
   const scalar = tryAnchorFromScalar(notch, newCutLine)
-  if (scalar) candidates.push({ nr: scalar, priority: topoCompat ? 1 : 0 })
+  if (scalar && topoCompat) candidates.push({ nr: scalar, priority: 1 })
 
   const nearest = nearestCurveIndexAndPoint(oldCanon, newCutLine)
   if (nearest) {
     candidates.push({
       nr: { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 },
-      priority: topoCompat ? 2 : 1,
+      priority: topoCompat ? 2 : 0,
     })
   }
 
@@ -164,6 +210,104 @@ export function resyncNotchesAfterCutLineRebuilt(
 
     return finalizeNotch(notch, nr, newCutLine)
   })
+}
+
+/**
+ * Nach geometrischem Spiegeln der Kontur: Kerben per Segmentindex+t auf die gespiegelte CutLine legen,
+ * danach ggf. auf eine neu abgeleitete CutLine resyncen (Sprungbegrenzung).
+ * Verhindert willkürliche Nearest-Point-Sprünge beim Flip.
+ */
+export function rematerializeNotchesAfterGeometricMirror(args: {
+  notches: Notch[]
+  oldCutLine: Curve[]
+  mirroredCutLine: Curve[]
+  finalCutLine: Curve[]
+  oldInternalLines: Curve[]
+  mirroredInternalLines: Curve[]
+  mapPoint: (p: Point) => Point
+}): Notch[] {
+  const {
+    notches,
+    oldCutLine,
+    mirroredCutLine,
+    finalCutLine,
+    oldInternalLines,
+    mirroredInternalLines,
+    mapPoint,
+  } = args
+
+  const onMirrored = notches.map((notch) => {
+    if (isNotchOnInternalLine(notch)) {
+      const anchor = resolveNotchInternalLineAnchor(notch, oldInternalLines)
+      if (
+        anchor &&
+        mirroredInternalLines.length === oldInternalLines.length &&
+        anchor.curveIndex < mirroredInternalLines.length
+      ) {
+        const point = pointOnCurveAt(mirroredInternalLines, anchor.curveIndex, anchor.t)
+        if (point) {
+          return (
+            materializeNotchAnchorsOnInternalLine(
+              {
+                ...notch,
+                position: point,
+                internalSNormalized: undefined,
+                internalArcLengthMm: undefined,
+              },
+              mirroredInternalLines
+            ) ?? notch
+          )
+        }
+      }
+      return (
+        materializeNotchAnchorsOnInternalLine(
+          {
+            ...notch,
+            position: mapPoint(notch.position),
+            internalSNormalized: undefined,
+            internalArcLengthMm: undefined,
+          },
+          mirroredInternalLines
+        ) ?? { ...notch, position: mapPoint(notch.position) }
+      )
+    }
+
+    const param = getNotchCutLineParameter(notch, oldCutLine)
+    if (
+      param &&
+      mirroredCutLine.length === oldCutLine.length &&
+      param.curveIndex < mirroredCutLine.length &&
+      oldCutLine[param.curveIndex]?.type === mirroredCutLine[param.curveIndex]?.type
+    ) {
+      const point = pointOnCurveAt(mirroredCutLine, param.curveIndex, param.t)
+      if (point) {
+        return finalizeNotch(notch, { point, curveIndex: param.curveIndex, t: param.t }, mirroredCutLine)
+      }
+    }
+
+    const mappedPos = mapPoint(getNotchPositionAndAngle(notch, oldCutLine).position)
+    return (
+      materializeNotchAnchorsOnCutLine(
+        {
+          ...notch,
+          position: mappedPos,
+          vertexIndex: undefined,
+          sNormalized: undefined,
+          arcLengthMm: undefined,
+        },
+        mirroredCutLine
+      ) ?? { ...notch, position: mappedPos, vertexIndex: undefined, sNormalized: undefined, arcLengthMm: undefined }
+    )
+  })
+
+  if (finalCutLine === mirroredCutLine) return onMirrored
+  if (
+    finalCutLine.length === mirroredCutLine.length &&
+    finalCutLine.every((c, i) => segmentsSameLogicalEdge(c, mirroredCutLine[i]).ok)
+  ) {
+    return onMirrored
+  }
+  return resyncNotchesAfterCutLineRebuilt(onMirrored, mirroredCutLine, finalCutLine)
 }
 
 /**
@@ -207,7 +351,9 @@ export function resyncNotchesViaSeamAnchor(
     }
 
     const ci = seamProj.curveIndex
-    if (ci >= newSeamLine.length || !segmentsShareEndpoint(oldSeamLine[ci], newSeamLine[ci])) {
+    const seamEdge =
+      ci < newSeamLine.length ? segmentsSameLogicalEdge(oldSeamLine[ci], newSeamLine[ci]) : ({ ok: false } as const)
+    if (!seamEdge.ok && (ci >= newSeamLine.length || !segmentsShareEndpoint(oldSeamLine[ci], newSeamLine[ci]))) {
       return scalarCut ? finalizeNotch(notch, scalarCut, newCutLine) : fallbackResync(notch, oldCanon, oldCutLine, newCutLine)
     }
 

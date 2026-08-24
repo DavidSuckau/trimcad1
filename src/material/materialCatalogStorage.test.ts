@@ -48,8 +48,10 @@ describe('materialCatalogStorage', () => {
           grainDirection: 'kette',
           storageLocation: 'Regal A',
           quantityOnHand: 10,
+          projectName: 'Sommer 2026',
         },
       ],
+      projects: ['Sommer 2026', 'Winter'],
     }
     saveMaterialCatalog(file, storage)
     expect(loadMaterialCatalog(storage)).toEqual(file)
@@ -82,5 +84,37 @@ describe('materialCatalogStorage', () => {
     expect(loaded.rows[0]?.materialNumber).toBe('ALT-1')
     expect(loaded.rows[0]?.priceBasis).toBe('m2')
     expect(loaded.rows[0]?.rollWidthMm).toBeNull()
+    expect(loaded.rows[0]?.projectName).toBe('')
+  })
+
+  it('liest projectName und projects', () => {
+    storage.setItem(
+      MATERIAL_CATALOG_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        projects: ['Alpha'],
+        rows: [
+          {
+            id: 'x',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            materialNumber: 'M1',
+            supplierSku: '',
+            description: '',
+            supplierName: '',
+            purchasePrice: null,
+            priceBasis: 'm2',
+            category: '',
+            thicknessLabel: '',
+            grainDirection: 'frei',
+            storageLocation: '',
+            quantityOnHand: null,
+            projectName: 'Beta',
+          },
+        ],
+      }),
+    )
+    const loaded = loadMaterialCatalog(storage)
+    expect(loaded.projects).toEqual(['Alpha'])
+    expect(loaded.rows[0]?.projectName).toBe('Beta')
   })
 })

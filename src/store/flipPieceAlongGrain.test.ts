@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
 import { masterSoftVertexIndexSet } from '../geometry/seamUtils'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
+import { getNotchPositionAndAngle } from '../geometry/notchOnCurve'
 import type { Workspace, Curve } from '../types/model'
 
 const square = (size: number): Curve[] => [
@@ -119,5 +120,45 @@ describe('flipPieceAlongGrain', () => {
     const after = useStore.getState().workspace.pieces[0]
     expect(after.notches.length).toBe(1)
     expect(after.notches[0].position.x).toBeCloseTo(75, 0)
+  })
+
+  it('Notch nahe Ecke bleibt nach Flip auf der gespiegelten Kante (kein Sprung)', () => {
+    useStore.getState().addNotch('p1', {
+      id: 'n-corner',
+      position: { x: 5, y: 0 },
+      angle: -90,
+      type: 'single',
+      depth: 4,
+      width: 6,
+      sNormalized: 0.0125,
+      arcLengthMm: 5,
+    })
+    const before = useStore.getState().workspace.pieces[0]
+    const posBefore = before.notches[0].position
+    useStore.getState().flipPieceAlongGrain('p1')
+    const after = useStore.getState().workspace.pieces[0]
+    const posAfter = after.notches[0].position
+    expect(posAfter.x).toBeCloseTo(100 - posBefore.x, 3)
+    expect(posAfter.y).toBeCloseTo(posBefore.y, 3)
+  })
+
+  it('Notch bleibt bei Flip mit Nahtzugabe stabil (zweifacher Flip ≈ Identität)', () => {
+    useStore.getState().updatePiece('p1', { seamAllowanceMm: 10 })
+    useStore.getState().addNotch('p1', {
+      id: 'n-sa',
+      position: { x: 30, y: -10 },
+      angle: -90,
+      type: 'single',
+      depth: 4,
+      width: 6,
+    })
+    const before = useStore.getState().workspace.pieces[0]
+    const pos0 = getNotchPositionAndAngle(before.notches[0], before.cutLine).position
+    useStore.getState().flipPieceAlongGrain('p1')
+    useStore.getState().flipPieceAlongGrain('p1')
+    const after = useStore.getState().workspace.pieces[0]
+    const pos1 = getNotchPositionAndAngle(after.notches[0], after.cutLine).position
+    expect(pos1.x).toBeCloseTo(pos0.x, 1)
+    expect(pos1.y).toBeCloseTo(pos0.y, 1)
   })
 })

@@ -21,6 +21,7 @@ import { SeamAssignmentMetaModal } from './SeamAssignmentMetaModal'
 import { MassstabModal } from './MassstabModal'
 import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
+import { CONFIGURATOR_UI_ENABLED } from '../configurators/featureFlags'
 import { StuecklisteModal } from './StuecklisteModal'
 import { MaterialCatalogModal } from './MaterialCatalogModal'
 import { NestingModal } from './NestingModal'
@@ -750,6 +751,7 @@ export function Toolbar() {
                   </ul>
                 )}
               </li>
+              {CONFIGURATOR_UI_ENABLED && (
               <li
                 className="menubar-submenu-wrap"
                 onMouseEnter={() => setErzeugenSubmenu('konfigurator')}
@@ -816,6 +818,7 @@ export function Toolbar() {
                   </ul>
                 )}
               </li>
+              )}
             </ul>
           )}
         </div>
@@ -1399,8 +1402,12 @@ export function Toolbar() {
       <SeamAdjustmentModal />
       <SeamAssignmentMetaModal />
       <MassstabModal />
-      <ConfiguratorModal />
-      <RockGeneratorModal />
+      {CONFIGURATOR_UI_ENABLED && (
+        <>
+          <ConfiguratorModal />
+          <RockGeneratorModal />
+        </>
+      )}
       {nahtzugabeDialogPieceId && (() => {
         const dialogPiece = workspace.pieces.find((p) => p.id === nahtzugabeDialogPieceId)
         const hasExisting = dialogPiece?.seamAllowanceMm != null

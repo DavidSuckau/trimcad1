@@ -100,6 +100,14 @@ export type PatternPieceTransform = {
   pivotLocal?: Point
 }
 
+/** Persistierte Spiegelachse: Kontur bleibt symmetrisch, Bearbeitungen werden auf beide Seiten übertragen. */
+export type PieceSymmetryConstraint = {
+  axisA: Point
+  axisB: Point
+  /** Welche Halbebene als Vorlage beim erneuten Spiegeln dient. */
+  keepSide: 'left' | 'right'
+}
+
 export type PatternPiece = {
   id: string
   number: string
@@ -162,6 +170,11 @@ export type PatternPiece = {
   description?: string
   /** Stückzahl für BOM; ganzzahlig ≥ 1. */
   bomQuantity?: number
+  /**
+   * Aktive Teil-Symmetrie: Spiegelachse in Teilkoordinaten.
+   * Bei Konturänderungen wird die Vorlagen-Halbebene gespiegelt und beide Seiten synchron gehalten.
+   */
+  symmetryConstraint?: PieceSymmetryConstraint
 }
 
 export type ViewState = {

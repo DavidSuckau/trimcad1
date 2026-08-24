@@ -258,6 +258,18 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
     ...((raw as { cutLineDeviatesFromSeamAllowanceOffset?: unknown }).cutLineDeviatesFromSeamAllowanceOffset === true
       ? { cutLineDeviatesFromSeamAllowanceOffset: true as const }
       : {}),
+    symmetryConstraint: (() => {
+      const sc = (raw as { symmetryConstraint?: unknown }).symmetryConstraint
+      if (typeof sc !== 'object' || sc === null) return undefined
+      const o = sc as Record<string, unknown>
+      const keepSide = o.keepSide === 'left' || o.keepSide === 'right' ? o.keepSide : null
+      if (!keepSide || !isPoint(o.axisA) || !isPoint(o.axisB)) return undefined
+      return {
+        axisA: { ...(o.axisA as Point) },
+        axisB: { ...(o.axisB as Point) },
+        keepSide,
+      }
+    })(),
   }
   return applySharpCornerPromotion(base)
 }

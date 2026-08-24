@@ -20,11 +20,15 @@ export type MaterialCatalogRow = {
   grainDirection: GrainDirection
   storageLocation: string
   quantityOnHand: number | null
+  /** Optionales Projekt (Filter/Gruppierung in der Materialdatenbank). */
+  projectName: string
 }
 
 export type MaterialCatalogFile = {
   version: 1
   rows: MaterialCatalogRow[]
+  /** Benannte Projekte (auch ohne Materialzeilen); optional. */
+  projects?: string[]
 }
 
 export const MATERIAL_CATALOG_STORAGE_KEY = 'trimtex.materialCatalog.v1'
@@ -52,7 +56,25 @@ export function createEmptyMaterialCatalogRow(): MaterialCatalogRow {
     grainDirection: 'frei',
     storageLocation: '',
     quantityOnHand: null,
+    projectName: '',
   }
+}
+
+/** Alle Projektnamen aus expliziter Liste und Zeilen (sortiert, eindeutig). */
+export function collectMaterialCatalogProjectNames(
+  rows: MaterialCatalogRow[],
+  explicitProjects?: string[],
+): string[] {
+  const set = new Set<string>()
+  for (const p of explicitProjects ?? []) {
+    const t = p.trim()
+    if (t) set.add(t)
+  }
+  for (const r of rows) {
+    const t = r.projectName.trim()
+    if (t) set.add(t)
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, 'de'))
 }
 
 export function emptyMaterialCatalogFile(): MaterialCatalogFile {

@@ -41,16 +41,18 @@ import {
   joinBezierSegments,
   lineSegmentToCollinearBezier,
   adjustControlPointsForPointOnCurve,
-  pointAtPathLength,
 } from '../geometry/curveToPath'
 import {
   getSubSegments,
+  getNotchesOnEdge,
   getNotchesOnEdgeInRange,
   edgeTotalLength,
   edgeLengthInNotchRange,
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
   bestSeamSubSegmentPairing,
+  buildNotchTargetArcPositionsFromSubLengths,
+  materializeNotchAtEdgeArcLength,
   deriveNotchRoleRangeOnEdge,
   snapVertexToEdgeLength,
   SEAM_EDGE_LENGTH_SNAP_TOLERANCE_MM,
@@ -74,7 +76,7 @@ import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransfor
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
-import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner } from '../geometry/notchResyncCutLine'
+import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner, rematerializeNotchesAfterGeometricMirror } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
 import { withDefaultGrainLine } from '../geometry/grainArrowLayout'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
@@ -98,6 +100,14 @@ import {
 } from '../geometry/profileLengthFit'
 import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
 import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece'
+import {
+  finalizePieceContourEdit,
+  mapContourVertexEditForSymmetry,
+  mapCurveEditForSymmetry,
+  mirrorSymmetricContourPointInsert,
+  appendSymmetricMirroredNotches,
+  symmetryConstraintFromAxis,
+} from '../symmetry/reconcilePieceSymmetry'
 import type { PieceSymmetryKeepSide } from '../geometry/pieceSymmetry'
 import type { PieceSymmetryUiState } from '../symmetry/types'
 import { trimPieceCutLineByOtherPieceOverlap } from '../geometry/seamTrimByOverlap'
@@ -765,63 +775,6 @@ function generateId(): string {
   return Math.random().toString(36).slice(2, 12)
 }
 
-/**
- * Bestimmt ob zwei Nahtkanten physisch gegenläufig verlaufen (Start A ↔ Ende B),
- * indem die Kantenendpunkte in Weltkoordinaten verglichen werden.
- */
-function detectEdgeReverseOrientation(
-  refCurves: Curve[],
-  refTransform: PatternPiece['transform'],
-  tgtCurves: Curve[],
-  tgtTransform: PatternPiece['transform']
-): boolean {
-  if (refCurves.length === 0 || tgtCurves.length === 0) return false
-  const toWorld = (p: Point, t: PatternPiece['transform']): Point => {
-    let xx = p.x
-    const yy = p.y
-    if (t.mirrored) xx = -xx
-    const rad = (t.rotation * Math.PI) / 180
-    const cos = Math.cos(rad)
-    const sin = Math.sin(rad)
-    return { x: xx * cos - yy * sin + t.x, y: xx * sin + yy * cos + t.y }
-  }
-  const rS = toWorld(refCurves[0].start, refTransform)
-  const rE = toWorld(refCurves[refCurves.length - 1].end, refTransform)
-  const tS = toWorld(tgtCurves[0].start, tgtTransform)
-  const tE = toWorld(tgtCurves[tgtCurves.length - 1].end, tgtTransform)
-  const dSame = Math.hypot(rS.x - tS.x, rS.y - tS.y) + Math.hypot(rE.x - tE.x, rE.y - tE.y)
-  const dRev = Math.hypot(rS.x - tE.x, rS.y - tE.y) + Math.hypot(rE.x - tS.x, rE.y - tS.y)
-  return dRev < dSame
-}
-
-/**
- * Berechnet Ziel-Bogenpositionen auf der Zielkante aus der Referenzkante.
- * `reverse`: physische Orientierung — true wenn die Kanten gegenläufig sind
- * (Start der Ref-Kante nahe am Ende der Zielkante).
- */
-function buildNotchTargetArcPositions(
-  refArcs: number[],
-  refTotalLen: number,
-  _tgtArcs: number[],
-  tgtTotalLen: number,
-  reverse: boolean
-): number[] | null {
-  const n = refArcs.length
-  if (n === 0 || n !== _tgtArcs.length) return null
-  if (refTotalLen <= 1e-9 || tgtTotalLen <= 1e-9) return null
-
-  const refNorm = refArcs.map((v) => Math.max(0, Math.min(1, v / refTotalLen)))
-
-  let mapped: number[]
-  if (reverse) {
-    mapped = refNorm.map((v) => Math.max(0, Math.min(1, 1 - v))).reverse()
-  } else {
-    mapped = [...refNorm]
-  }
-
-  return mapped.map((v) => v * tgtTotalLen)
-}
-
 function curvesBounds(curves: Curve[]): { minX: number; maxX: number } | null {
   if (curves.length === 0) return null
   let minX = Infinity
@@ -883,11 +836,6 @@ function mirrorCurveAcrossAxis(c: Curve, axisA: Point, axisB: Point): Curve {
     cp1: mirrorPointAcrossAxis(c.cp1, axisA, axisB),
     cp2: mirrorPointAcrossAxis(c.cp2, axisA, axisB),
   }
-}
-
-function mirrorAngleAcrossAxisDeg(angleDeg: number, axisA: Point, axisB: Point): number {
-  const axisAngleDeg = (Math.atan2(axisB.y - axisA.y, axisB.x - axisA.x) * 180) / Math.PI
-  return 2 * axisAngleDeg - angleDeg
 }
 
 /** Wandelt Digitalisierungs-Nodes in eine geschlossene Curve[]-Kette um. */
@@ -1820,19 +1768,28 @@ export const useStore = create<Store>()(
       return
     }
 
-    const refTotalLen = edgeLengthInNotchRange(refPiece, refIndices, refRange)
     const tgtTotalLen = edgeLengthInNotchRange(tgtPiece, tgtIndices, tgtRange)
+    if (tgtIndices.length === 0 || tgtTotalLen <= 0) {
+      set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
+      return
+    }
 
-    const refMasterCurves = getCurvesForSeamEdge(refPiece)
-    const tgtMasterCurves = getCurvesForSeamEdge(tgtPiece)
-    const refSubCurves = refIndices.map((ci) => refMasterCurves[ci]).filter(Boolean)
-    const tgtSubCurves = tgtIndices.map((ci) => tgtMasterCurves[ci]).filter(Boolean)
-    if (tgtSubCurves.length === 0 || refSubCurves.length === 0) { set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null }); return }
+    // Gleiche Orientierung wie evaluateSeamAdjustment (Längenpaarung), nicht Welt-Endpunkt-Abstand.
+    const reverseOrientation = pairing.reverseB
 
-    const reverseOrientation = detectEdgeReverseOrientation(
-      refSubCurves, refPiece.transform,
-      tgtSubCurves, tgtPiece.transform
-    )
+    const allTgtNotches = getNotchesOnEdge(tgtPiece, tgtIndices)
+    const tgtRangeStartArc = tgtRange
+      ? allTgtNotches.find((n) => n.notchId === tgtRange.startNotchId)?.arcLength
+      : undefined
+    const tgtRangeEndArc = tgtRange
+      ? allTgtNotches.find((n) => n.notchId === tgtRange.endNotchId)?.arcLength
+      : undefined
+    const rangeOrigin =
+      tgtRangeStartArc != null &&
+      tgtRangeEndArc != null &&
+      tgtRangeEndArc > tgtRangeStartArc + 1e-9
+        ? tgtRangeStartArc
+        : 0
 
     const refNotches = getNotchesOnEdgeInRange(refPiece, refIndices, refRange)
     const tgtNotches = getNotchesOnEdgeInRange(tgtPiece, tgtIndices, tgtRange)
@@ -1840,17 +1797,16 @@ export const useStore = create<Store>()(
       set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
-    const targetArcPositions = buildNotchTargetArcPositions(
-      refNotches.map((x) => x.arcLength),
-      refTotalLen,
-      tgtNotches.map((x) => x.arcLength),
+    const relativeTargets = buildNotchTargetArcPositionsFromSubLengths(
+      refSubs.map((s) => s.length),
       tgtTotalLen,
-      reverseOrientation
+      reverseOrientation,
     )
-    if (!targetArcPositions || targetArcPositions.length !== tgtNotches.length) {
+    if (!relativeTargets || relativeTargets.length !== tgtNotches.length) {
       set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
+    const targetArcPositions = relativeTargets.map((p) => p + rangeOrigin)
 
     const needsMove = tgtNotches.some(
       (n, i) => Math.abs(n.arcLength - targetArcPositions[i]) > SEAM_ADJUSTMENT_NOTCH_ALIGNED_EPS_MM
@@ -1863,22 +1819,19 @@ export const useStore = create<Store>()(
 
     const targetNotches: { notchId: string; notch: Notch }[] = []
     for (let i = 0; i < tgtNotches.length; i++) {
-      const result = pointAtPathLength(tgtSubCurves, targetArcPositions[i])
-      if (!result) continue
       const notchId = tgtNotches[i].notchId
       const n0 = tgtPiece.notches.find((nn) => nn.id === notchId)
-      if (!n0) continue
-      // Beim Abstandsangleich muss der freie Cut-Anker vollständig neu materialisiert werden.
-      // Sonst behalten alte sNormalized/arcLengthMm Vorrang und die Kerbe "springt" nicht sichtbar um.
-      const materialized = materializeNotchAnchorsOnCutLine(
+      if (!n0 || i >= targetArcPositions.length) continue
+      const materialized = materializeNotchAtEdgeArcLength(
         {
           ...n0,
-          position: result.point,
           vertexIndex: undefined,
           sNormalized: undefined,
           arcLengthMm: undefined,
         },
-        tgtPiece.cutLine
+        tgtPiece,
+        tgtIndices,
+        targetArcPositions[i],
       )
       if (!materialized) continue
       targetNotches.push({ notchId, notch: materialized })
@@ -1887,7 +1840,6 @@ export const useStore = create<Store>()(
 
     const targetMap = new Map(targetNotches.map((tp) => [tp.notchId, tp.notch]))
 
-    get().acknowledgeSeamAdjustment(assignmentId)
     set((st) => {
       const piece = st.workspace.pieces.find((p) => p.id === tgtPieceId)
       if (!piece) return { seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null }
@@ -1907,6 +1859,8 @@ export const useStore = create<Store>()(
         },
       }
     })
+    // Fingerprint der *neuen* Geometrie merken — sonst öffnet sich der Dialog bei Restabweichung sofort wieder.
+    get().acknowledgeSeamAdjustment(assignmentId)
   },
 
   checkSeamAdjustment: () => {
@@ -2311,12 +2265,27 @@ export const useStore = create<Store>()(
             : 'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
         }
       }
+      if (piece.symmetryConstraint && !isNotchOnInternalLine(toAdd)) {
+        const mirroredOnly = appendSymmetricMirroredNotches(piece, toAdd)
+        if (mirroredOnly.length > piece.notches.length + 1) {
+          const mirrored = mirroredOnly[mirroredOnly.length - 1]!
+          if (!isNotchSpacingValidForCandidate({ ...piece, notches: [...piece.notches, toAdd] }, mirrored)) {
+            return {
+              ...s,
+              toastMessage:
+                'error: Zwischen zwei Kerben müssen mindestens 4 mm Abstand liegen (entlang der Schnittkontur).',
+            }
+          }
+        }
+      }
       return {
         workspace: {
           ...s.workspace,
-          pieces: s.workspace.pieces.map((p) =>
-            p.id === pieceId ? { ...p, notches: [...p.notches, toAdd] } : p
-          ),
+          pieces: s.workspace.pieces.map((p) => {
+            if (p.id !== pieceId) return p
+            const candidates = appendSymmetricMirroredNotches(p, toAdd)
+            return { ...p, notches: candidates }
+          }),
         },
       }
     }),
@@ -2764,9 +2733,25 @@ export const useStore = create<Store>()(
           seamAssignments: adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
           pieces: s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
+            const mappedInsert = mapCurveEditForSymmetry(p, curveIndex, point)
+            const editCurveIndex = mappedInsert.curveIndex
+            const editPoint = mappedInsert.point
             const master = seamPc ? p.seamLine : p.cutLine
-            if (curveIndex < 0 || curveIndex >= master.length) return p
-            const curve = master[curveIndex]
+            if (editCurveIndex < 0 || editCurveIndex >= master.length) return p
+            const curve = master[editCurveIndex]
+            const finishSymmetryInsert = (
+              out: PatternPiece,
+              insertedVertexIndex: number,
+              insertedPoint: Point
+            ): PatternPiece => {
+              if (!out.symmetryConstraint) return out
+              const mirrored = mirrorSymmetricContourPointInsert(out, insertedVertexIndex, insertedPoint)
+              if (!mirrored.ok) {
+                toastMessage = mirrored.toastMessage
+                return p
+              }
+              return mirrored.piece
+            }
             let newMaster: Curve[] | null = null
             if (curve.type === 'line') {
               // Robust gegenüber Klicks nahe Segment-Enden (t≈0/1): kein degenerierter Split.
@@ -2775,7 +2760,7 @@ export const useStore = create<Store>()(
               const tt = Number.isFinite(t) ? Math.min(1 - minT, Math.max(minT, t as number)) : null
               const splitPoint =
                 tt == null
-                  ? point
+                  ? editPoint
                   : {
                       x: curve.start.x + (curve.end.x - curve.start.x) * tt,
                       y: curve.start.y + (curve.end.y - curve.start.y) * tt,
@@ -2783,17 +2768,19 @@ export const useStore = create<Store>()(
               const seg1: Curve = { type: 'line', start: { ...curve.start }, end: { ...splitPoint } }
               const seg2: Curve = { type: 'line', start: { ...splitPoint }, end: { ...curve.end } }
               newMaster = [...master]
-              newMaster.splice(curveIndex, 1, seg1, seg2)
+              newMaster.splice(editCurveIndex, 1, seg1, seg2)
             } else if (curve.type === 'bezier' && t != null && t > 0 && t < 1) {
               const [seg1, seg2] = splitBezierAt(curve, t)
               newMaster = [...master]
-              newMaster.splice(curveIndex, 1, seg1, seg2)
+              newMaster.splice(editCurveIndex, 1, seg1, seg2)
             }
             if (!newMaster) return p
+            const insertedVertexIndex = editCurveIndex + 1
+            const insertedPoint = { ...newMaster[editCurveIndex].end }
 
             if (seamPc && p.seamAllowanceMm != null) {
               const seamLine = newMaster
-              const newMasterVi = curveIndex + 1
+              const newMasterVi = editCurveIndex + 1
               const softVerticesMaster = [
                 ...(p.softVerticesMaster ?? []).map((vi) => (vi >= newMasterVi ? vi + 1 : vi)),
                 newMasterVi,
@@ -2816,7 +2803,7 @@ export const useStore = create<Store>()(
               }
               const cutLine = derived.cutLine
               const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-              const insertedOnSeam = newMaster[curveIndex].end
+              const insertedOnSeam = newMaster[editCurveIndex].end
               const maxInsertDist = Math.max((p.seamAllowanceMm ?? 0) * 3, 20)
               const insertedCutVi = nearestCutVertexIndex(cutLine, insertedOnSeam, maxInsertDist)
               const softSet = new Set(remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices))
@@ -2824,35 +2811,43 @@ export const useStore = create<Store>()(
               const softVertices = [...softSet].sort((a, b) => a - b)
               inserted = true
               if (insertedCutVi == null) {
-                return {
-                  ...p,
-                  cutLine,
-                  seamLine,
-                  notches,
-                  softVertices,
-                  softVerticesMaster,
-                  roundedCorners,
-                  cutLineDeviatesFromSeamAllowanceOffset: false,
-                }
+                return finishSymmetryInsert(
+                  {
+                    ...p,
+                    cutLine,
+                    seamLine,
+                    notches,
+                    softVertices,
+                    softVerticesMaster,
+                    roundedCorners,
+                    cutLineDeviatesFromSeamAllowanceOffset: false,
+                  },
+                  insertedVertexIndex,
+                  insertedPoint
+                )
               }
-              return forceCutVertexSoftAfterInsert(
-                {
-                  ...p,
-                  cutLine,
-                  seamLine,
-                  notches,
-                  softVertices,
-                  softVerticesMaster,
-                  roundedCorners,
-                  cutLineDeviatesFromSeamAllowanceOffset: false,
-                },
-                insertedCutVi
+              return finishSymmetryInsert(
+                forceCutVertexSoftAfterInsert(
+                  {
+                    ...p,
+                    cutLine,
+                    seamLine,
+                    notches,
+                    softVertices,
+                    softVerticesMaster,
+                    roundedCorners,
+                    cutLineDeviatesFromSeamAllowanceOffset: false,
+                  },
+                  insertedCutVi
+                ),
+                insertedVertexIndex,
+                insertedPoint
               )
             }
 
             const cutLine = newMaster
             const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-            const newVertexIdx = curveIndex + 1
+            const newVertexIdx = insertedVertexIndex
             const softVertices = [
               ...(p.softVertices ?? []).map((vi) => (vi >= newVertexIdx ? vi + 1 : vi)),
               newVertexIdx,
@@ -2861,7 +2856,11 @@ export const useStore = create<Store>()(
               p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
             const roundedCorners = remapRoundedCornersOnVertexInsert(p.roundedCorners, newVertexIdx)
             inserted = true
-            return forceCutVertexSoftAfterInsert({ ...p, cutLine, seamLine, notches, softVertices, roundedCorners }, newVertexIdx)
+            return finishSymmetryInsert(
+              forceCutVertexSoftAfterInsert({ ...p, cutLine, seamLine, notches, softVertices, roundedCorners }, newVertexIdx),
+              insertedVertexIndex,
+              insertedPoint
+            )
           }),
         },
       }
@@ -2892,19 +2891,22 @@ export const useStore = create<Store>()(
             const useSeamMaster = useSeamLineForVertexEditing(p)
             const curves = useSeamMaster ? p.seamLine : p.cutLine
             if (p.id !== pieceId || curves.length === 0) return p
+            const mapped = mapContourVertexEditForSymmetry(p, vertexIndex, point)
+            const editVertexIndex = mapped.vertexIndex
+            const editPoint = mapped.point
             const n = curves.length
-            if (vertexIndex < 0 || vertexIndex >= n) return p
+            if (editVertexIndex < 0 || editVertexIndex >= n) return p
             const nextCurves = curves.map((c) =>
               c.type === 'line'
                 ? { type: 'line' as const, start: { ...c.start }, end: { ...c.end } }
                 : { type: 'bezier' as const, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
             )
-            if (vertexIndex === 0) {
-              nextCurves[0] = { ...nextCurves[0], start: point } as Curve
-              nextCurves[n - 1] = { ...nextCurves[n - 1], end: point } as Curve
+            if (editVertexIndex === 0) {
+              nextCurves[0] = { ...nextCurves[0], start: editPoint } as Curve
+              nextCurves[n - 1] = { ...nextCurves[n - 1], end: editPoint } as Curve
             } else {
-              nextCurves[vertexIndex - 1] = { ...nextCurves[vertexIndex - 1], end: point } as Curve
-              nextCurves[vertexIndex] = { ...nextCurves[vertexIndex], start: point } as Curve
+              nextCurves[editVertexIndex - 1] = { ...nextCurves[editVertexIndex - 1], end: editPoint } as Curve
+              nextCurves[editVertexIndex] = { ...nextCurves[editVertexIndex], start: editPoint } as Curve
             }
             const contourCheck = validateContourAfterVertexMove(nextCurves)
             if (!contourCheck.ok) {
@@ -2976,6 +2978,17 @@ export const useStore = create<Store>()(
               softVertices,
               ...(cutRebuiltFromSeam ? { cutLineDeviatesFromSeamAllowanceOffset: false as const } : {}),
             })
+            if (p.symmetryConstraint) {
+              const reconciled = finalizePieceContourEdit(promoted)
+              if (!reconciled.ok) {
+                toastMessage = reconciled.toastMessage
+                return p
+              }
+              if (p.id === pieceId) {
+                profileToast = formatProfileEdgeGeometryWarnings(p, reconciled.piece, profileList, profileList)
+              }
+              return reconciled.piece
+            }
             if (p.id === pieceId) {
               profileToast = formatProfileEdgeGeometryWarnings(p, promoted, profileList, profileList)
             }
@@ -3003,15 +3016,20 @@ export const useStore = create<Store>()(
         if (curveIndex < 0 || curveIndex >= target.length) return p
         const c = target[curveIndex]
         if (c.type !== 'line') return p
+        const ref = { x: (c.start.x + c.end.x) / 2, y: (c.start.y + c.end.y) / 2 }
+        const mapped = mapCurveEditForSymmetry(p, curveIndex, ref)
+        const editCurveIndex = mapped.curveIndex
+        const editSeg = target[editCurveIndex]
+        if (!editSeg || editSeg.type !== 'line') return p
         const bezier: Curve = {
           type: 'bezier',
-          start: { ...c.start },
-          end: { ...c.end },
+          start: { ...editSeg.start },
+          end: { ...editSeg.end },
           cp1: { ...cp1 },
           cp2: { ...(cp2 ?? cp1) },
         }
         const next = [...target]
-        next[curveIndex] = bezier
+        next[editCurveIndex] = bezier
         const replaceBezierContourCheck = validateContourAfterVertexMove(next)
         if (!replaceBezierContourCheck.ok) {
           toastMessage = `warn:${replaceBezierContourCheck.message}`
@@ -3034,7 +3052,7 @@ export const useStore = create<Store>()(
           const cutLine = derived.cutLine
           const notches = resyncNotchesViaSeamAnchor(p.notches, p.cutLine, cutLine, p.seamLine, seamLine)
           const softVertices = remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices)
-          return applySharpCornerPromotion({
+          const promoted = applySharpCornerPromotion({
             ...p,
             cutLine,
             seamLine,
@@ -3042,13 +3060,31 @@ export const useStore = create<Store>()(
             softVertices,
             cutLineDeviatesFromSeamAllowanceOffset: false,
           })
+          if (p.symmetryConstraint) {
+            const reconciled = finalizePieceContourEdit(promoted)
+            if (!reconciled.ok) {
+              toastMessage = reconciled.toastMessage
+              return p
+            }
+            return reconciled.piece
+          }
+          return promoted
         }
         const cutLine = [...p.cutLine]
-        cutLine[curveIndex] = bezier
+        cutLine[editCurveIndex] = bezier
         const seamLine =
           p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine
         const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
-        return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
+        const promoted = applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
+        if (p.symmetryConstraint) {
+          const reconciled = finalizePieceContourEdit(promoted)
+          if (!reconciled.ok) {
+            toastMessage = reconciled.toastMessage
+            return p
+          }
+          return reconciled.piece
+        }
+        return promoted
       })
       const profileList = s.workspace.profileAssignments ?? []
       const oldP = s.workspace.pieces.find((x) => x.id === pieceId)
@@ -3070,12 +3106,15 @@ export const useStore = create<Store>()(
       let manualSeamTrimReset = false
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== pieceId) return p
+        const mappedCurve = mapCurveEditForSymmetry(p, curveIndex, newPoint)
+        const editCurveIndex = mappedCurve.curveIndex
+        const editPoint = mappedCurve.point
         const seamPc = useSeamLineForPointCurveEditing(p)
         const target = seamPc ? p.seamLine : p.cutLine
-        if (curveIndex < 0 || curveIndex >= target.length) return p
-        const c = target[curveIndex]
+        if (editCurveIndex < 0 || editCurveIndex >= target.length) return p
+        const c = target[editCurveIndex]
         if (c.type !== 'bezier') return p
-        const adjusted = adjustControlPointsForPointOnCurve(c, t, newPoint)
+        const adjusted = adjustControlPointsForPointOnCurve(c, t, editPoint)
         if (!adjusted) return p
         const bezier: Curve = {
           type: 'bezier',
@@ -3085,7 +3124,7 @@ export const useStore = create<Store>()(
           cp2: { ...adjusted.cp2 },
         }
         const next = [...target]
-        next[curveIndex] = bezier
+        next[editCurveIndex] = bezier
         const moveOnCurveContourCheck = validateContourAfterVertexMove(next)
         if (!moveOnCurveContourCheck.ok) {
           toastMessage = `warn:${moveOnCurveContourCheck.message}`
@@ -3112,7 +3151,7 @@ export const useStore = create<Store>()(
           const oldS = baseline ? baseline.seamLine ?? p.seamLine : p.seamLine
           const notches = resyncNotchesViaSeamAnchor(oldN, oldC, cutLine, oldS, seamLine)
           const softVertices = remapSoftVerticesToNewCutLine(p.cutLine, cutLine, p.softVertices)
-          return applySharpCornerPromotion({
+          const promotedSeam = applySharpCornerPromotion({
             ...p,
             cutLine,
             seamLine,
@@ -3120,16 +3159,34 @@ export const useStore = create<Store>()(
             softVertices,
             cutLineDeviatesFromSeamAllowanceOffset: false,
           })
+          if (p.symmetryConstraint) {
+            const reconciled = finalizePieceContourEdit(promotedSeam)
+            if (!reconciled.ok) {
+              toastMessage = reconciled.toastMessage
+              return p
+            }
+            return reconciled.piece
+          }
+          return promotedSeam
         }
         const cutLine = [...p.cutLine]
-        cutLine[curveIndex] = bezier
+        cutLine[editCurveIndex] = bezier
         const seamLine = skipSeamRecalc
           ? p.seamLine
           : (p.seamAllowanceMm != null && cutLine.length >= 3 ? offsetCurvesInwardForSeam(cutLine, p.seamAllowanceMm) : p.seamLine)
         const oldN = baseline ? baseline.notches : p.notches
         const oldC = baseline ? baseline.cutLine : p.cutLine
         const notches = resyncNotchesAfterCutLineRebuilt(oldN, oldC, cutLine)
-        return applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
+        const promotedMove = applySharpCornerPromotion({ ...p, cutLine, seamLine, notches })
+        if (p.symmetryConstraint) {
+          const reconciled = finalizePieceContourEdit(promotedMove)
+          if (!reconciled.ok) {
+            toastMessage = reconciled.toastMessage
+            return p
+          }
+          return reconciled.piece
+        }
+        return promotedMove
       })
       const profileListMove = s.workspace.profileAssignments ?? []
       const oldPmove = s.workspace.pieces.find((x) => x.id === pieceId)
@@ -3153,6 +3210,12 @@ export const useStore = create<Store>()(
       const master = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
       const oldN = master.length
       if (piece == null || vertexIndex < 0 || vertexIndex >= oldN) return s
+      const mappedRemove = mapContourVertexEditForSymmetry(
+        piece,
+        vertexIndex,
+        vertexIndex === 0 ? master[0].start : master[vertexIndex].start
+      )
+      const editVertexIndex = mappedRemove.vertexIndex
       let toastMessage: string | null = null
 
       const mergeContourRemoveVertex = (curves: Curve[], vi: number): Curve[] | null => {
@@ -3167,12 +3230,12 @@ export const useStore = create<Store>()(
       }
 
       if (piece && useSeamMaster && piece.seamAllowanceMm != null && master.length > 3) {
-        const merged = mergeContourRemoveVertex(master, vertexIndex)
+        const merged = mergeContourRemoveVertex(master, editVertexIndex)
         if (merged) {
           const tempSoftM = (piece.softVerticesMaster ?? [])
-            .filter((vi: number) => vi !== vertexIndex)
-            .map((vi: number) => (vi > vertexIndex ? vi - 1 : vi))
-          const tempRC = remapRoundedCornersOnVertexRemove(piece.roundedCorners, vertexIndex)
+            .filter((vi: number) => vi !== editVertexIndex)
+            .map((vi: number) => (vi > editVertexIndex ? vi - 1 : vi))
+          const tempRC = remapRoundedCornersOnVertexRemove(piece.roundedCorners, editVertexIndex)
           const tempPiece = {
             ...piece,
             seamLine: merged,
@@ -3192,13 +3255,13 @@ export const useStore = create<Store>()(
         const seamAllowance = p.seamAllowanceMm
         const seamMaster = useSeamLineForVertexEditing(p)
         const curves = seamMaster ? p.seamLine : p.cutLine
-        if (p.id !== pieceId || curves.length <= 3 || vertexIndex < 0 || vertexIndex >= curves.length) return p
-        const merged = mergeContourRemoveVertex(curves, vertexIndex)
+        if (p.id !== pieceId || curves.length <= 3 || editVertexIndex < 0 || editVertexIndex >= curves.length) return p
+        const merged = mergeContourRemoveVertex(curves, editVertexIndex)
         if (!merged) return p
         const softVerticesMaster = (p.softVerticesMaster ?? [])
-          .filter((vi) => vi !== vertexIndex)
-          .map((vi) => (vi > vertexIndex ? vi - 1 : vi))
-        const roundedCorners = remapRoundedCornersOnVertexRemove(p.roundedCorners, vertexIndex)
+          .filter((vi) => vi !== editVertexIndex)
+          .map((vi) => (vi > editVertexIndex ? vi - 1 : vi))
+        const roundedCorners = remapRoundedCornersOnVertexRemove(p.roundedCorners, editVertexIndex)
 
         let cutLine = p.cutLine
         let seamLine = p.seamLine
@@ -3234,7 +3297,16 @@ export const useStore = create<Store>()(
 
         const newPiece = { ...p, cutLine, seamLine, notches, softVertices, softVerticesMaster, roundedCorners }
         newPiece.edgeSeamAllowances = remapEdgeSeamAllowances(p, newPiece)
-        return applySharpCornerPromotion(newPiece)
+        const promoted = applySharpCornerPromotion(newPiece)
+        if (p.symmetryConstraint) {
+          const reconciled = finalizePieceContourEdit(promoted)
+          if (!reconciled.ok) {
+            toastMessage = reconciled.toastMessage
+            return p
+          }
+          return reconciled.piece
+        }
+        return promoted
       })
 
       const oldP = s.workspace.pieces.find((p) => p.id === pieceId)
@@ -3252,7 +3324,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          seamAssignments: oldN > 3 ? adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, vertexIndex, oldN) : s.workspace.seamAssignments,
+          seamAssignments: oldN > 3 ? adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, editVertexIndex, oldN) : s.workspace.seamAssignments,
           pieces: newPieces,
           profileAssignments,
         },
@@ -3584,40 +3656,36 @@ export const useStore = create<Store>()(
       const bounds = curvesBounds(piece.cutLine)
       if (!bounds) return s
       const cx = (bounds.minX + bounds.maxX) / 2
+      const oldCutLine = piece.cutLine
+      const oldInternalLines = piece.internalLines
+      const mirroredCutLine = oldCutLine.map((c) => mirrorCurve(c, cx))
       let cutLine: Curve[]
       let seamLine: Curve[]
       if (useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3) {
         seamLine = piece.seamLine.map((c) => mirrorCurve(c, cx))
         if (piece.cutLineDeviatesFromSeamAllowanceOffset === true) {
-          cutLine = piece.cutLine.map((c) => mirrorCurve(c, cx))
+          cutLine = mirroredCutLine
         } else {
           const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
-          cutLine = derived.ok ? derived.cutLine : piece.cutLine.map((c) => mirrorCurve(c, cx))
+          cutLine = derived.ok ? derived.cutLine : mirroredCutLine
         }
       } else {
-        cutLine = piece.cutLine.map((c) => mirrorCurve(c, cx))
+        cutLine = mirroredCutLine
         seamLine = piece.seamAllowanceMm != null && cutLine.length >= 3
           ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
           : []
       }
-      const mirroredNotches = piece.notches.map((n) => ({
-        ...n,
-        position: mirrorX(n.position, cx),
-        angle: 180 - n.angle,
-        sNormalized: undefined as number | undefined,
-        arcLengthMm: undefined as number | undefined,
-        ...(isNotchOnInternalLine(n)
-          ? { internalSNormalized: undefined as number | undefined, internalArcLengthMm: undefined as number | undefined }
-          : {}),
-      }))
-      const drills = piece.drills.map((d) => ({ ...d, center: mirrorX(d.center, cx) }))
-      const internalLines = piece.internalLines.map((c) => mirrorCurve(c, cx))
-      const notches = mirroredNotches.map((n) => {
-        if (isNotchOnInternalLine(n)) {
-          return materializeNotchAnchorsOnInternalLine(n, internalLines) ?? n
-        }
-        return materializeNotchAnchorsOnCutLine(n, cutLine) ?? n
+      const internalLines = oldInternalLines.map((c) => mirrorCurve(c, cx))
+      const notches = rematerializeNotchesAfterGeometricMirror({
+        notches: piece.notches,
+        oldCutLine,
+        mirroredCutLine,
+        finalCutLine: cutLine,
+        oldInternalLines,
+        mirroredInternalLines: internalLines,
+        mapPoint: (p) => mirrorX(p, cx),
       })
+      const drills = piece.drills.map((d) => ({ ...d, center: mirrorX(d.center, cx) }))
       const internalCircles = piece.internalCircles.map((ic) => ({
         ...ic,
         center: mirrorX(ic.center, cx),
@@ -3652,40 +3720,36 @@ export const useStore = create<Store>()(
       if (!piece || piece.cutLine.length < 3) return s
       const axisLen = Math.hypot(axisB.x - axisA.x, axisB.y - axisA.y)
       if (axisLen < 0.5) return { toastMessage: 'warn:Spiegelachse ist zu kurz.' }
+      const oldCutLine = piece.cutLine
+      const oldInternalLines = piece.internalLines
+      const mirroredCutLine = oldCutLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
       let cutLine: Curve[]
       let seamLine: Curve[]
       if (useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3) {
         seamLine = piece.seamLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
         if (piece.cutLineDeviatesFromSeamAllowanceOffset === true) {
-          cutLine = piece.cutLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+          cutLine = mirroredCutLine
         } else {
           const derived = deriveCutLineForPiece({ ...piece, seamLine }, seamLine, piece.seamAllowanceMm!)
-          cutLine = derived.ok ? derived.cutLine : piece.cutLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+          cutLine = derived.ok ? derived.cutLine : mirroredCutLine
         }
       } else {
-        cutLine = piece.cutLine.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+        cutLine = mirroredCutLine
         seamLine = piece.seamAllowanceMm != null && cutLine.length >= 3
           ? offsetCurvesInwardForSeam(cutLine, piece.seamAllowanceMm)
           : []
       }
-      const mirroredNotches = piece.notches.map((n) => ({
-        ...n,
-        position: mirrorPointAcrossAxis(n.position, axisA, axisB),
-        angle: mirrorAngleAcrossAxisDeg(n.angle, axisA, axisB),
-        sNormalized: undefined as number | undefined,
-        arcLengthMm: undefined as number | undefined,
-        ...(isNotchOnInternalLine(n)
-          ? { internalSNormalized: undefined as number | undefined, internalArcLengthMm: undefined as number | undefined }
-          : {}),
-      }))
-      const drills = piece.drills.map((d) => ({ ...d, center: mirrorPointAcrossAxis(d.center, axisA, axisB) }))
-      const internalLines = piece.internalLines.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
-      const notches = mirroredNotches.map((n) => {
-        if (isNotchOnInternalLine(n)) {
-          return materializeNotchAnchorsOnInternalLine(n, internalLines) ?? n
-        }
-        return materializeNotchAnchorsOnCutLine(n, cutLine) ?? n
+      const internalLines = oldInternalLines.map((c) => mirrorCurveAcrossAxis(c, axisA, axisB))
+      const notches = rematerializeNotchesAfterGeometricMirror({
+        notches: piece.notches,
+        oldCutLine,
+        mirroredCutLine,
+        finalCutLine: cutLine,
+        oldInternalLines,
+        mirroredInternalLines: internalLines,
+        mapPoint: (p) => mirrorPointAcrossAxis(p, axisA, axisB),
       })
+      const drills = piece.drills.map((d) => ({ ...d, center: mirrorPointAcrossAxis(d.center, axisA, axisB) }))
       const internalCircles = piece.internalCircles.map((ic) => ({
         ...ic,
         center: mirrorPointAcrossAxis(ic.center, axisA, axisB),
@@ -3723,10 +3787,13 @@ export const useStore = create<Store>()(
       if (!piece) return { toastMessage: 'warn:Teil nicht gefunden.' }
       const r = applyPieceSymmetryToPiece(piece, axisA, axisB, keepSide)
       if (!r.ok) return { toastMessage: r.toastMessage }
+      const symmetryConstraint = symmetryConstraintFromAxis(axisA, axisB, keepSide)
       return {
         workspace: {
           ...s.workspace,
-          pieces: s.workspace.pieces.map((p) => (p.id === pieceId ? r.piece : p)),
+          pieces: s.workspace.pieces.map((p) =>
+            p.id === pieceId ? { ...r.piece, symmetryConstraint } : p
+          ),
         },
         pieceSymmetryState: null,
         toastMessage: 'success:Teil symmetrisch gemacht.',

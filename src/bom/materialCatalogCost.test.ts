@@ -52,6 +52,7 @@ function row(partial: Partial<MaterialCatalogRow>): MaterialCatalogRow {
     grainDirection: 'frei',
     storageLocation: '',
     quantityOnHand: null,
+    projectName: '',
     ...partial,
   }
 }

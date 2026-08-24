@@ -37,6 +37,7 @@ function normalizeRow(raw: unknown): MaterialCatalogRow | null {
   let quantityOnHand: number | null = null
   if (typeof o.quantityOnHand === 'number' && Number.isFinite(o.quantityOnHand)) quantityOnHand = o.quantityOnHand
   else if (o.quantityOnHand === null) quantityOnHand = null
+  const projectName = typeof o.projectName === 'string' ? o.projectName : ''
   return {
     id,
     createdAt,
@@ -52,6 +53,7 @@ function normalizeRow(raw: unknown): MaterialCatalogRow | null {
     grainDirection,
     storageLocation,
     quantityOnHand,
+    projectName,
   }
 }
 
@@ -65,7 +67,13 @@ function parseFile(raw: unknown): MaterialCatalogFile {
     const row = normalizeRow(item)
     if (row) rows.push(row)
   }
-  return { version: 1, rows }
+  const projects: string[] = []
+  if (Array.isArray(o.projects)) {
+    for (const p of o.projects) {
+      if (typeof p === 'string' && p.trim()) projects.push(p.trim())
+    }
+  }
+  return { version: 1, rows, ...(projects.length > 0 ? { projects } : {}) }
 }
 
 export function loadMaterialCatalog(storage: Pick<Storage, 'getItem'> = localStorage): MaterialCatalogFile {

@@ -137,8 +137,9 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: 'Parallellinie (interne Linie)',
-    description: 'Parallele Linie zum Segment als interne Linie auf dem Teil erzeugen.',
-    access: 'Kante anfahren → Segment-Menü → Parallellinie (P)',
+    description:
+      'Parallele zum Segment als interne Linie erzeugen (gerade Kante → Linie, Kurvensegment → Bézier).',
+    access: 'Kante anfahren → Segment-Menü → Parallel (P)',
     shortcut: 'P (im Segment-Menü)',
   },
   {

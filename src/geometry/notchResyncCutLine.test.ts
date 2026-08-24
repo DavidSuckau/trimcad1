@@ -190,6 +190,39 @@ describe('resync: begrenzte Sprünge', () => {
   })
 })
 
+describe('resync: keine Eck-Sprünge auf Nachbarkante', () => {
+  it('Kerbe nahe Ecke springt nicht auf die falsche Kante bei Startpunkt-Rotation', () => {
+    const squareCut: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 0, y: 0 } },
+    ]
+    const rotated: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 0, y: 0 } },
+    ]
+    const notch: Notch = {
+      id: 'n1',
+      position: { x: 5, y: 0 },
+      angle: -90,
+      type: 'single',
+      depth: 4,
+      width: 6,
+      sNormalized: 0.0125,
+      arcLengthMm: 5,
+    }
+    const before = getNotchPositionAndAngle(notch, squareCut).position
+    const [after] = resyncNotchesAfterCutLineRebuilt([notch], squareCut, rotated)
+    const pos = getNotchPositionAndAngle(after, rotated).position
+    expect(Math.hypot(pos.x - before.x, pos.y - before.y)).toBeLessThan(1)
+    expect(pos.x).toBeCloseTo(5, 1)
+    expect(pos.y).toBeCloseTo(0, 1)
+  })
+})
+
 describe('resyncNotchesViaSeamAnchor: Naht Linie→Bezier (Kurvenpunkt auf Linie)', () => {
   it('haelt Kerben auf der Schnittkontur, wenn nur die Nahtkante line→degenerierte bezier wechselt', () => {
     const s = 100
