@@ -158,3 +158,8 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
 export function facingChildIds(pieces: PatternPiece[], parentId: string): string[] {
   return pieces.filter((p) => p.facingParentId === parentId).map((p) => p.id)
 }
+
+/** Abgeleitete Kaschierung (Geometrie nur über Sync von der Mutter). */
+export function isFacingDerivedPiece(piece: PatternPiece | null | undefined): boolean {
+  return !!piece && (piece.kind === 'facing' || !!piece.facingParentId)
+}

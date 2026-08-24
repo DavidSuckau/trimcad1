@@ -104,4 +104,15 @@ describe('createFacingPiece', () => {
     expect(ids).not.toContain('parent')
     expect(ids).not.toContain(childId)
   })
+
+  it('blockiert manuelle Geometrie-Edits an der Kaschierung', () => {
+    const childId = useStore.getState().createFacingPiece('parent')!
+    const before = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
+    const cutLen = before.cutLine.length
+    useStore.getState().updateVertex(childId, 0, { x: 999, y: 999 })
+    const after = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
+    expect(after.cutLine).toHaveLength(cutLen)
+    expect(after.cutLine[0].start.x).toBe(before.cutLine[0].start.x)
+    expect(useStore.getState().toastMessage).toMatch(/synchronisiert/)
+  })
 })

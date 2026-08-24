@@ -119,6 +119,7 @@ import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasT
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
+import { isFacingDerivedPiece } from '../geometry/facingPiece'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 
 let T: CanvasTheme = canvasTheme
@@ -8227,7 +8228,8 @@ export function WorkspaceCanvas() {
               const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
-                const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
+                if (!piece || isFacingDerivedPiece(piece)) return []
+                const useSeamMaster = useSeamLineForVertexEditing(piece)
                 const displayedMaster = piece ? getDisplayedMasterCurves(piece) : null
                 const curvesForVertices = displayedMaster?.curves ?? (useSeamMaster ? piece!.seamLine : piece?.cutLine ?? [])
                 if (!piece || curvesForVertices.length === 0) return []
@@ -8288,7 +8290,7 @@ export function WorkspaceCanvas() {
               const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
-                if (!piece) return []
+                if (!piece || isFacingDerivedPiece(piece)) return []
                 const curvesDraw = getDisplayedMasterCurves(piece).curves
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
                 return curvesDraw.flatMap((c, ci) => {
@@ -8324,7 +8326,7 @@ export function WorkspaceCanvas() {
               const nodes: React.ReactNode[] = []
               for (const pieceId of selectedPieceIds) {
                 const piece = pieces.find((p) => p.id === pieceId)
-                if (!piece || piece.internalLines.length === 0) continue
+                if (!piece || isFacingDerivedPiece(piece) || piece.internalLines.length === 0) continue
                 const lines = piece.internalLines
                 const n = lines.length
                 const softJ = new Set(piece.internalLineSoftJunctions ?? [])

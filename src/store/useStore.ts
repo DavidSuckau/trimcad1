@@ -104,6 +104,7 @@ import {
   buildFacingGeometryFromParent,
   facingChildIds,
   facingOffsetBesideParent,
+  isFacingDerivedPiece,
   syncFacingPiecesFromParents,
 } from '../geometry/facingPiece'
 import {
@@ -241,6 +242,41 @@ function cloneCurvesArray(curves: Curve[]): Curve[] {
       ? { type: 'line', start: { ...c.start }, end: { ...c.end } }
       : { type: 'bezier', start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
   )
+}
+
+const FACING_GEOMETRY_LOCKED_TOAST =
+  'info:Kaschierungen werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
+
+const FACING_GEOMETRY_UPDATE_KEYS: (keyof PatternPiece)[] = [
+  'cutLine',
+  'seamLine',
+  'seamAllowanceMm',
+  'edgeSeamAllowances',
+  'notches',
+  'drills',
+  'internalLines',
+  'internalCircles',
+  'internalLineSoftJunctions',
+  'softVertices',
+  'softVerticesMaster',
+  'roundedCorners',
+  'grainLine',
+  'cutLineDeviatesFromSeamAllowanceOffset',
+  'symmetryConstraint',
+]
+
+function updateTouchesFacingGeometry(upd: Partial<PatternPiece>): boolean {
+  return FACING_GEOMETRY_UPDATE_KEYS.some((k) => Object.prototype.hasOwnProperty.call(upd, k))
+}
+
+/** Blockiert manuelle Geometrie-Edits an abgeleiteten Kaschierungen (Position/Drehung bleiben erlaubt). */
+function facingGeometryEditBlocked(
+  pieces: PatternPiece[],
+  pieceId: string
+): { toastMessage: string } | null {
+  const p = pieces.find((x) => x.id === pieceId)
+  if (!isFacingDerivedPiece(p)) return null
+  return { toastMessage: FACING_GEOMETRY_LOCKED_TOAST }
 }
 
 /**
@@ -1023,6 +1059,9 @@ export const useStore = create<Store>()(
 
   updatePiece: (id, upd) =>
     set((s) => {
+      if (isFacingDerivedPiece(s.workspace.pieces.find((p) => p.id === id)) && updateTouchesFacingGeometry(upd)) {
+        return { toastMessage: FACING_GEOMETRY_LOCKED_TOAST }
+      }
       let toastMessage: string | null = null
       let didDeriveCutLineFromSeam = false
       const pieces = s.workspace.pieces.map((p) => {
@@ -1994,7 +2033,10 @@ export const useStore = create<Store>()(
     })),
 
   addInternalLine: (pieceId, curve) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2003,10 +2045,14 @@ export const useStore = create<Store>()(
           )
         ),
       },
-    })),
+    }
+    }),
 
   addInternalLines: (pieceId, curves) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2015,10 +2061,14 @@ export const useStore = create<Store>()(
           )
         ),
       },
-    })),
+    }
+    }),
 
   addInternalCircle: (pieceId, circle) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2030,10 +2080,14 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   updateInternalCircle: (pieceId, circleId, patch) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2054,10 +2108,14 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   removeInternalCircle: (pieceId, circleId) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2066,10 +2124,14 @@ export const useStore = create<Store>()(
           )
         ),
       },
-    })),
+    }
+    }),
 
   removeInternalLine: (pieceId, curveIndex) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2096,7 +2158,8 @@ export const useStore = create<Store>()(
           curveIndex
         ),
       },
-    })),
+    }
+    }),
 
   insertPointOnInternalLine: (pieceId, curveIndex, point, t) => {
     let inserted = false
@@ -2144,7 +2207,10 @@ export const useStore = create<Store>()(
   },
 
   replaceInternalLineSegmentWithBezier: (pieceId, curveIndex, cp1, cp2) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2166,10 +2232,14 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   moveInternalLinePointOnCurve: (pieceId, curveIndex, t, newPoint) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2194,10 +2264,14 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   moveInternalLineVertex: (pieceId, target, p) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2232,10 +2306,14 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   convertInternalLineBezierToLine: (pieceId, curveIndex) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2251,10 +2329,13 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   updateCurvePoint: (pieceId, curveIndex, pointKey, p) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       let manualSeamTrimReset = false
       let didDeriveCutLineFromSeam = false
@@ -2325,6 +2406,8 @@ export const useStore = create<Store>()(
 
   addNotch: (pieceId, notch) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return s
       const toAdd = isNotchOnInternalLine(notch)
@@ -2366,7 +2449,10 @@ export const useStore = create<Store>()(
     }),
 
   removeNotch: (pieceId, notchId) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2375,7 +2461,8 @@ export const useStore = create<Store>()(
           )
         ),
       },
-    })),
+    }
+    }),
 
   /** No-op: Notches no longer have vertex anchors. Kept for API compatibility. */
   removeNotchAnchor: (_pieceId, _notchId) =>
@@ -2387,6 +2474,8 @@ export const useStore = create<Store>()(
 
   updateNotch: (pieceId, notchId, upd) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       const notch = piece?.notches.find((n) => n.id === notchId)
       if (Object.prototype.hasOwnProperty.call(upd, 'role') && upd.role !== undefined && !isValidNotchRole(upd.role)) {
@@ -2468,7 +2557,10 @@ export const useStore = create<Store>()(
     }),
 
   addDrill: (pieceId, drill) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2477,7 +2569,8 @@ export const useStore = create<Store>()(
           )
         ),
       },
-    })),
+    }
+    }),
 
   movePiece: (pieceId, dx, dy) =>
     set((s) => ({
@@ -2493,6 +2586,8 @@ export const useStore = create<Store>()(
 
   applyOffset: (pieceId, deltaMm) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== pieceId || p.cutLine.length < 3) return p
@@ -2571,6 +2666,8 @@ export const useStore = create<Store>()(
 
   completeNahtTrimAtCutVertex: (pieceId, cutVertexIndex) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       if (!s.nahtTrimPickCutVertexActive) return {}
       const targetId = s.selectedPieceIds[0]
       if (!targetId || pieceId !== targetId) {
@@ -2732,7 +2829,10 @@ export const useStore = create<Store>()(
     }),
 
   removeSeamAllowance: (pieceId) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -2758,10 +2858,13 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   setEdgeSeamAllowance: (pieceId, edgeIndex, allowanceMm) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== pieceId) return p
@@ -2803,6 +2906,8 @@ export const useStore = create<Store>()(
   insertPointOnCutLine: (pieceId, curveIndex, point, t) => {
     let inserted = false
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const pieceBefore = s.workspace.pieces.find((p) => p.id === pieceId)
       const seamPc = pieceBefore != null && useSeamLineForPointCurveEditing(pieceBefore)
       const LINE_SPLIT_MIN_MM = 0.5
@@ -2962,6 +3067,8 @@ export const useStore = create<Store>()(
   // Vertex verschieben. Seam-as-Master: Bei Nahtzugabe wird die seamLine (Innenkontur) bearbeitet, cutLine folgt.
   updateVertex: (pieceId, vertexIndex, point, skipSeamRecalc, notchOpts) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       let profileToast: string | null = null
       let manualSeamTrimReset = false
@@ -3090,6 +3197,8 @@ export const useStore = create<Store>()(
 
   replaceSegmentWithBezier: (pieceId, curveIndex, cp1, cp2) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       let manualSeamTrimReset = false
       const pieces = s.workspace.pieces.map((p) => {
@@ -3185,6 +3294,8 @@ export const useStore = create<Store>()(
 
   movePointOnCurve: (pieceId, curveIndex, t, newPoint, skipSeamRecalc, notchOpts) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       let manualSeamTrimReset = false
       const pieces = s.workspace.pieces.map((p) => {
@@ -3288,6 +3399,8 @@ export const useStore = create<Store>()(
 
   removeVertex: (pieceId, vertexIndex) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       const useSeamMaster = piece != null && useSeamLineForVertexEditing(piece)
       const master = useSeamMaster ? piece!.seamLine : piece?.cutLine ?? []
@@ -3418,6 +3531,8 @@ export const useStore = create<Store>()(
   roundCorner: (pieceId, masterVertexIndex, radiusMm) => {
     let success = false
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return s
       const useSeamMaster = useSeamLineForVertexEditing(piece)
@@ -3542,6 +3657,8 @@ export const useStore = create<Store>()(
 
   convertBezierSegmentToLine: (pieceId, curveIndex) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       let toastMessage: string | null = null
       let manualSeamTrimReset = false
       const pieces = s.workspace.pieces.map((p) => {
@@ -3603,6 +3720,8 @@ export const useStore = create<Store>()(
 
   setVertexSoft: (pieceId, vertexIndex, soft) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const oldPiece = s.workspace.pieces.find((p) => p.id === pieceId)
       const newPieces = s.workspace.pieces.map((p) => {
         if (p.id !== pieceId) return p
@@ -3647,6 +3766,8 @@ export const useStore = create<Store>()(
 
   offsetSegment: (pieceId, curveIndex, deltaMm) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return s
       const seamPc = useSeamLineForPointCurveEditing(piece)
@@ -3718,7 +3839,10 @@ export const useStore = create<Store>()(
     }),
 
   recomputeSeamLine: (pieceId) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: syncFacingPiecesFromParents(
@@ -3732,10 +3856,13 @@ export const useStore = create<Store>()(
           })
         ),
       },
-    })),
+    }
+    }),
 
   flipPieceAlongGrain: (pieceId) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
       const bounds = curvesBounds(piece.cutLine)
@@ -3803,6 +3930,8 @@ export const useStore = create<Store>()(
 
   flipPieceAlongAxis: (pieceId, axisA, axisB) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
       const axisLen = Math.hypot(axisB.x - axisA.x, axisB.y - axisA.y)
@@ -3872,6 +4001,8 @@ export const useStore = create<Store>()(
 
   applyPieceSymmetry: (pieceId, axisA, axisB, keepSide) =>
     set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return { toastMessage: 'warn:Teil nicht gefunden.' }
       const r = applyPieceSymmetryToPiece(piece, axisA, axisB, keepSide)
@@ -3939,14 +4070,18 @@ export const useStore = create<Store>()(
     get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),
 
   setGrainLine: (pieceId, line) =>
-    set((s) => ({
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      return {
       workspace: {
         ...s.workspace,
         pieces: s.workspace.pieces.map((p) =>
           p.id === pieceId ? { ...p, grainLine: line } : p
         ),
       },
-    })),
+    }
+    }),
 
   materializeMissingGrainLines: () =>
     set((s) => {
