@@ -3374,6 +3374,13 @@ export function WorkspaceCanvas() {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
           if (isPointInsidePiece(local, p)) {
+            if (isFacingDerivedPiece(p)) {
+              setToastMessage(
+                'info:Kaschierungen werden nur von der Mutter synchronisiert – Nahtzugabe hier nicht editierbar.'
+              )
+              setPendingNahtzugabeClick(false)
+              return
+            }
             setNahtzugabeDialogPieceId(p.id)
             setPendingNahtzugabeClick(false)
             ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
@@ -6174,6 +6181,13 @@ export function WorkspaceCanvas() {
       }
       if (contourEditEnabled && grainFlipHover && !grainContextMenu && !inInput && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
+        const hoverPiece = pieces.find((p) => p.id === grainFlipHover.pieceId)
+        if (isFacingDerivedPiece(hoverPiece)) {
+          setToastMessage(
+            'info:Kaschierungen werden nur von der Mutter synchronisiert – Nahtzugabe hier nicht editierbar.'
+          )
+          return
+        }
         setHorizontalLevelPickingActive(false)
         setHoveredHorizontalLevelEdge(null)
         setEdgeSeamPickingActive(true)
@@ -7316,7 +7330,20 @@ export function WorkspaceCanvas() {
           Leertaste: Menü · L: Nahtzugabe/Kante
         </div>
       )}
-      {grainContextMenu && (
+      {grainContextMenu && (() => {
+        const menuPiece = pieces.find((p) => p.id === grainContextMenu.pieceId)
+        const isFacingPiece = isFacingDerivedPiece(menuPiece)
+        const menuBtnStyle: React.CSSProperties = {
+          display: 'block',
+          width: '100%',
+          padding: '6px 16px',
+          background: 'none',
+          border: 'none',
+          textAlign: 'left',
+          cursor: 'pointer',
+          fontSize: fs(13),
+        }
+        return (
         <div
           role="menu"
           aria-label="Laufrichtung"
@@ -7341,40 +7368,24 @@ export function WorkspaceCanvas() {
               fontFamily: 'sans-serif',
             }}
           >
+            {!isFacingPiece && (
+              <button
+                type="button"
+                style={menuBtnStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                onClick={() => {
+                  flipPieceAlongGrain(grainContextMenu.pieceId)
+                  setGrainContextMenu(null)
+                  setGrainFlipHover(null)
+                }}
+              >
+                Spiegellinie (Flippen)
+              </button>
+            )}
             <button
               type="button"
-              style={{
-                display: 'block',
-                width: '100%',
-                padding: '6px 16px',
-                background: 'none',
-                border: 'none',
-                textAlign: 'left',
-                cursor: 'pointer',
-                fontSize: fs(13),
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
-              onClick={() => {
-                flipPieceAlongGrain(grainContextMenu.pieceId)
-                setGrainContextMenu(null)
-                setGrainFlipHover(null)
-              }}
-            >
-              Spiegellinie (Flippen)
-            </button>
-            <button
-              type="button"
-              style={{
-                display: 'block',
-                width: '100%',
-                padding: '6px 16px',
-                background: 'none',
-                border: 'none',
-                textAlign: 'left',
-                cursor: 'pointer',
-                fontSize: fs(13),
-              }}
+              style={menuBtnStyle}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
               onClick={() => {
@@ -7387,75 +7398,61 @@ export function WorkspaceCanvas() {
             </button>
             <button
               type="button"
-              style={{
-                display: 'block',
-                width: '100%',
-                padding: '6px 16px',
-                background: 'none',
-                border: 'none',
-                textAlign: 'left',
-                cursor: 'pointer',
-                fontSize: fs(13),
-              }}
+              title={
+                isFacingPiece
+                  ? 'Kopie als unabhängiges Teil (ohne Sync zur Mutter)'
+                  : undefined
+              }
+              style={menuBtnStyle}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
               onClick={() => {
                 const piece = pieces.find((p) => p.id === grainContextMenu.pieceId)
                 if (!piece) return
-                addPiece({
-                  ...piece,
-                  id: undefined,
-                  number: undefined,
-                  name: piece.name,
-                })
+                if (isFacingDerivedPiece(piece)) {
+                  // Snapshot ohne Abhängigkeit – sonst entstünde nur eine zweite Sync-Tochter
+                  const { facingParentId: _fp, kind: _k, ...rest } = piece
+                  addPiece({
+                    ...rest,
+                    id: undefined,
+                    number: undefined,
+                    name: piece.name.endsWith(' (Kopie)') ? piece.name : `${piece.name} (Kopie)`,
+                    kind: undefined,
+                    facingParentId: undefined,
+                  })
+                } else {
+                  addPiece({
+                    ...piece,
+                    id: undefined,
+                    number: undefined,
+                    name: piece.name,
+                  })
+                }
                 setGrainContextMenu(null)
                 setGrainFlipHover(null)
               }}
             >
               Teil kopieren
             </button>
-            {(() => {
-              const menuPiece = pieces.find((p) => p.id === grainContextMenu.pieceId)
-              const isFacingPiece = !!menuPiece && (menuPiece.kind === 'facing' || !!menuPiece.facingParentId)
-              if (isFacingPiece) return null
-              return (
-                <button
-                  type="button"
-                  title="Abhängiges Kaschierungsteil neben der Mutter anlegen (Kontur folgt der Mutter)"
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    padding: '6px 16px',
-                    background: 'none',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    fontSize: fs(13),
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
-                  onClick={() => {
-                    createFacingPiece(grainContextMenu.pieceId)
-                    setGrainContextMenu(null)
-                    setGrainFlipHover(null)
-                  }}
-                >
-                  Kaschierung erzeugen
-                </button>
-              )
-            })()}
+            {!isFacingPiece && (
+              <button
+                type="button"
+                title="Abhängiges Kaschierungsteil neben der Mutter anlegen (Kontur folgt der Mutter)"
+                style={menuBtnStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                onClick={() => {
+                  createFacingPiece(grainContextMenu.pieceId)
+                  setGrainContextMenu(null)
+                  setGrainFlipHover(null)
+                }}
+              >
+                Kaschierung erzeugen
+              </button>
+            )}
             <button
               type="button"
-              style={{
-                display: 'block',
-                width: '100%',
-                padding: '6px 16px',
-                background: 'none',
-                border: 'none',
-                textAlign: 'left',
-                cursor: 'pointer',
-                fontSize: fs(13),
-              }}
+              style={menuBtnStyle}
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
               onClick={() => {
@@ -7471,7 +7468,8 @@ export function WorkspaceCanvas() {
             </button>
           </div>
         </div>
-      )}
+        )
+      })()}
       {pieceContextMenu && (
         <div
           role="menu"
