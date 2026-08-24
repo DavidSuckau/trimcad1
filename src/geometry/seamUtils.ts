@@ -1,5 +1,5 @@
 import type { PatternPiece, Point, Curve, Notch } from '../types/model'
-import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt } from './curveToPath'
+import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
 import { offsetSegmentPoints } from './offset'
@@ -384,57 +384,18 @@ export function materializeNotchAtEdgeArcLength(
   if (!pt) return null
 
   const cutLine = piece.cutLine
-  if (master === cutLine || cutLine.length < 3 || piece.seamLine.length === 0) {
-    return materializeNotchAnchorsOnCutLine(
-      {
-        ...notch,
-        position: pt.point,
-        vertexIndex: undefined,
-        sNormalized: undefined,
-        arcLengthMm: undefined,
-      },
-      cutLine,
-    )
-  }
-
-  const cutTotal = totalPathLength(cutLine)
-  if (cutTotal <= 0) return null
-
-  // Bevorzugt denselben Segmentindex (parallele Offset-Topologie), sonst globale Näherung.
-  const globalCi = curveIndices[pt.curveIndex]
-  let cutCi: number
-  let cutT: number
-  let position: Point
-  if (globalCi != null && globalCi < cutLine.length) {
-    const onSeg = nearestCurveIndexAndPoint(pt.point, [cutLine[globalCi]])
-    if (onSeg) {
-      cutCi = globalCi
-      cutT = onSeg.t ?? 0
-      position = onSeg.point
-    } else {
-      const near = nearestCurveIndexAndPoint(pt.point, cutLine)
-      if (!near) return null
-      cutCi = near.curveIndex
-      cutT = near.t ?? 0
-      position = near.point
-    }
-  } else {
-    const near = nearestCurveIndexAndPoint(pt.point, cutLine)
-    if (!near) return null
-    cutCi = near.curveIndex
-    cutT = near.t ?? 0
-    position = near.point
-  }
-
-  const cutArc = pathLengthAt(cutLine, cutCi, cutT)
-  return {
-    ...notch,
-    vertexIndex: undefined,
-    sNormalized: cutArc / cutTotal,
-    arcLengthMm: cutArc,
-    position,
-    angle: outwardNormalAngleAt(cutLine, cutCi, cutT) + 180,
-  }
+  // Cut↔Master haben nach Clipper-Offset (Bézier → viele Linien) keine gemeinsamen Indizes.
+  // Gleicher Segmentindex würde alle Kerben auf das erste Cut-Stück (oft eine Ecke) ziehen.
+  return materializeNotchAnchorsOnCutLine(
+    {
+      ...notch,
+      position: pt.point,
+      vertexIndex: undefined,
+      sNormalized: undefined,
+      arcLengthMm: undefined,
+    },
+    cutLine,
+  )
 }
 
 /**

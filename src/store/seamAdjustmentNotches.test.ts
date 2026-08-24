@@ -367,4 +367,128 @@ describe('adjustSeamNotches', () => {
     useStore.getState().checkSeamAdjustment()
     expect(useStore.getState().seamAdjustmentDialog).toBeNull()
   })
+
+  it('bei Clipper-Offset (Bézier→viele Cut-Linien) bleiben Kerben auf der Kurve, nicht in der Ecke', () => {
+    const bezierTop: Curve[] = [
+      { type: 'bezier', start: { x: 0, y: 0 }, cp1: { x: 30, y: 50 }, cp2: { x: 70, y: 50 }, end: { x: 120, y: 0 } },
+      { type: 'line', start: { x: 120, y: 0 }, end: { x: 120, y: 80 } },
+      { type: 'line', start: { x: 120, y: 80 }, end: { x: 0, y: 80 } },
+      { type: 'line', start: { x: 0, y: 80 }, end: { x: 0, y: 0 } },
+    ]
+    const workspace: Workspace = {
+      id: 'ws-clipper-bezier',
+      name: 'Test',
+      pieces: [
+        {
+          id: 'A',
+          number: '001',
+          name: 'A',
+          cutLine: bezierTop,
+          seamLine: [],
+          notches: [],
+          drills: [],
+          grainLine: null,
+          internalLines: [],
+          internalCircles: [],
+          layer: 'CUT',
+          transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+          softVertices: [],
+          fillInterior: true,
+          material: '',
+          bomQuantity: 1,
+        },
+        {
+          id: 'B',
+          number: '002',
+          name: 'B',
+          cutLine: bezierTop.map((c) =>
+            c.type === 'line'
+              ? { ...c, start: { ...c.start }, end: { ...c.end } }
+              : { ...c, start: { ...c.start }, end: { ...c.end }, cp1: { ...c.cp1 }, cp2: { ...c.cp2 } }
+          ),
+          seamLine: [],
+          notches: [],
+          drills: [],
+          grainLine: null,
+          internalLines: [],
+          internalCircles: [],
+          layer: 'CUT',
+          transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+          softVertices: [],
+          fillInterior: true,
+          material: '',
+          bomQuantity: 1,
+        },
+      ],
+      view: { zoom: 1, panX: 0, panY: 0 },
+      seamAssignments: [
+        {
+          id: 's-bez',
+          pieceIdA: 'A',
+          curveIndicesA: [0],
+          clickedCurveA: 0,
+          pieceIdB: 'B',
+          curveIndicesB: [0],
+          clickedCurveB: 0,
+        },
+      ],
+    }
+    useStore.setState({ workspace, seamAdjustmentDialog: 's-bez', seamAdjustmentAcknowledged: {} })
+    useStore.getState().updatePiece('A', { seamAllowanceMm: 8 })
+    useStore.getState().updatePiece('B', { seamAllowanceMm: 8 })
+
+    const pieceA0 = useStore.getState().workspace.pieces.find((p) => p.id === 'A')!
+    const pieceB0 = useStore.getState().workspace.pieces.find((p) => p.id === 'B')!
+    expect(pieceA0.cutLine.length).toBeGreaterThan(pieceA0.seamLine.length)
+
+    const a1 = materializeNotchAtEdgeArcLength(
+      { id: 'a1', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceA0,
+      [0],
+      30,
+    )!
+    const a2 = materializeNotchAtEdgeArcLength(
+      { id: 'a2', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceA0,
+      [0],
+      80,
+    )!
+    const b1 = materializeNotchAtEdgeArcLength(
+      { id: 'b1', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceB0,
+      [0],
+      45,
+    )!
+    const b2 = materializeNotchAtEdgeArcLength(
+      { id: 'b2', position: { x: 0, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      pieceB0,
+      [0],
+      60,
+    )!
+
+    useStore.setState((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === 'A' ? { ...p, notches: [a1, a2] } : p.id === 'B' ? { ...p, notches: [b1, b2] } : p
+        ),
+      },
+      seamAdjustmentDialog: 's-bez',
+    }))
+
+    const beforeB = useStore.getState().workspace.pieces.find((p) => p.id === 'B')!
+    const posBefore = beforeB.notches.map((n) => getNotchPositionAndAngle(n, beforeB.cutLine).position)
+    expect(Math.hypot(posBefore[0].x - posBefore[1].x, posBefore[0].y - posBefore[1].y)).toBeGreaterThan(10)
+
+    useStore.getState().adjustSeamNotches('s-bez', 'A')
+    const after = useStore.getState()
+    const pieceA = after.workspace.pieces.find((p) => p.id === 'A')!
+    const pieceB = after.workspace.pieces.find((p) => p.id === 'B')!
+    const posAfter = pieceB.notches.map((n) => getNotchPositionAndAngle(n, pieceB.cutLine).position)
+    expect(Math.hypot(posAfter[0].x - posAfter[1].x, posAfter[0].y - posAfter[1].y)).toBeGreaterThan(10)
+
+    const ev = evaluateSeamAdjustment(after.workspace.seamAssignments[0]!, pieceA, pieceB)
+    expect(ev?.needsDialog).toBe(false)
+    expect(ev?.maxMismatchMm ?? 0).toBeLessThan(0.5)
+  })
 })
