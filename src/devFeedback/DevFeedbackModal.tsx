@@ -230,7 +230,18 @@ export function DevFeedbackModal() {
                 </p>
               )}
               {!listError && !loadingList && issues.length === 0 && (
-                <p className="dev-feedback-empty">Keine offenen Einträge mit Feedback-Label.</p>
+                <p className="dev-feedback-empty">
+                  Noch keine offenen TrimTex-Einträge. Nach dem Senden ggf. „Aktualisieren“ — oder direkt
+                  auf{' '}
+                  <a
+                    href={`https://github.com/DavidSuckau/trimcad1/issues?q=is%3Aissue+is%3Aopen+label%3A${encodeURIComponent('trimtex-feedback')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    GitHub
+                  </a>
+                  .
+                </p>
               )}
               <ul className="dev-feedback-list">
                 {issues.map((issue) => (

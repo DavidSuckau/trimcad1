@@ -13,6 +13,7 @@ export const FEEDBACK_API_BASE = (
   (import.meta.env.VITE_FEEDBACK_API_BASE as string | undefined)?.trim() || '/api/feedback'
 ).replace(/\/$/, '')
 
-/** Proxy für POST versuchen (lokal mit dev:secure). Auf GitHub Pages meist false. */
+/** Proxy nur in Dev oder wenn explizit VITE_FEEDBACK_PROXY_ENABLED=true. */
 export const FEEDBACK_PROXY_ENABLED =
-  (import.meta.env.VITE_FEEDBACK_PROXY_ENABLED as string | undefined) !== 'false'
+  import.meta.env.DEV ||
+  (import.meta.env.VITE_FEEDBACK_PROXY_ENABLED as string | undefined)?.trim() === 'true'

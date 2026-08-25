@@ -6,6 +6,7 @@ import {
 } from './featureFlags'
 import type { FeedbackForm } from './validateFeedback'
 import { buildIssueBody } from './validateFeedback'
+import { mapGithubIssueRow } from './feedbackIssueFilter'
 
 export type FeedbackIssue = {
   number: number
@@ -20,42 +21,18 @@ export type FeedbackIssue = {
 export type CreateFeedbackResult = {
   number: number
   htmlUrl: string
-  /** Issue-Formular in neuem Tab — Nutzer klickt dort „Submit“. */
   openedExternally?: boolean
 }
 
 type ApiError = { error?: string }
 
-function trimPreview(text: string, max = 220): string {
-  const t = text.replace(/\r/g, '').trim()
-  if (t.length <= max) return t
-  return `${t.slice(0, max)}…`
-}
-
-function mapGithubRow(row: {
-  number: number
-  title: string
-  state: string
-  html_url: string
-  created_at: string
-  body?: string | null
-  user?: { login?: string } | null
-  pull_request?: unknown
-}): FeedbackIssue | null {
-  if (row.pull_request) return null
-  return {
-    number: row.number,
-    title: row.title,
-    state: row.state,
-    htmlUrl: row.html_url,
-    createdAt: row.created_at,
-    author: row.user?.login ?? 'unknown',
-    bodyPreview: trimPreview(row.body ?? ''),
-  }
-}
+type GithubIssueRow = Parameters<typeof mapGithubIssueRow>[0]
 
 async function parseJson<T>(response: Response): Promise<T> {
   const text = await response.text()
+  if (text.trimStart().startsWith('<')) {
+    throw new Error('Keine API-Antwort (HTML statt JSON).')
+  }
   try {
     return JSON.parse(text) as T
   } catch {
@@ -63,8 +40,17 @@ async function parseJson<T>(response: Response): Promise<T> {
   }
 }
 
+function feedbackApiUrl(pathAndQuery: string): string {
+  const base = FEEDBACK_API_BASE.startsWith('/')
+    ? `${import.meta.env.BASE_URL.replace(/\/?$/, '')}${FEEDBACK_API_BASE}`
+    : FEEDBACK_API_BASE
+  const normalized = base.replace(/\/$/, '')
+  const suffix = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`
+  return `${normalized}${suffix}`
+}
+
 async function fetchIssuesFromProxy(): Promise<FeedbackIssue[]> {
-  const response = await fetch(`${FEEDBACK_API_BASE}/issues?state=open`)
+  const response = await fetch(feedbackApiUrl('/issues?state=open'))
   const data = await parseJson<{ issues?: FeedbackIssue[] } & ApiError>(response)
   if (!response.ok) {
     throw new Error(data.error ?? `Liste fehlgeschlagen (${response.status})`)
@@ -72,23 +58,35 @@ async function fetchIssuesFromProxy(): Promise<FeedbackIssue[]> {
   return data.issues ?? []
 }
 
-/** Öffentliches Repo: GitHub REST API direkt aus dem Browser (GitHub Pages). */
+async function githubIssuesRequest(params: URLSearchParams): Promise<GithubIssueRow[]> {
+  const response = await fetch(
+    `https://api.github.com/repos/${GITHUB_REPO}/issues?${params}`,
+    {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  )
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`GitHub-Liste (${response.status}): ${errText.slice(0, 120)}`)
+  }
+  return (await response.json()) as GithubIssueRow[]
+}
+
+/** Alle offenen Issues laden und TrimTex-Feedback clientseitig filtern (Label oft beim Senden weg). */
 async function fetchIssuesFromGithubDirect(): Promise<FeedbackIssue[]> {
-  const q = new URLSearchParams({
+  const params = new URLSearchParams({
     state: 'open',
-    labels: GITHUB_FEEDBACK_LABEL,
-    per_page: '50',
+    per_page: '100',
     sort: 'updated',
     direction: 'desc',
   })
-  const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/issues?${q}`, {
-    headers: { Accept: 'application/vnd.github+json' },
-  })
-  if (!response.ok) {
-    throw new Error(`GitHub-Liste (${response.status})`)
-  }
-  const rows = (await response.json()) as Parameters<typeof mapGithubRow>[0][]
-  return rows.map(mapGithubRow).filter((x): x is FeedbackIssue => x != null)
+  const rows = await githubIssuesRequest(params)
+  const mapped = rows.map(mapGithubIssueRow).filter((x): x is FeedbackIssue => x != null)
+  mapped.sort((a, b) => b.number - a.number)
+  return mapped
 }
 
 export async function fetchFeedbackIssues(): Promise<FeedbackIssue[]> {
@@ -96,7 +94,7 @@ export async function fetchFeedbackIssues(): Promise<FeedbackIssue[]> {
     try {
       return await fetchIssuesFromProxy()
     } catch {
-      /* Proxy nicht erreichbar → direkt GitHub */
+      /* Proxy nicht erreichbar */
     }
   }
   return fetchIssuesFromGithubDirect()
@@ -106,6 +104,7 @@ function buildGithubNewIssueUrl(title: string, body: string): string {
   const params = new URLSearchParams()
   params.set('title', title)
   params.set('body', body)
+  params.set('template', 'trimtex-feedback.yml')
   params.set('labels', GITHUB_FEEDBACK_LABEL)
   return `https://github.com/${GITHUB_REPO}/issues/new?${params.toString()}`
 }
@@ -114,7 +113,7 @@ async function createIssueViaProxy(
   form: FeedbackForm,
   meta: { appVersion: string; userAgent: string },
 ): Promise<CreateFeedbackResult> {
-  const response = await fetch(`${FEEDBACK_API_BASE}/issues`, {
+  const response = await fetch(feedbackApiUrl('/issues'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -141,7 +140,7 @@ export async function createFeedbackIssue(
     try {
       return await createIssueViaProxy(form, meta)
     } catch {
-      /* Fallback unten */
+      /* Fallback */
     }
   }
 

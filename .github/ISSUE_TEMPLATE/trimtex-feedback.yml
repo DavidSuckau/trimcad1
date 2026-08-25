@@ -1,0 +1,22 @@
+name: TrimTex Feedback
+description: Bug, Wunsch oder Dev-Todo aus TrimTex
+title: "[TrimTex] "
+labels:
+  - trimtex-feedback
+body:
+  - type: markdown
+    value: |
+      Feedback aus TrimTex. Titel und Text unten anpassen, dann **Submit**.
+  - type: textarea
+    id: description
+    attributes:
+      label: Beschreibung
+      description: Was soll geändert werden? Schritte zum Nachstellen.
+      placeholder: z. B. Kaschierung an Ecke fehlt nach Spiegeln …
+    validations:
+      required: true
+  - type: input
+    id: author
+    attributes:
+      label: Dein Name (optional)
+      placeholder: Wird im Issue vermerkt
