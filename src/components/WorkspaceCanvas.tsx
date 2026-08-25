@@ -1598,10 +1598,10 @@ const PieceGroup = memo(function PieceGroup({
             x2={clipped.p2.x}
             y2={clipped.p2.y}
             stroke="#0d9488"
-            strokeWidth={2.4 * ptPs}
-            strokeDasharray={scaleSvgDashArray('8 5', ptPs)}
+            strokeWidth={1.05 * ptPs}
+            strokeDasharray={scaleSvgDashArray('6 4', ptPs)}
             pointerEvents="none"
-            opacity={0.9}
+            opacity={0.85}
           />
         )
       })()}
@@ -2602,8 +2602,8 @@ export function WorkspaceCanvas() {
     start: Point
     current: Point
     value: string
-    /** Nur `mode === 'draw'`: Kontur vs. interne Linie. */
-    drawTarget?: 'internal' | 'contour'
+    /** Nur `mode === 'draw'`: Kontur, interne Linie oder Spiegelachse. */
+    drawTarget?: 'internal' | 'contour' | 'symmetryAxis'
   } | null>(null)
   /** Interner Kreis ziehen: Leertaste → Radius in mm (Richtung der Vorschau wie beim Zug). */
   const [internalCircleRadiusEditor, setInternalCircleRadiusEditor] = useState<{
@@ -2709,12 +2709,21 @@ export function WorkspaceCanvas() {
     if (!Number.isFinite(mm) || mm <= 0) return
     const end = pointAtDistanceOnRay(lineLengthEditor.start, lineLengthEditor.current, mm)
     const pid = lineLengthEditor.pieceId
+    if (lineLengthEditor.drawTarget === 'symmetryAxis') {
+      const piece = pieces.find((p) => p.id === pid)
+      if (!piece) return
+      const endWorld = pieceLocalToWorld(end, piece)
+      setSymmetryHoverWorld((prev) =>
+        prev && Math.hypot(prev.x - endWorld.x, prev.y - endWorld.y) < 1e-6 ? prev : endWorld,
+      )
+      return
+    }
     setDragging((d) => {
       if (!d || d.kind !== 'line' || d.pieceId !== pid) return d
       if (d.current.x === end.x && d.current.y === end.y) return d
       return { ...d, current: end }
     })
-  }, [lineLengthEditor])
+  }, [lineLengthEditor, pieces])
 
   const internalCircleRadiusEditorActiveRef = useRef(false)
   useEffect(() => {
@@ -3206,6 +3215,7 @@ export function WorkspaceCanvas() {
           setPieceSymmetryState({ pieceId: sym.pieceId, phase: 'axisB', axisA: { ...local } })
           return
         } else if (sym.phase === 'axisB') {
+          if (lineLengthEditor?.drawTarget === 'symmetryAxis') return
           if (sym.axisA && Math.hypot(local.x - sym.axisA.x, local.y - sym.axisA.y) < 0.5) {
             setToastMessage('warn:Zweiter Punkt zu nah am ersten.')
             return
@@ -4654,6 +4664,8 @@ export function WorkspaceCanvas() {
       profileFitConfirm,
       imageScaleCalibration,
       addImageScaleCalibrationPoint,
+      lineLengthEditor,
+      symmetryHoverWorld,
     ]
   )
 
@@ -4713,9 +4725,13 @@ export function WorkspaceCanvas() {
         if (dragging?.kind !== 'pan' || touchPanPointerIdRef.current !== e.pointerId) return
       }
       const worldSym = toWorld(e.clientX, e.clientY)
-      if (pieceSymmetryState?.phase === 'axisB' && pieceSymmetryState.axisA) {
+      if (
+        pieceSymmetryState?.phase === 'axisB' &&
+        pieceSymmetryState.axisA &&
+        !(lineLengthEditor?.mode === 'draw' && lineLengthEditor.drawTarget === 'symmetryAxis')
+      ) {
         setSymmetryHoverWorld(worldSym)
-      } else {
+      } else if (!(lineLengthEditor?.mode === 'draw' && lineLengthEditor.drawTarget === 'symmetryAxis')) {
         setSymmetryHoverWorld(null)
       }
 
@@ -6038,7 +6054,7 @@ export function WorkspaceCanvas() {
       }
       if (!inInput && lineLengthEditor && e.key === 'Escape') {
         e.preventDefault()
-        if (lineLengthEditor.mode === 'draw') {
+        if (lineLengthEditor.mode === 'draw' && lineLengthEditor.drawTarget !== 'symmetryAxis') {
           setDragging(null)
           setTool('select')
         }
@@ -6168,6 +6184,32 @@ export function WorkspaceCanvas() {
           current: dragging.current,
           value: len > 0 ? len.toFixed(1) : '100',
           drawTarget: tool === 'line' ? 'contour' : 'internal',
+        })
+        return
+      }
+      if (
+        contourEditEnabled &&
+        !inInput &&
+        !dragging &&
+        pieceSymmetryState?.phase === 'axisB' &&
+        pieceSymmetryState.axisA &&
+        e.key === ' '
+      ) {
+        e.preventDefault()
+        const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
+        if (!piece) return
+        const start = pieceSymmetryState.axisA
+        const currentLocal = symmetryHoverWorld
+          ? worldToPieceLocal(symmetryHoverWorld, piece)
+          : { x: start.x + 100, y: start.y }
+        const len = Math.hypot(currentLocal.x - start.x, currentLocal.y - start.y)
+        setLineLengthEditor({
+          mode: 'draw',
+          pieceId: piece.id,
+          start: { ...start },
+          current: { ...currentLocal },
+          value: len > 0.5 ? len.toFixed(1) : '100',
+          drawTarget: 'symmetryAxis',
         })
         return
       }
@@ -9374,7 +9416,7 @@ export function WorkspaceCanvas() {
                     d={d}
                     fill="none"
                     stroke="#0d9488"
-                    strokeWidth={3.5}
+                    strokeWidth={1.8}
                     strokeOpacity={0.95}
                     pointerEvents="none"
                   />
@@ -9458,7 +9500,7 @@ export function WorkspaceCanvas() {
                   d={d}
                   fill="none"
                   stroke="#0d9488"
-                  strokeWidth={3.2}
+                  strokeWidth={1.6}
                   strokeDasharray="6 4"
                   pointerEvents="none"
                   opacity={0.95}
@@ -9484,10 +9526,10 @@ export function WorkspaceCanvas() {
                   x2={w2.x}
                   y2={w2.y}
                   stroke="#0d9488"
-                  strokeWidth={2.8}
-                  strokeDasharray="7 5"
+                  strokeWidth={1.15}
+                  strokeDasharray="6 4"
                   pointerEvents="none"
-                  opacity={0.95}
+                  opacity={0.9}
                 />
               )
             }
@@ -9500,12 +9542,12 @@ export function WorkspaceCanvas() {
                     x2={symmetryHoverWorld.x}
                     y2={symmetryHoverWorld.y}
                     stroke="#0d9488"
-                    strokeWidth={2.8}
-                    strokeDasharray="7 5"
+                    strokeWidth={1.15}
+                    strokeDasharray="6 4"
                     pointerEvents="none"
                     opacity={0.9}
                   />
-                  <circle cx={wa.x} cy={wa.y} r={4} fill="#0d9488" pointerEvents="none" />
+                  <circle cx={wa.x} cy={wa.y} r={3} fill="#0d9488" pointerEvents="none" />
                 </g>
               )
             }
@@ -9920,6 +9962,25 @@ export function WorkspaceCanvas() {
           textAlign: 'right',
         }}>
           Nach dem Loslassen: Laenge in mm. Leertaste: schon waehrend des Ziehens
+        </div>
+      )}
+      {pieceSymmetryState?.phase === 'axisB' && !lineLengthEditor && (
+        <div style={{
+          position: 'absolute',
+          top: 16,
+          right: 16,
+          background: 'rgba(21,101,192,0.92)',
+          color: '#fff',
+          padding: '6px 10px',
+          borderRadius: 6,
+          fontSize: fs(12),
+          fontWeight: 600,
+          zIndex: 9998,
+          pointerEvents: 'none',
+          maxWidth: 280,
+          textAlign: 'right',
+        }}>
+          Spiegelachse: Leertaste = Länge in mm (wie interne Linie)
         </div>
       )}
       {(dragging?.kind === 'line' && tool === 'line' && !lineLengthEditor) && (
@@ -10885,6 +10946,21 @@ export function WorkspaceCanvas() {
               )
               updatePiece(piece.id, { internalLines })
             } else if (lineLengthEditor.mode === 'draw') {
+              if (lineLengthEditor.drawTarget === 'symmetryAxis') {
+                if (mm < 0.5) {
+                  setToastMessage('error: Spiegelachse mindestens 0,5 mm.')
+                  return
+                }
+                setPieceSymmetryState({
+                  pieceId: lineLengthEditor.pieceId,
+                  phase: 'pickSide',
+                  axisA: { ...lineLengthEditor.start },
+                  axisB: { ...end },
+                })
+                setSymmetryHoverWorld(null)
+                setLineLengthEditor(null)
+                return
+              }
               if (lineLengthEditor.drawTarget === 'contour') {
                 addCurveToCutLine(lineLengthEditor.pieceId, { type: 'line', start: lineLengthEditor.start, end })
               } else {
@@ -10931,7 +11007,7 @@ export function WorkspaceCanvas() {
           <button
             type="button"
             onClick={() => {
-              if (lineLengthEditor.mode === 'draw') {
+              if (lineLengthEditor.mode === 'draw' && lineLengthEditor.drawTarget !== 'symmetryAxis') {
                 setDragging(null)
                 setTool('select')
               }
@@ -11248,7 +11324,10 @@ export function WorkspaceCanvas() {
             <span>Ersten Punkt der Spiegelachse klicken (Teilkoordinaten).</span>
           )}
           {pieceSymmetryState.phase === 'axisB' && (
-            <span>Zweiten Punkt klicken — die Linie durch beide Punkte ist die Spiegelachse.</span>
+            <span>
+              Zweiten Punkt klicken — die Linie durch beide Punkte ist die Spiegelachse.
+              {' '}Leertaste: Länge in mm (Richtung wie Maus).
+            </span>
           )}
           {pieceSymmetryState.phase === 'pickInternalLine' && (
             <span>Interne Linie anklicken (Achse = Strecke Start–Ende; bei Kurve: Sehne).</span>

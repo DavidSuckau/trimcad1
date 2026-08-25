@@ -1,5 +1,5 @@
 import type { Curve, Drill, Notch, PatternPiece, Point } from '../types/model'
-import { bezierAt, curvesBounds, pointAtPathLength, totalPathLength } from './curveToPath'
+import { bezierAt, curvesBounds, pointAtPathLength, signedAreaCurves, totalPathLength } from './curveToPath'
 import { deriveCutLineForPiece } from './deriveCutLineForPiece'
 import { chamferCutLineCornersInSeamAllowance } from './facingChamfer'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
@@ -176,15 +176,19 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
   }
 
   let cutLine = chamferCutLineCornersInSeamAllowance(draft)
-  const chamferGainedSegments = cutLine.length - cutForChamfer.length
+  const areaBefore = Math.abs(signedAreaCurves(cutForChamfer))
+  const areaAfter = Math.abs(signedAreaCurves(cutLine))
+  // Erfolgreiche Fase sägt Spitzen ab (Fläche sinkt) und/oder ändert die Segmentzahl.
+  // Tessellations-Miters: oft weniger Segmente nach dem Absägen → nicht nur auf +Segmente prüfen.
+  const chamferLikelyApplied =
+    cutLine.length !== cutForChamfer.length || areaBefore - areaAfter > 0.5
   // Rollback nur wenn der Chamfer nichts gebracht hat und die NZ trotzdem kollabiert.
-  // Erfolgreiche Fasen (mehr Segmente) nie verwerfen — sonst verschwinden die
-  // abgeschnittenen Ecken z. B. nach Flip der Mutter trotz Sync.
+  // Sonst verschwinden die abgeschnittenen Ecken z. B. nach Flip der Mutter trotz Sync.
   if (
     sa != null &&
     sa > 0 &&
     seamLine.length >= 3 &&
-    chamferGainedSegments <= 0 &&
+    !chamferLikelyApplied &&
     chamferCollapsesSeamAllowance(seamLine, cutForChamfer, cutLine, sa)
   ) {
     cutLine = cutForChamfer

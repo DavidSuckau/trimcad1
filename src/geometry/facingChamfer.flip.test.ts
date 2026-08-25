@@ -146,6 +146,6 @@ describe('chamfer after mirror / reverse', () => {
       cutLine: derived.cutLine,
       seamLine: smallSeam,
     })
-    for (const d of midDist(smallSeam, out)) expect(d).toBeGreaterThan(15)
+    for (const d of midDist(smallSeam, out)) expect(d).toBeGreaterThan(14)
   })
 })

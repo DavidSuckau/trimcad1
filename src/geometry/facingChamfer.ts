@@ -8,11 +8,14 @@ const MIN_CHAMFER_MM = 0.5
  * sind nahezu kollinear (~180°) und würden sonst die gesamte Nahtzugabe „auffressen“.
  */
 const MAX_INTERIOR_DEG_FOR_CHAMFER = 165
-/** Max. Anteil der angrenzenden Cut-Kante, der pro Ecke abgeschnitten wird. */
-const MAX_EDGE_TRIM_FRAC = 0.45
-/** Mindestens so viel der Cut-Kante bleibt als paralleles Mittelstück (NZ sichtbar). */
-const MIN_EDGE_FLAT_FRAC = 0.25
-const MIN_EDGE_FLAT_MM = 8
+/**
+ * Max. Anteil der Cut-Kante pro Ecke. Hoch halten, damit die Fase möglichst
+ * durch die Naht-Ecke geht (Winkel folgen), nicht als kurze Stub-Kante endet.
+ */
+const MAX_EDGE_TRIM_FRAC = 0.49
+/** Kleines paralleles Mittelstück behalten (NZ sichtbar); Rest darf Fase sein. */
+const MIN_EDGE_FLAT_FRAC = 0.08
+const MIN_EDGE_FLAT_MM = 2
 
 function cloneCurves(curves: Curve[]): Curve[] {
   return curves.map((c) =>
@@ -107,11 +110,17 @@ function bestSharpCutCornerForSeamVertex(
     const { min: minEdge } = adjacentEdgeLensAt(cut, i)
     if (minEdge < minEdgeAtCorner) continue
     const saErr = Math.abs(d - expectedDist)
+    // Bei gleichem Abstand: schärfere / weiter außen liegende Ecke (echte Miter-Spitze)
+    // vor kurzen Tessellations-Knicken bevorzugen.
     if (
       !best ||
       saErr < best.saErr - 0.4 ||
-      (Math.abs(saErr - best.saErr) <= 0.4 && minEdge > best.minEdge + 0.01) ||
+      (Math.abs(saErr - best.saErr) <= 0.4 && d > best.dist + 0.15) ||
       (Math.abs(saErr - best.saErr) <= 0.4 &&
+        Math.abs(d - best.dist) <= 0.15 &&
+        minEdge > best.minEdge + 0.01) ||
+      (Math.abs(saErr - best.saErr) <= 0.4 &&
+        Math.abs(d - best.dist) <= 0.15 &&
         Math.abs(minEdge - best.minEdge) <= 0.01 &&
         interiorDeg < best.angle)
     ) {
@@ -185,28 +194,20 @@ function hitPlaneOnSegment(a: Point, b: Point, S: Point, nVec: Point): { point: 
 }
 
 /**
- * Punkt auf a→b in Abstand `trimMm` von b (Ecke) zurück.
+ * Kantenlänge ab Ecke — kurze Tessellations-Stücke an der Miter-Spitze mitzählen,
+ * bis genug Länge für eine sinnvolle Fase da ist (nicht nach 1 mm abbrechen).
  */
-function pointBackFromEnd(a: Point, b: Point, trimMm: number): Point {
-  const len = dist(a, b)
-  if (len < 1e-12) return { ...b }
-  const t = Math.max(0, Math.min(1, 1 - trimMm / len))
-  return add(a, scale(sub(b, a), t))
-}
-
-/** Kantenlänge ab Ecke — bei kurzen Tessellations-Stücken nächste Segmente mitzählen. */
-function edgeLenFromCorner(ring: Point[], cornerIdx: number, direction: -1 | 1, minAccum = 0): number {
+function edgeLenFromCorner(ring: Point[], cornerIdx: number, direction: -1 | 1): number {
   const n = ring.length
   let total = 0
   let i = cornerIdx
-  for (let step = 0; step < 12; step++) {
-    const a = ring[i]!
+  for (let step = 0; step < 64; step++) {
     const nextI = (i + direction + n) % n
     if (nextI === cornerIdx && step > 0) break
-    const b = ring[nextI]!
-    total += dist(a, b)
+    total += dist(ring[i]!, ring[nextI]!)
     i = nextI
-    if (total >= minAccum) break
+    // Genug für typische NZ-Fasen; darüber wäre es schon die Nachbarkante.
+    if (total >= 100) break
   }
   return total
 }
@@ -219,54 +220,155 @@ function maxTrimForEdge(edgeLen: number): number {
 }
 
 /**
- * Lokale Fase an Ring-Ecke `cornerIdx`: ersetzt C durch T_prev und T_next,
- * begrenzt auf Kantenanteil — keine unendliche Halbebene (die die NZ mittig auffrisst).
+ * Von der Cut-Ecke entlang des Rings wandern: Trim-Maß bis Ebene durch Naht-Ecke S
+ * (über mehrere Tessellations-Segmente), begrenzt auf maxTrimMm.
+ */
+function planeTrimMmWalking(
+  ring: Point[],
+  cornerIdx: number,
+  direction: -1 | 1,
+  S: Point,
+  nVec: Point,
+  maxTrimMm: number,
+): number | null {
+  const n = ring.length
+  if (maxTrimMm < MIN_CHAMFER_MM) return null
+  let walked = 0
+  let i = cornerIdx
+  for (let step = 0; step < n - 1; step++) {
+    const nextI = (i + direction + n) % n
+    const a = ring[i]!
+    const b = ring[nextI]!
+    const segLen = dist(a, b)
+    if (segLen < 1e-12) {
+      i = nextI
+      continue
+    }
+    const hit = hitPlaneOnSegment(a, b, S, nVec)
+    if (hit) {
+      const trim = walked + dist(a, hit.point)
+      if (trim < MIN_CHAMFER_MM * 0.5) {
+        // Zu nah an C — weiterlaufen (Ebene nochmal auf nächstem Segment)
+        walked += segLen
+        i = nextI
+        if (walked >= maxTrimMm) return maxTrimMm
+        continue
+      }
+      return Math.min(Math.max(trim, MIN_CHAMFER_MM), maxTrimMm)
+    }
+    walked += segLen
+    if (walked >= maxTrimMm) return maxTrimMm
+    i = nextI
+  }
+  return walked >= MIN_CHAMFER_MM ? Math.min(walked, maxTrimMm) : null
+}
+
+/** Punkt auf dem Ring in Bogenlänge `trimMm` von cornerIdx in direction. */
+function pointAtTrimFromCorner(
+  ring: Point[],
+  cornerIdx: number,
+  direction: -1 | 1,
+  trimMm: number,
+): Point | null {
+  const n = ring.length
+  let walked = 0
+  let i = cornerIdx
+  for (let step = 0; step < n - 1; step++) {
+    const nextI = (i + direction + n) % n
+    const a = ring[i]!
+    const b = ring[nextI]!
+    const segLen = dist(a, b)
+    if (segLen < 1e-12) {
+      i = nextI
+      continue
+    }
+    if (walked + segLen >= trimMm - 1e-12) {
+      const t = (trimMm - walked) / segLen
+      return add(a, scale(sub(b, a), Math.max(0, Math.min(1, t))))
+    }
+    walked += segLen
+    i = nextI
+  }
+  return null
+}
+
+/** Ring-Indizes zwischen Ecke und Trim-Punkt (exkl. Ecke, exkl. Segment-Ende hinter dem Hit). */
+function intermediateIndicesAlongTrim(
+  ring: Point[],
+  cornerIdx: number,
+  direction: -1 | 1,
+  trimMm: number,
+): number[] {
+  const n = ring.length
+  const out: number[] = []
+  let walked = 0
+  let i = cornerIdx
+  for (let step = 0; step < n - 2; step++) {
+    const nextI = (i + direction + n) % n
+    const segLen = dist(ring[i]!, ring[nextI]!)
+    if (walked + segLen >= trimMm - 1e-9) break
+    walked += segLen
+    out.push(nextI)
+    i = nextI
+  }
+  return out
+}
+
+/**
+ * Lokale Fase an Ring-Ecke `cornerIdx`: Spitze bis zur Ebene durch Naht-Ecke S absägen.
+ * Läuft über Tessellations-Segmente — sonst bleibt die Miter-Spitze stehen.
  */
 function localChamferRingCorner(ring: Point[], cornerIdx: number, S: Point): Point[] | null {
   const n = ring.length
   if (n < 3 || cornerIdx < 0 || cornerIdx >= n) return null
-  const C = ring[cornerIdx]
-  const prev = ring[(cornerIdx - 1 + n) % n]
-  const next = ring[(cornerIdx + 1) % n]
+  const C = ring[cornerIdx]!
   const nVec = sub(C, S)
   if (Math.hypot(nVec.x, nVec.y) < MIN_CHAMFER_MM) return null
 
-  const lenPrev = Math.max(dist(prev, C), edgeLenFromCorner(ring, cornerIdx, -1, MIN_CHAMFER_MM))
-  const lenNext = Math.max(dist(C, next), edgeLenFromCorner(ring, cornerIdx, 1, MIN_CHAMFER_MM))
-  const maxPrev = maxTrimForEdge(lenPrev)
-  const maxNext = maxTrimForEdge(lenNext)
+  const maxPrev = maxTrimForEdge(edgeLenFromCorner(ring, cornerIdx, -1))
+  const maxNext = maxTrimForEdge(edgeLenFromCorner(ring, cornerIdx, 1))
   if (maxPrev < MIN_CHAMFER_MM || maxNext < MIN_CHAMFER_MM) return null
 
-  const hitPrev = hitPlaneOnSegment(prev, C, S, nVec)
-  const hitNext = hitPlaneOnSegment(C, next, S, nVec)
+  let trimPrev = planeTrimMmWalking(ring, cornerIdx, -1, S, nVec, maxPrev)
+  let trimNext = planeTrimMmWalking(ring, cornerIdx, 1, S, nVec, maxNext)
+  if (trimPrev == null || trimNext == null) return null
 
-  let trimPrev = hitPrev ? dist(hitPrev.point, C) : maxPrev
-  let trimNext = hitNext ? dist(hitNext.point, C) : maxNext
-  trimPrev = Math.min(Math.max(trimPrev, MIN_CHAMFER_MM), maxPrev)
-  trimNext = Math.min(Math.max(trimNext, MIN_CHAMFER_MM), maxNext)
-
-  const minEdge = Math.min(lenPrev, lenNext)
-  const depth = Math.hypot(nVec.x, nVec.y)
-  if (minEdge < depth * 1.05) {
-    const scale = Math.max(0.35, minEdge / (depth * 1.05))
-    trimPrev = Math.max(MIN_CHAMFER_MM, Math.min(trimPrev * scale, maxPrev))
-    trimNext = Math.max(MIN_CHAMFER_MM, Math.min(trimNext * scale, maxNext))
-    if (trimPrev < MIN_CHAMFER_MM || trimNext < MIN_CHAMFER_MM) return null
+  // Winkel halten: wenn eine Seite stärker geklemmt wurde, die andere proportional.
+  const rawPrev = planeTrimMmWalking(ring, cornerIdx, -1, S, nVec, 1e9) ?? trimPrev
+  const rawNext = planeTrimMmWalking(ring, cornerIdx, 1, S, nVec, 1e9) ?? trimNext
+  if (rawPrev > 1e-9 && rawNext > 1e-9) {
+    const sPrev = trimPrev / rawPrev
+    const sNext = trimNext / rawNext
+    const s = Math.min(sPrev, sNext, 1)
+    trimPrev = Math.max(MIN_CHAMFER_MM, Math.min(maxPrev, rawPrev * s))
+    trimNext = Math.max(MIN_CHAMFER_MM, Math.min(maxNext, rawNext * s))
   }
 
-  const tPrev = pointBackFromEnd(prev, C, trimPrev)
-  const tNext = add(C, scale(sub(next, C), Math.min(1, trimNext / Math.max(lenNext, 1e-12))))
-
+  const tPrev = pointAtTrimFromCorner(ring, cornerIdx, -1, trimPrev)
+  const tNext = pointAtTrimFromCorner(ring, cornerIdx, 1, trimNext)
+  if (!tPrev || !tNext) return null
   if (dist(tPrev, tNext) < MIN_CHAMFER_MM) return null
 
+  const remove = new Set<number>([
+    cornerIdx,
+    ...intermediateIndicesAlongTrim(ring, cornerIdx, -1, trimPrev),
+    ...intermediateIndicesAlongTrim(ring, cornerIdx, 1, trimNext),
+  ])
+
+  // Fase einfügen, wenn der Remove-Block beginnt (Prev-Seite kann vor der Ecke liegen).
   const out: Point[] = []
+  let inserted = false
   for (let i = 0; i < n; i++) {
-    if (i === cornerIdx) {
-      out.push({ ...tPrev }, { ...tNext })
-    } else {
-      out.push({ ...ring[i] })
+    if (remove.has(i)) {
+      if (!inserted) {
+        out.push({ ...tPrev }, { ...tNext })
+        inserted = true
+      }
+      continue
     }
+    out.push({ ...ring[i]! })
   }
+  if (!inserted || out.length < 3) return null
   return out
 }
 
@@ -290,7 +392,7 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
 
   const maxPairDist = Math.max(maxSa, saDefault, 1) * 2.5 + 1
 
-  type Corner = { ringIndex: number; S: Point }
+  type Corner = { C: Point; S: Point }
   const corners: Corner[] = []
 
   // Ring 1:1 zu Line-Cut-Vertices (Clipper); Bézier-Cuts werden abgetastet — Index-Match nur bei Lines.
@@ -314,35 +416,38 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
     const corner = bestSharpCutCornerForSeamVertex(cut, S, seam, si, maxPairDist, saAtCorner)
     if (!corner) continue
 
-    let ringIndex = corner.index
     if (!useVertexIndexAsRing) {
-      // Nächsten Ringpunkt zur Cut-Ecke suchen
-      let best = 0
       let bestD = Infinity
       for (let i = 0; i < ring0.length; i++) {
-        const d = dist(ring0[i], corner.C)
-        if (d < bestD) {
-          bestD = d
-          best = i
-        }
+        const d = dist(ring0[i]!, corner.C)
+        if (d < bestD) bestD = d
       }
       if (bestD > maxPairDist) continue
-      ringIndex = best
     }
 
-    if (corners.some((c) => c.ringIndex === ringIndex)) continue
-    corners.push({ ringIndex, S: { ...S } })
+    if (corners.some((c) => dist(c.C, corner.C) < 0.25)) continue
+    corners.push({ C: { ...corner.C }, S: { ...S } })
   }
 
   if (corners.length === 0) return cloneCurves(cut)
 
-  // Hohe Indizes zuerst: Einfügen (+1 Vertex) verschiebt nur höhere Indizes nicht die noch offenen.
-  corners.sort((a, b) => b.ringIndex - a.ringIndex)
-
   let ring = ring0.map((p) => ({ ...p }))
   let applied = 0
+  // Hohe Distanz zu S zuerst (äußere Spitzen); nach jeder Fase C im Ring neu suchen.
+  corners.sort((a, b) => dist(b.C, b.S) - dist(a.C, a.S))
   for (const c of corners) {
-    const nextRing = localChamferRingCorner(ring, c.ringIndex, c.S)
+    let ringIndex = -1
+    let bestD = Infinity
+    for (let i = 0; i < ring.length; i++) {
+      const d = dist(ring[i]!, c.C)
+      if (d < bestD) {
+        bestD = d
+        ringIndex = i
+      }
+    }
+    if (ringIndex < 0 || bestD > 1.5) continue
+
+    const nextRing = localChamferRingCorner(ring, ringIndex, c.S)
     if (!nextRing) continue
     ring = nextRing
     applied++

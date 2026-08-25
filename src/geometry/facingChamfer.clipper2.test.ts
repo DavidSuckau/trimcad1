@@ -71,8 +71,9 @@ describe('Kaschierung: alle Ecken chamfern (Clipper2)', () => {
     const parent = parentFromSeam(bezierTopSeam(), 10)
     expect(sharpCutCornerCount(parent.cutLine)).toBeGreaterThanOrEqual(4)
     const chamfered = chamferCutLineCornersInSeamAllowance(parent)
-    // Mehr Segmente als reine 4-Ecken-Box (Kurve tesselliert), aber Chamfer muss greifen
-    expect(chamfered.length).toBeGreaterThan(parent.cutLine.length)
+    // Fase greift (Kontur ≠ Offset); Segmentzahl kann sinken (Tessellation an Spitzen weg)
+    expect(chamfered).not.toEqual(parent.cutLine)
+    expect(sharpCutCornerCount(chamfered)).toBeGreaterThanOrEqual(4)
   })
 
   it('buildFacingGeometryFromParent wendet Chamfer an (Bézier)', () => {

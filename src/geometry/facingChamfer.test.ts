@@ -145,4 +145,34 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
       expect(best).toBeGreaterThan(8)
     }
   })
+
+  it('tessellierte Miter-Spitze: kurze Segmente an der Ecke werden mit abgeschnitten', () => {
+    const seam = square(100, 10)
+    // Spitze (0,0) mit Clipper-ähnlichen Kurzsegmenten, dann lange Kanten
+    const cut: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 1.5, y: 0 } },
+      { type: 'line', start: { x: 1.5, y: 0 }, end: { x: 4, y: 0 } },
+      { type: 'line', start: { x: 4, y: 0 }, end: { x: 120, y: 0 } },
+      { type: 'line', start: { x: 120, y: 0 }, end: { x: 120, y: 120 } },
+      { type: 'line', start: { x: 120, y: 120 }, end: { x: 0, y: 120 } },
+      { type: 'line', start: { x: 0, y: 120 }, end: { x: 0, y: 4 } },
+      { type: 'line', start: { x: 0, y: 4 }, end: { x: 0, y: 1.5 } },
+      { type: 'line', start: { x: 0, y: 1.5 }, end: { x: 0, y: 0 } },
+    ]
+    const piece = basePiece(cut, seam, 10)
+    const out = chamferCutLineCornersInSeamAllowance(piece)
+    const tipStillPresent = out.some(
+      (c) =>
+        c.type === 'line' &&
+        (Math.hypot(c.start.x, c.start.y) < 0.4 || Math.hypot(c.end.x, c.end.y) < 0.4),
+    )
+    expect(tipStillPresent).toBe(false)
+    const chamferAtSeam = out.find(
+      (c) =>
+        c.type === 'line' &&
+        distPointToSegLine({ x: 10, y: 10 }, c.start, c.end) < 0.5 &&
+        curveSegmentArcLength(c, 0, 1) > 15,
+    )
+    expect(chamferAtSeam).toBeTruthy()
+  })
 })

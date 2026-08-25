@@ -107,6 +107,6 @@ describe('Kaschierung: Ecken nach Mutter-Edit', () => {
     expect(derived1.ok).toBe(true)
     if (!derived1.ok) return
     expect(chamferCollapsesSeamAllowance(parent.seamLine, derived1.cutLine, rebuilt.cutLine, 10)).toBe(false)
-    expect(rebuilt.cutLine.length).toBeGreaterThanOrEqual(derived1.cutLine.length)
+    expect(rebuilt.cutLine).not.toEqual(derived1.cutLine)
   })
 })
