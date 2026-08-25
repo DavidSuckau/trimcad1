@@ -266,34 +266,47 @@ export function DevFeedbackModal() {
                   .
                 </p>
               )}
-              <ul className="dev-feedback-list">
-                {activeIssues.map((issue) => (
-                  <li key={issue.number} className={`dev-feedback-item dev-feedback-item--${issue.status}`}>
-                    <div className="dev-feedback-item-head">
-                      <span className="dev-feedback-item-title">
-                        #{issue.number} · {issue.title}
+              <div className="dev-feedback-list-wrap">
+                <div className="dev-feedback-list-head" aria-hidden="true">
+                  <span className="dev-feedback-col dev-feedback-col--nr">#</span>
+                  <span className="dev-feedback-col dev-feedback-col--title">Titel</span>
+                  <span className="dev-feedback-col dev-feedback-col--status">Status</span>
+                  <span className="dev-feedback-col dev-feedback-col--age">Offen seit</span>
+                  <span className="dev-feedback-col dev-feedback-col--date">Erstellt</span>
+                  <span className="dev-feedback-col dev-feedback-col--link" />
+                </div>
+                <ul className="dev-feedback-list">
+                  {activeIssues.map((issue) => (
+                    <li key={issue.number} className={`dev-feedback-item dev-feedback-item--${issue.status}`}>
+                      <span className="dev-feedback-col dev-feedback-col--nr">#{issue.number}</span>
+                      <span className="dev-feedback-col dev-feedback-col--title" title={issue.title}>
+                        {issue.title}
                       </span>
-                      <span className="dev-feedback-item-meta">
+                      <span className="dev-feedback-col dev-feedback-col--status">
                         <span className={`dev-feedback-badge dev-feedback-badge--${issue.status}`}>
                           {issue.status === 'in_progress' ? 'Bearbeitung' : 'Offen'}
                         </span>
-                        · {formatOpenDays(issue.openDays)} · {formatDate(issue.createdAt)}
                       </span>
-                    </div>
-                    {issue.bodyPreview && (
-                      <p className="dev-feedback-item-preview">{issue.bodyPreview}</p>
-                    )}
-                    <a
-                      className="dev-feedback-item-link"
-                      href={issue.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      In GitHub öffnen
-                    </a>
-                  </li>
-                ))}
-              </ul>
+                      <span className="dev-feedback-col dev-feedback-col--age">
+                        {formatOpenDays(issue.openDays)}
+                      </span>
+                      <span className="dev-feedback-col dev-feedback-col--date">
+                        {formatDate(issue.createdAt)}
+                      </span>
+                      <span className="dev-feedback-col dev-feedback-col--link">
+                        <a
+                          className="dev-feedback-item-link"
+                          href={issue.htmlUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          GitHub
+                        </a>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </>
           )}
         </div>

@@ -75,8 +75,8 @@ export type TrendChartGeometry = {
 
 export function buildTrendChartGeometry(
   trend: TrendPoint[],
-  width = 520,
-  height = 160,
+  width = 880,
+  height = 180,
 ): TrendChartGeometry | null {
   if (trend.length === 0) return null
   const padding = { top: 12, right: 12, bottom: 28, left: 36 }
