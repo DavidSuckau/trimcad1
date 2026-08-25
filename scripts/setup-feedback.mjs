@@ -44,6 +44,15 @@ try {
   console.warn(`Label: ${e instanceof Error ? e.message : e}`)
 }
 
+try {
+  run(
+    `gh label create "in-progress" --repo "${repo}" --color "fbca04" --description "TrimTex: wird bearbeitet" --force`,
+  )
+  console.log(`✓ Label „in-progress“ in ${repo}`)
+} catch (e) {
+  console.warn(`Label in-progress: ${e instanceof Error ? e.message : e}`)
+}
+
 let token = ''
 try {
   token = run('gh auth token')

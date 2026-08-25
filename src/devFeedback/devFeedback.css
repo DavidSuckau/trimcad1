@@ -208,3 +208,130 @@
   background: #f5f5f5;
   color: #222;
 }
+
+.dev-feedback-stats {
+  margin-bottom: 12px;
+}
+
+.dev-feedback-stats-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: #f8f9fa;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.dev-feedback-stats-summary:hover {
+  background: #f0f2f5;
+}
+
+.dev-feedback-stat-chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.dev-feedback-stat-chip--open {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.dev-feedback-stat-chip--progress {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.dev-feedback-stat-chip--closed {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.dev-feedback-stat-chip--muted {
+  background: #eee;
+  color: #555;
+  font-weight: 500;
+}
+
+.dev-feedback-stats-toggle {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.dev-feedback-stats-detail {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.dev-feedback-stats-group {
+  margin-bottom: 10px;
+}
+
+.dev-feedback-stats-group-title {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.dev-feedback-stats-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.dev-feedback-stats-rows li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.dev-feedback-stats-rows li:last-child {
+  border-bottom: none;
+}
+
+.dev-feedback-stats-age {
+  color: #777;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.dev-feedback-stats-hint {
+  margin: 8px 0 0;
+  font-size: 0.72rem;
+  color: #888;
+}
+
+.dev-feedback-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.dev-feedback-badge--open {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.dev-feedback-badge--in_progress {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.dev-feedback-item--in_progress {
+  border-color: #fcd34d;
+}

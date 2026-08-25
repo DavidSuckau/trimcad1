@@ -35,5 +35,6 @@ describe('mapGithubIssueRow', () => {
       labels: [{ name: 'trimtex-feedback' }],
     })
     expect(row?.number).toBe(2)
+    expect(row?.status).toBe('open')
   })
 })

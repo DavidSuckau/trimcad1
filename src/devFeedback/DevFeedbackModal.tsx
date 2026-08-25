@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { createFeedbackIssue, fetchFeedbackIssues, type FeedbackIssue } from './devFeedbackApi'
+import {
+  createFeedbackIssue,
+  fetchFeedbackSnapshot,
+  type FeedbackIssue,
+} from './devFeedbackApi'
+import { FeedbackStatsPanel } from './FeedbackStatsPanel'
+import { formatOpenDays, type FeedbackIssueStats } from './feedbackStats'
 import { useDevFeedbackStore } from './useDevFeedbackStore'
 import { validateFeedbackForm } from './validateFeedback'
 import './devFeedback.css'
@@ -42,18 +48,27 @@ export function DevFeedbackModal() {
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
 
   const [issues, setIssues] = useState<FeedbackIssue[]>([])
+  const [stats, setStats] = useState<FeedbackIssueStats | null>(null)
+  const [statsExpanded, setStatsExpanded] = useState(false)
   const [loadingList, setLoadingList] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
+
+  const activeIssues = useMemo(
+    () => issues.filter((i) => i.status === 'open' || i.status === 'in_progress'),
+    [issues],
+  )
 
   const loadIssues = useCallback(async () => {
     setLoadingList(true)
     setListError(null)
     try {
-      const list = await fetchFeedbackIssues()
-      setIssues(list)
+      const snap = await fetchFeedbackSnapshot()
+      setIssues(snap.issues)
+      setStats(snap.stats)
     } catch (e) {
       setListError(e instanceof Error ? e.message : 'Liste konnte nicht geladen werden.')
       setIssues([])
+      setStats(null)
     } finally {
       setLoadingList(false)
     }
@@ -214,6 +229,14 @@ export function DevFeedbackModal() {
             </form>
           ) : (
             <>
+              {stats && (
+                <FeedbackStatsPanel
+                  stats={stats}
+                  issues={issues}
+                  expanded={statsExpanded}
+                  onToggle={() => setStatsExpanded((v) => !v)}
+                />
+              )}
               <div className="dev-feedback-actions">
                 <button
                   type="button"
@@ -229,9 +252,9 @@ export function DevFeedbackModal() {
                   {listError}
                 </p>
               )}
-              {!listError && !loadingList && issues.length === 0 && (
+              {!listError && !loadingList && activeIssues.length === 0 && (
                 <p className="dev-feedback-empty">
-                  Noch keine offenen TrimTex-Einträge. Nach dem Senden ggf. „Aktualisieren“ — oder direkt
+                  Keine offenen TrimTex-Einträge. Nach dem Senden ggf. „Aktualisieren“ — oder direkt
                   auf{' '}
                   <a
                     href={`https://github.com/DavidSuckau/trimcad1/issues?q=is%3Aissue+is%3Aopen+label%3A${encodeURIComponent('trimtex-feedback')}`}
@@ -244,13 +267,18 @@ export function DevFeedbackModal() {
                 </p>
               )}
               <ul className="dev-feedback-list">
-                {issues.map((issue) => (
-                  <li key={issue.number} className="dev-feedback-item">
+                {activeIssues.map((issue) => (
+                  <li key={issue.number} className={`dev-feedback-item dev-feedback-item--${issue.status}`}>
                     <div className="dev-feedback-item-head">
                       <span className="dev-feedback-item-title">
                         #{issue.number} · {issue.title}
                       </span>
-                      <span className="dev-feedback-item-meta">{formatDate(issue.createdAt)}</span>
+                      <span className="dev-feedback-item-meta">
+                        <span className={`dev-feedback-badge dev-feedback-badge--${issue.status}`}>
+                          {issue.status === 'in_progress' ? 'Bearbeitung' : 'Offen'}
+                        </span>
+                        · {formatOpenDays(issue.openDays)} · {formatDate(issue.createdAt)}
+                      </span>
                     </div>
                     {issue.bodyPreview && (
                       <p className="dev-feedback-item-preview">{issue.bodyPreview}</p>

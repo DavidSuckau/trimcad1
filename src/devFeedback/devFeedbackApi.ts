@@ -6,16 +6,14 @@ import {
 } from './featureFlags'
 import type { FeedbackForm } from './validateFeedback'
 import { buildIssueBody } from './validateFeedback'
-import { mapGithubIssueRow } from './feedbackIssueFilter'
+import { mapGithubIssueRow, type FeedbackIssueWithMeta } from './feedbackIssueFilter'
+import { computeFeedbackStats, type FeedbackIssueStats } from './feedbackStats'
 
-export type FeedbackIssue = {
-  number: number
-  title: string
-  state: string
-  htmlUrl: string
-  createdAt: string
-  author: string
-  bodyPreview: string
+export type { FeedbackIssueWithMeta as FeedbackIssue }
+
+export type FeedbackSnapshot = {
+  issues: FeedbackIssueWithMeta[]
+  stats: FeedbackIssueStats
 }
 
 export type CreateFeedbackResult = {
@@ -49,15 +47,6 @@ function feedbackApiUrl(pathAndQuery: string): string {
   return `${normalized}${suffix}`
 }
 
-async function fetchIssuesFromProxy(): Promise<FeedbackIssue[]> {
-  const response = await fetch(feedbackApiUrl('/issues?state=open'))
-  const data = await parseJson<{ issues?: FeedbackIssue[] } & ApiError>(response)
-  if (!response.ok) {
-    throw new Error(data.error ?? `Liste fehlgeschlagen (${response.status})`)
-  }
-  return data.issues ?? []
-}
-
 async function githubIssuesRequest(params: URLSearchParams): Promise<GithubIssueRow[]> {
   const response = await fetch(
     `https://api.github.com/repos/${GITHUB_REPO}/issues?${params}`,
@@ -75,29 +64,46 @@ async function githubIssuesRequest(params: URLSearchParams): Promise<GithubIssue
   return (await response.json()) as GithubIssueRow[]
 }
 
-/** Alle offenen Issues laden und TrimTex-Feedback clientseitig filtern (Label oft beim Senden weg). */
-async function fetchIssuesFromGithubDirect(): Promise<FeedbackIssue[]> {
+async function fetchIssuesFromGithubDirect(): Promise<FeedbackIssueWithMeta[]> {
   const params = new URLSearchParams({
-    state: 'open',
+    state: 'all',
     per_page: '100',
     sort: 'updated',
     direction: 'desc',
   })
   const rows = await githubIssuesRequest(params)
-  const mapped = rows.map(mapGithubIssueRow).filter((x): x is FeedbackIssue => x != null)
+  const mapped = rows.map(mapGithubIssueRow).filter((x): x is FeedbackIssueWithMeta => x != null)
   mapped.sort((a, b) => b.number - a.number)
   return mapped
 }
 
-export async function fetchFeedbackIssues(): Promise<FeedbackIssue[]> {
+async function fetchIssuesFromProxy(): Promise<FeedbackIssueWithMeta[]> {
+  const response = await fetch(feedbackApiUrl('/issues?state=all'))
+  const data = await parseJson<{ issues?: FeedbackIssueWithMeta[] } & ApiError>(response)
+  if (!response.ok) {
+    throw new Error(data.error ?? `Liste fehlgeschlagen (${response.status})`)
+  }
+  return data.issues ?? []
+}
+
+export async function fetchFeedbackSnapshot(): Promise<FeedbackSnapshot> {
+  let issues: FeedbackIssueWithMeta[]
   if (FEEDBACK_PROXY_ENABLED) {
     try {
-      return await fetchIssuesFromProxy()
+      issues = await fetchIssuesFromProxy()
     } catch {
-      /* Proxy nicht erreichbar */
+      issues = await fetchIssuesFromGithubDirect()
     }
+  } else {
+    issues = await fetchIssuesFromGithubDirect()
   }
-  return fetchIssuesFromGithubDirect()
+  return { issues, stats: computeFeedbackStats(issues) }
+}
+
+/** @deprecated Alias */
+export async function fetchFeedbackIssues(): Promise<FeedbackIssueWithMeta[]> {
+  const { issues } = await fetchFeedbackSnapshot()
+  return issues
 }
 
 function buildGithubNewIssueUrl(title: string, body: string): string {
