@@ -260,4 +260,25 @@ describe('pieceSymmetry', () => {
     expect(mirroredStarts.some((x) => Math.abs(x - 80) < 1)).toBe(true)
     expect(mirroredStarts.some((x) => Math.abs(x - 70) < 1)).toBe(true)
   })
+
+  it('buildSymmetricContour: Bézier bleibt Bézier (kein Tessellat mit vielen Eckpunkten)', () => {
+    const curves: Curve[] = [
+      {
+        type: 'bezier',
+        start: { x: 0, y: 0 },
+        end: { x: 0, y: 100 },
+        cp1: { x: -40, y: 30 },
+        cp2: { x: -40, y: 70 },
+      },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 0, y: 0 } },
+    ]
+    const r = buildSymmetricContour(curves, { x: 50, y: -10 }, { x: 50, y: 110 }, 'left')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const beziers = r.curves.filter((c) => c.type === 'bezier')
+    expect(beziers.length).toBeGreaterThanOrEqual(2)
+    expect(r.curves.length).toBeLessThan(16)
+  })
 })

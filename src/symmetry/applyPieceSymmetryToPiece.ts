@@ -11,6 +11,7 @@ import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
 import {
   buildSymmetricContour,
+  buildSymmetricContourPreservingCurves,
   mirrorPointAcrossLine,
   mirrorCurveAcrossLine,
   pointInKeepHalfPlane,
@@ -18,13 +19,30 @@ import {
   mirrorAngleDegrees,
   type PieceSymmetryKeepSide,
 } from '../geometry/pieceSymmetry'
+import type { Curve } from '../types/model'
 
 export type ApplyPieceSymmetryToPieceResult =
   | { ok: true; piece: PatternPiece }
   | { ok: false; toastMessage: string }
 
+function symmetrizeCurves(
+  curves: Curve[],
+  axisA: { x: number; y: number },
+  axisB: { x: number; y: number },
+  keepSide: PieceSymmetryKeepSide
+): { ok: true; curves: Curve[]; softFromAxisSplit: number[] } | { ok: false; message: string } {
+  const preserved = buildSymmetricContourPreservingCurves(curves, axisA, axisB, keepSide)
+  if (preserved && preserved.curves.length >= 3) {
+    return { ok: true, curves: preserved.curves, softFromAxisSplit: preserved.softFromAxisSplit }
+  }
+  const clipper = buildSymmetricContour(curves, axisA, axisB, keepSide)
+  if (!clipper.ok) return clipper
+  return { ok: true, curves: clipper.curves, softFromAxisSplit: [] }
+}
+
 /**
  * Wendet Teil-Symmetrie auf ein einzelnes Stück an (reine Logik, kein Workspace/Store).
+ * Bevorzugt kurven-erhaltende Spiegelung (Bézier bleiben Bézier).
  */
 export function applyPieceSymmetryToPiece(
   piece: PatternPiece,
@@ -37,15 +55,16 @@ export function applyPieceSymmetryToPiece(
   if (masterCurves.length < 3) {
     return { ok: false, toastMessage: 'warn:Kontur zu kurz für Symmetrie.' }
   }
-  const sym = buildSymmetricContour(masterCurves, axisA, axisB, keepSide)
+  const sym = symmetrizeCurves(masterCurves, axisA, axisB, keepSide)
   if (!sym.ok) {
     return { ok: false, toastMessage: `warn:${sym.message}` }
   }
+
   let cutLine: PatternPiece['cutLine']
   let seamLine: PatternPiece['seamLine']
   if (seamMaster && piece.seamAllowanceMm != null) {
     if (piece.cutLineDeviatesFromSeamAllowanceOffset === true && piece.cutLine.length >= 3) {
-      const symCut = buildSymmetricContour(piece.cutLine, axisA, axisB, keepSide)
+      const symCut = symmetrizeCurves(piece.cutLine, axisA, axisB, keepSide)
       if (!symCut.ok) {
         return { ok: false, toastMessage: `warn:${symCut.message}` }
       }
@@ -128,6 +147,9 @@ export function applyPieceSymmetryToPiece(
     return materializeNotchAnchorsOnCutLine(n, cutLine) ?? n
   })
 
+  // Achsen-Schnittpunkte = weiche (blaue) Punkte, keine neuen roten Ecken
+  const softSorted = [...new Set(sym.softFromAxisSplit)].sort((a, b) => a - b)
+
   const pieceOut = applySharpCornerPromotion({
     ...piece,
     cutLine,
@@ -138,6 +160,9 @@ export function applyPieceSymmetryToPiece(
     internalCircles,
     grainLine,
     internalLineSoftJunctions: undefined,
+    ...(seamMaster
+      ? { softVerticesMaster: softSorted, softVertices: [] }
+      : { softVertices: softSorted, softVerticesMaster: [] }),
   })
 
   return { ok: true, piece: pieceOut }

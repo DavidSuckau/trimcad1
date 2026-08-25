@@ -21,7 +21,8 @@ import type { PieceSymmetryConstraint } from '../types/model'
 
 const AXIS_CROSS_EPS = 0.8
 const VERTEX_MATCH_MM = 0.25
-const CURVE_PAIR_MAX_MM = 20
+/** Paarung keep↔mirror: großzügig, damit große Vertex-Züge die Gegenseite nicht „verlieren“. */
+const CURVE_PAIR_MAX_MM = 500
 const LINE_SPLIT_MIN_MM = 0.5
 
 export function getContourVertexPosition(curves: Curve[], vertexIndex: number): Point {
@@ -40,6 +41,30 @@ function cloneCurve(c: Curve): Curve {
     cp1: { ...c.cp1 },
     cp2: { ...c.cp2 },
   }
+}
+
+/** Gespiegelte Kurve für die Gegenseite: Start/End tauschen (Kontur-Umlaufsinn). */
+function reverseMirroredCurve(c: Curve): Curve {
+  if (c.type === 'line') {
+    return { type: 'line', start: { ...c.end }, end: { ...c.start } }
+  }
+  return {
+    type: 'bezier',
+    start: { ...c.end },
+    end: { ...c.start },
+    cp1: { ...c.cp2 },
+    cp2: { ...c.cp1 },
+  }
+}
+
+/** Setzt Start von curves[vi] und End von curves[vi-1] (geschlossen). */
+function setContourVertexPosition(curves: Curve[], vertexIndex: number, point: Point): void {
+  const n = curves.length
+  if (n === 0) return
+  const vi = ((vertexIndex % n) + n) % n
+  const prev = (vi - 1 + n) % n
+  curves[vi] = { ...curves[vi], start: { ...point } } as Curve
+  curves[prev] = { ...curves[prev], end: { ...point } } as Curve
 }
 
 function curveHalfPlane(
@@ -171,7 +196,11 @@ function masterCurvesForPiece(piece: PatternPiece): Curve[] {
   return useSeamLineForVertexEditing(piece) && piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
 }
 
-/** Spiegelt keep-Kurven auf die Partner-Kurven der anderen Seite – ohne Clipper/Tessellation. */
+/**
+ * Spiegelt die Vorlagen-Seite auf die Gegenseite – ohne Clipper/Tessellation.
+ * 1) Vertices: keep → mirror (auch bei großen Zügen)
+ * 2) Kurven inkl. Bézier-CPs: keep → mirror (robuste Paarung)
+ */
 export function syncMasterCurvesByMirroring(
   curves: Curve[],
   axisA: Point,
@@ -179,32 +208,83 @@ export function syncMasterCurvesByMirroring(
   keepSide: PieceSymmetryKeepSide
 ): Curve[] {
   const next = curves.map(cloneCurve)
+  const n = next.length
+  if (n < 3) return next
+
+  // 1) Eckpunkte der Vorlagen-Seite spiegeln → Partner auf der Gegenseite
+  const usedMirrorVertex = new Set<number>()
+  for (let i = 0; i < n; i++) {
+    const pos = getContourVertexPosition(next, i)
+    if (vertexHalfPlane(pos, axisA, axisB, keepSide) !== 'keep') continue
+    const partnerIdeal = mirrorPointAcrossLine(pos, axisA, axisB)
+    let best = -1
+    let bestD = Infinity
+    for (let j = 0; j < n; j++) {
+      if (usedMirrorVertex.has(j)) continue
+      const pj = getContourVertexPosition(next, j)
+      if (vertexHalfPlane(pj, axisA, axisB, keepSide) !== 'mirror') continue
+      const d = Math.hypot(pj.x - partnerIdeal.x, pj.y - partnerIdeal.y)
+      if (d < bestD) {
+        bestD = d
+        best = j
+      }
+    }
+    if (best < 0) continue
+    usedMirrorVertex.add(best)
+    setContourVertexPosition(next, best, partnerIdeal)
+  }
+
+  // 2) Ganze Kurven (inkl. Bézier-Kontrollpunkte) spiegeln
   const keepIndices: number[] = []
   const mirrorIndices: number[] = []
-  for (let i = 0; i < next.length; i++) {
+  for (let i = 0; i < n; i++) {
     const hp = curveHalfPlane(next[i], axisA, axisB, keepSide)
     if (hp === 'keep') keepIndices.push(i)
     else if (hp === 'mirror') mirrorIndices.push(i)
   }
   const usedMirror = new Set<number>()
+  const pairs: { ki: number; mi: number; d: number }[] = []
   for (const ki of keepIndices) {
     const mirrored = mirrorCurveAcrossLine(next[ki], axisA, axisB)
     const targetRef = curveReferencePoint(mirrored)
-    let bestMi = -1
-    let bestD = Infinity
     for (const mi of mirrorIndices) {
-      if (usedMirror.has(mi)) continue
       const ref = curveReferencePoint(next[mi])
       const d = Math.hypot(ref.x - targetRef.x, ref.y - targetRef.y)
+      pairs.push({ ki, mi, d })
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d)
+  const usedKeep = new Set<number>()
+  for (const { ki, mi, d } of pairs) {
+    if (usedKeep.has(ki) || usedMirror.has(mi)) continue
+    if (d > CURVE_PAIR_MAX_MM) continue
+    // Spiegelung kehrt die Segmentrichtung relativ zum Umlaufsinn um → reverse
+    next[mi] = reverseMirroredCurve(mirrorCurveAcrossLine(next[ki], axisA, axisB))
+    usedKeep.add(ki)
+    usedMirror.add(mi)
+  }
+
+  // 3) Vertices erneut: Achsen-Segmente / fehlgeschlagene Paare nachziehen
+  const usedMirrorVertex2 = new Set<number>()
+  for (let i = 0; i < n; i++) {
+    const pos = getContourVertexPosition(next, i)
+    if (vertexHalfPlane(pos, axisA, axisB, keepSide) !== 'keep') continue
+    const partnerIdeal = mirrorPointAcrossLine(pos, axisA, axisB)
+    let best = -1
+    let bestD = Infinity
+    for (let j = 0; j < n; j++) {
+      if (usedMirrorVertex2.has(j)) continue
+      const pj = getContourVertexPosition(next, j)
+      if (vertexHalfPlane(pj, axisA, axisB, keepSide) !== 'mirror') continue
+      const d = Math.hypot(pj.x - partnerIdeal.x, pj.y - partnerIdeal.y)
       if (d < bestD) {
         bestD = d
-        bestMi = mi
+        best = j
       }
     }
-    if (bestMi >= 0 && bestD < CURVE_PAIR_MAX_MM) {
-      next[bestMi] = mirrored
-      usedMirror.add(bestMi)
-    }
+    if (best < 0) continue
+    usedMirrorVertex2.add(best)
+    setContourVertexPosition(next, best, partnerIdeal)
   }
   return next
 }

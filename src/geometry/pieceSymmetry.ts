@@ -1,4 +1,4 @@
-import type { Curve, PatternPiece, Point } from '../types/model'
+import type { BezierCurve, Curve, PatternPiece, Point } from '../types/model'
 import { enumerateEdges, type EnumeratedEdge } from './edgeEnumeration'
 import { getCurvesForSeamEdge } from './seamUtils'
 import { masterEdgeIsStraightLine } from './horizontalLevelEdge'
@@ -6,7 +6,7 @@ import { masterEdgeIsStraightLine } from './horizontalLevelEdge'
 import ClipperLib from 'clipper-lib'
 import { closedPointsToLineCurves, tessellateCurvesToPoints } from './offset'
 import { samePoint } from './geometryConstants'
-import { bezierAt, bezierDerivativeAt, curvesBounds, totalPathLength } from './curveToPath'
+import { bezierAt, bezierDerivativeAt, curvesBounds, totalPathLength, splitBezierAt } from './curveToPath'
 
 // —— Konstanten —————————————————————————————————————————————————————————————
 
@@ -553,8 +553,360 @@ function unionKeptAndMirroredHalves(
   return largestPathByAbsArea(unionSol)
 }
 
+type HalfSide = 'keep' | 'mirror' | 'axis'
+
+function pointHalfSide(
+  p: Point,
+  axisA: Point,
+  axisB: Point,
+  keepSide: PieceSymmetryKeepSide
+): HalfSide {
+  const cz = crossZ(axisA, axisB, p)
+  if (Math.abs(cz) < EPS_HALF_PLANE * 1000 + 0.05) return 'axis'
+  return pointInKeepHalfPlane(p, axisA, axisB, keepSide) ? 'keep' : 'mirror'
+}
+
+function nearPt(a: Point, b: Point, eps = 0.15): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) <= eps
+}
+
+function cloneSymCurve(c: Curve): Curve {
+  if (c.type === 'line') {
+    return { type: 'line', start: { ...c.start }, end: { ...c.end } }
+  }
+  return {
+    type: 'bezier',
+    start: { ...c.start },
+    end: { ...c.end },
+    cp1: { ...c.cp1 },
+    cp2: { ...c.cp2 },
+  }
+}
+
+function reverseSymCurve(c: Curve): Curve {
+  if (c.type === 'line') {
+    return { type: 'line', start: { ...c.end }, end: { ...c.start } }
+  }
+  return {
+    type: 'bezier',
+    start: { ...c.end },
+    end: { ...c.start },
+    cp1: { ...c.cp2 },
+    cp2: { ...c.cp1 },
+  }
+}
+
+/** Schnitt Gerade P0→P1 mit Achse A→B; t in (0,1) oder null. */
+function lineSegmentAxisHit(
+  p0: Point,
+  p1: Point,
+  axisA: Point,
+  axisB: Point
+): { point: Point; t: number } | null {
+  const dx = p1.x - p0.x
+  const dy = p1.y - p0.y
+  const ax = axisB.x - axisA.x
+  const ay = axisB.y - axisA.y
+  const denom = dx * ay - dy * ax
+  if (Math.abs(denom) < EPS_GEOMETRY) return null
+  const ex = axisA.x - p0.x
+  const ey = axisA.y - p0.y
+  const t = (ex * ay - ey * ax) / denom
+  const u = (ex * dy - ey * dx) / denom
+  if (t < 1e-6 || t > 1 - 1e-6) return null
+  if (u < -0.05 || u > 1.05) return null
+  return { point: { x: p0.x + t * dx, y: p0.y + t * dy }, t }
+}
+
+/** Erster Achsen-Schnitt einer Bézier (Abtastung); t in (0,1) oder null. */
+function bezierAxisHitT(b: BezierCurve, axisA: Point, axisB: Point, keepSide: PieceSymmetryKeepSide): number | null {
+  const steps = 48
+  let prev = pointHalfSide(b.start, axisA, axisB, keepSide)
+  let prevT = 0
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps
+    const side = pointHalfSide(bezierAt(b, t), axisA, axisB, keepSide)
+    if (prev !== 'axis' && side !== 'axis' && prev !== side) {
+      let lo = prevT
+      let hi = t
+      for (let k = 0; k < 20; k++) {
+        const mid = (lo + hi) / 2
+        const ms = pointHalfSide(bezierAt(b, mid), axisA, axisB, keepSide)
+        if (ms === 'axis' || ms !== prev) hi = mid
+        else lo = mid
+      }
+      const hit = (lo + hi) / 2
+      if (hit > 1e-4 && hit < 1 - 1e-4) return hit
+    }
+    if (side !== 'axis') prev = side
+    prevT = t
+  }
+  return null
+}
+
+/**
+ * Keep-Anteile einer Kurve (Reihenfolge entlang der Kurve).
+ * Markiert, ob Start/Ende durch Achsen-Schnitt entstanden (→ weiche Punkte).
+ */
+function keepPortionsOfCurve(
+  c: Curve,
+  axisA: Point,
+  axisB: Point,
+  keepSide: PieceSymmetryKeepSide
+): { curve: Curve; splitStart: boolean; splitEnd: boolean }[] {
+  const s0 = pointHalfSide(c.start, axisA, axisB, keepSide)
+  const s1 = pointHalfSide(c.end, axisA, axisB, keepSide)
+
+  if (s0 === 'mirror' && s1 === 'mirror') {
+    // Bézier kann trotzdem die Achse kreuzen (beide Enden auf Mirror)
+    if (c.type === 'bezier') {
+      const tHit = bezierAxisHitT(c, axisA, axisB, keepSide)
+      if (tHit != null) {
+        const [a, b] = splitBezierAt(c, tHit)
+        return [
+          ...keepPortionsOfCurve(a, axisA, axisB, keepSide),
+          ...keepPortionsOfCurve(b, axisA, axisB, keepSide),
+        ]
+      }
+    }
+    return []
+  }
+
+  if (s0 !== 'mirror' && s1 !== 'mirror') {
+    // komplett keep oder Achse; Bézier-Ausbuchtung zur Mirror-Seite prüfen
+    if (c.type === 'bezier') {
+      const mid = pointHalfSide(bezierAt(c, 0.5), axisA, axisB, keepSide)
+      if (mid === 'mirror') {
+        const tHit = bezierAxisHitT(c, axisA, axisB, keepSide)
+        if (tHit != null) {
+          const [a, b] = splitBezierAt(c, tHit)
+          return [
+            ...keepPortionsOfCurve(a, axisA, axisB, keepSide),
+            ...keepPortionsOfCurve(b, axisA, axisB, keepSide),
+          ]
+        }
+      }
+    }
+    if (s0 === 'axis' && s1 === 'axis') {
+      // reine Achsen-Sehne: nicht Teil der Außenkontur
+      return []
+    }
+    return [{ curve: cloneSymCurve(c), splitStart: s0 === 'axis', splitEnd: s1 === 'axis' }]
+  }
+
+  // Kreuzung keep ↔ mirror
+  if (c.type === 'line') {
+    const hit = lineSegmentAxisHit(c.start, c.end, axisA, axisB)
+    if (!hit) {
+      return s0 === 'keep' || s0 === 'axis'
+        ? [{ curve: cloneSymCurve(c), splitStart: false, splitEnd: false }]
+        : []
+    }
+    if (s0 === 'keep' || s0 === 'axis') {
+      return [
+        {
+          curve: { type: 'line', start: { ...c.start }, end: { ...hit.point } },
+          splitStart: s0 === 'axis',
+          splitEnd: true,
+        },
+      ]
+    }
+    return [
+      {
+        curve: { type: 'line', start: { ...hit.point }, end: { ...c.end } },
+        splitStart: true,
+        splitEnd: s1 === 'axis',
+      },
+    ]
+  }
+
+  const tHit = bezierAxisHitT(c, axisA, axisB, keepSide)
+  if (tHit == null) {
+    return s0 === 'keep' || s0 === 'axis'
+      ? [{ curve: cloneSymCurve(c), splitStart: false, splitEnd: false }]
+      : []
+  }
+  const [left, right] = splitBezierAt(c, tHit)
+  if (s0 === 'keep' || s0 === 'axis') {
+    return [{ curve: left, splitStart: s0 === 'axis', splitEnd: true }]
+  }
+  return [{ curve: right, splitStart: true, splitEnd: s1 === 'axis' }]
+}
+
+export type SymmetricContourPreserveResult = {
+  curves: Curve[]
+  /** Vertex-Indizes, die durch Achsen-Schnitt entstanden (sollten weich sein). */
+  softFromAxisSplit: number[]
+}
+
+/**
+ * Symmetrische Kontur unter Erhalt von Bézier/Linien (kein Clipper-Tessellat).
+ * Keep-Halbebene + Spiegelung; Achsen-Schnittpunkte als weiche Vertices.
+ */
+export function buildSymmetricContourPreservingCurves(
+  masterCurves: Curve[],
+  axisA: Point,
+  axisB: Point,
+  keepSide: PieceSymmetryKeepSide
+): SymmetricContourPreserveResult | null {
+  if (masterCurves.length < 3) return null
+  if (distSq(axisA, axisB) < EPS_LENGTH) return null
+
+  // Wie Clipper: wenn die Kontur schon ganz auf der Keep-Seite liegt (Achse am Rand),
+  // nichts spiegeln. Halbteil an der Achse hat kleinere Keep-Fläche → weiter spiegeln.
+  const ring = polygonizeContour(masterCurves)
+  if (ring) {
+    const clipPoly = halfPlaneClipRectangle(axisA, axisB, keepSide, ring)
+    if (clipPoly.length >= 4) {
+      const intersection = executeIntersection(
+        [pointsToClipperPath(ring)],
+        [pointsToClipperPath(clipPoly)]
+      )
+      if (intersection.length > 0) {
+        const keptMerged = executeUnionUntilStable(intersection)
+        const fullArea = Math.abs(signedAreaRing(ring))
+        const keptArea = totalAbsArea(keptMerged)
+        if (isContourFullyOnKeepSide(fullArea, keptArea)) {
+          return { curves: masterCurves.map(cloneSymCurve), softFromAxisSplit: [] }
+        }
+      }
+    }
+  }
+
+  type Part = { curve: Curve; splitStart: boolean; splitEnd: boolean }
+  const parts: Part[] = []
+  for (const c of masterCurves) {
+    parts.push(...keepPortionsOfCurve(c, axisA, axisB, keepSide))
+  }
+  if (parts.length === 0) return null
+
+  // Ketten verbinden (Endpunkt → Start)
+  const chains: Part[][] = []
+  let cur: Part[] = [parts[0]!]
+  for (let i = 1; i < parts.length; i++) {
+    const p = parts[i]!
+    const prev = cur[cur.length - 1]!
+    if (nearPt(prev.curve.end, p.curve.start)) {
+      cur.push(p)
+    } else {
+      chains.push(cur)
+      cur = [p]
+    }
+  }
+  chains.push(cur)
+
+  // Eine offene Kette von Achse→Achse: ggf. Ketten am gemeinsamen Endpunkt rotieren/verknüpfen
+  let chain = chains[0]!
+  if (chains.length > 1) {
+    // Versuche, alle keep-Teile zu einer Kette zu verbinden, deren Enden auf der Achse liegen
+    const unused = chains.slice(1)
+    let guard = 0
+    while (unused.length > 0 && guard++ < 64) {
+      const head = chain[0]!.curve.start
+      const tail = chain[chain.length - 1]!.curve.end
+      let linked = false
+      for (let i = 0; i < unused.length; i++) {
+        const other = unused[i]!
+        const oHead = other[0]!.curve.start
+        const oTail = other[other.length - 1]!.curve.end
+        if (nearPt(tail, oHead)) {
+          chain = [...chain, ...other]
+          unused.splice(i, 1)
+          linked = true
+          break
+        }
+        if (nearPt(head, oTail)) {
+          chain = [...other, ...chain]
+          unused.splice(i, 1)
+          linked = true
+          break
+        }
+        if (nearPt(tail, oTail)) {
+          chain = [...chain, ...other.map((p) => ({
+            curve: reverseSymCurve(p.curve),
+            splitStart: p.splitEnd,
+            splitEnd: p.splitStart,
+          })).reverse()]
+          unused.splice(i, 1)
+          linked = true
+          break
+        }
+        if (nearPt(head, oHead)) {
+          chain = [
+            ...other
+              .map((p) => ({
+                curve: reverseSymCurve(p.curve),
+                splitStart: p.splitEnd,
+                splitEnd: p.splitStart,
+              }))
+              .reverse(),
+            ...chain,
+          ]
+          unused.splice(i, 1)
+          linked = true
+          break
+        }
+      }
+      if (!linked) break
+    }
+    if (unused.length > 0) return null
+  }
+
+  const start = chain[0]!.curve.start
+  const end = chain[chain.length - 1]!.curve.end
+  const startOnAxis = pointHalfSide(start, axisA, axisB, keepSide) === 'axis'
+  const endOnAxis = pointHalfSide(end, axisA, axisB, keepSide) === 'axis'
+  if (!startOnAxis || !endOnAxis) return null
+  if (nearPt(start, end)) return null // degeneriert
+
+  // Keep-Kette + gespiegelte Umkehrung (Achsenpunkte bleiben)
+  const keepCurves = chain.map((p) => cloneSymCurve(p.curve))
+  const mirrored = keepCurves
+    .map((c) => reverseSymCurve(mirrorCurveAcrossLine(c, axisA, axisB)))
+    .reverse()
+
+  const out: Curve[] = [...keepCurves, ...mirrored]
+  // Endpunkte snappen
+  for (let i = 0; i < out.length; i++) {
+    const next = out[(i + 1) % out.length]!
+    if (!nearPt(out[i]!.end, next.start, 0.25)) {
+      // erzwingen
+      const mid = {
+        x: (out[i]!.end.x + next.start.x) / 2,
+        y: (out[i]!.end.y + next.start.y) / 2,
+      }
+      out[i] = { ...out[i]!, end: mid } as Curve
+      out[(i + 1) % out.length] = { ...next, start: mid } as Curve
+    }
+  }
+
+  const softFromAxisSplit: number[] = []
+  const n = out.length
+  // Vertex i = start of out[i]; Achsen-Splits aus keep-Kette + gespiegelte Partner
+  for (let i = 0; i < keepCurves.length; i++) {
+    const part = chain[i]!
+    if (part.splitStart) softFromAxisSplit.push(i)
+    if (part.splitEnd) softFromAxisSplit.push((i + 1) % n)
+  }
+  // Spiegel-Partner der keep-Vertices: Index in der zweiten Hälfte
+  // keep vertex i ↔ mirror vertex (n - i) % n  (bei offener Kette Länge k: mirror starts at k)
+  const k = keepCurves.length
+  for (const vi of [...softFromAxisSplit]) {
+    if (vi < k) {
+      const mirrorVi = (n - vi) % n
+      softFromAxisSplit.push(mirrorVi)
+    }
+  }
+
+  return {
+    curves: out,
+    softFromAxisSplit: [...new Set(softFromAxisSplit)].sort((a, b) => a - b),
+  }
+}
+
 /**
  * Symmetrische geschlossene Kontur: behaltene Halbebene wird an der Achse gespiegelt und vereinigt.
+ * Bevorzugt kurven-erhaltend (Bézier bleiben); Clipper nur als Fallback.
  */
 export function buildSymmetricContour(
   masterCurves: Curve[],
@@ -567,6 +919,11 @@ export function buildSymmetricContour(
   }
   if (distSq(axisA, axisB) < EPS_LENGTH) {
     return { ok: false, message: 'Spiegelachse: Punkte zu nah beieinander.' }
+  }
+
+  const preserved = buildSymmetricContourPreservingCurves(masterCurves, axisA, axisB, keepSide)
+  if (preserved && preserved.curves.length >= 3) {
+    return { ok: true, curves: preserved.curves }
   }
 
   const ring = polygonizeContour(masterCurves)
