@@ -866,6 +866,35 @@ function mirrorX(p: Point, cx: number): Point {
   return { x: 2 * cx - p.x, y: p.y }
 }
 
+/** Soft-Vertex-Indizes nach Punkt-Abbildung auf die neue Kontur mappen (nächster Eckpunkt). */
+function remapSoftVertexIndicesByPointMap(
+  oldCurves: Curve[],
+  newCurves: Curve[],
+  soft: number[] | undefined,
+  mapPoint: (p: Point) => Point,
+  maxDistMm = 3,
+): number[] {
+  if (!soft?.length || oldCurves.length < 3 || newCurves.length < 3) return []
+  const out: number[] = []
+  for (const vi of soft) {
+    if (vi < 0 || vi >= oldCurves.length) continue
+    const oldP = oldCurves[vi]!.start
+    const target = mapPoint(oldP)
+    let best = -1
+    let bestD = Infinity
+    for (let i = 0; i < newCurves.length; i++) {
+      const q = newCurves[i]!.start
+      const d = Math.hypot(q.x - target.x, q.y - target.y)
+      if (d < bestD) {
+        bestD = d
+        best = i
+      }
+    }
+    if (best >= 0 && bestD <= maxDistMm) out.push(best)
+  }
+  return [...new Set(out)].sort((a, b) => a - b)
+}
+
 function mirrorCurve(c: Curve, cx: number): Curve {
   if (c.type === 'line') {
     return { type: 'line', start: mirrorX(c.start, cx), end: mirrorX(c.end, cx) }
@@ -3973,6 +4002,18 @@ export const useStore = create<Store>()(
       const grainLine = piece.grainLine
         ? { start: mirrorX(piece.grainLine.start, cx), end: mirrorX(piece.grainLine.end, cx) }
         : null
+      const softVerticesMaster = remapSoftVertexIndicesByPointMap(
+        piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine,
+        seamLine.length >= 3 ? seamLine : cutLine,
+        piece.softVerticesMaster,
+        (p) => mirrorX(p, cx),
+      )
+      const softVertices = remapSoftVertexIndicesByPointMap(
+        piece.cutLine,
+        cutLine,
+        piece.softVertices,
+        (p) => mirrorX(p, cx),
+      )
       return {
         workspace: {
           ...s.workspace,
@@ -3988,6 +4029,8 @@ export const useStore = create<Store>()(
                     internalLines,
                     internalCircles,
                     grainLine,
+                    softVertices,
+                    softVerticesMaster,
                   })
                 : p
             )
@@ -4050,6 +4093,18 @@ export const useStore = create<Store>()(
             end: mirrorPointAcrossAxis(piece.grainLine.end, axisA, axisB),
           }
         : null
+      const softVerticesMaster = remapSoftVertexIndicesByPointMap(
+        piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine,
+        seamLine.length >= 3 ? seamLine : cutLine,
+        piece.softVerticesMaster,
+        (p) => mirrorPointAcrossAxis(p, axisA, axisB),
+      )
+      const softVertices = remapSoftVertexIndicesByPointMap(
+        piece.cutLine,
+        cutLine,
+        piece.softVertices,
+        (p) => mirrorPointAcrossAxis(p, axisA, axisB),
+      )
       return {
         workspace: {
           ...s.workspace,
@@ -4065,6 +4120,8 @@ export const useStore = create<Store>()(
                     internalLines,
                     internalCircles,
                     grainLine,
+                    softVertices,
+                    softVerticesMaster,
                   })
                 : p
             )

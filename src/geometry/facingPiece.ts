@@ -164,9 +164,11 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
     internalLines: cloneCurves(parent.internalLines),
     internalCircles: cloneCircles(parent.internalCircles),
     // Cut neu abgeleitet → Mutter-softVertices (Cut-Indizes) ungültig.
-    // softVerticesMaster steuert nur, welche Naht-Ecken keine Fase bekommen.
+    // softVerticesMaster: nur gültige Naht-Indizes (stale Indizes nach Flip würden Fasen killen).
     softVertices: [],
-    softVerticesMaster: [...(parent.softVerticesMaster ?? [])],
+    softVerticesMaster: [...(parent.softVerticesMaster ?? [])].filter(
+      (i) => Number.isInteger(i) && i >= 0 && i < seamLine.length,
+    ),
     roundedCorners: parent.roundedCorners ? parent.roundedCorners.map((r) => ({ ...r })) : undefined,
     edgeSeamAllowances: parent.edgeSeamAllowances
       ? parent.edgeSeamAllowances.map((e) => ({ ...e }))
@@ -174,10 +176,15 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
   }
 
   let cutLine = chamferCutLineCornersInSeamAllowance(draft)
+  const chamferGainedSegments = cutLine.length - cutForChamfer.length
+  // Rollback nur wenn der Chamfer nichts gebracht hat und die NZ trotzdem kollabiert.
+  // Erfolgreiche Fasen (mehr Segmente) nie verwerfen — sonst verschwinden die
+  // abgeschnittenen Ecken z. B. nach Flip der Mutter trotz Sync.
   if (
     sa != null &&
     sa > 0 &&
     seamLine.length >= 3 &&
+    chamferGainedSegments <= 0 &&
     chamferCollapsesSeamAllowance(seamLine, cutForChamfer, cutLine, sa)
   ) {
     cutLine = cutForChamfer
@@ -199,7 +206,7 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
       : undefined,
     internalCircles: draft.internalCircles,
     softVertices: [],
-    softVerticesMaster: [...(parent.softVerticesMaster ?? [])],
+    softVerticesMaster: [...(draft.softVerticesMaster ?? [])],
     roundedCorners: draft.roundedCorners,
     fillInterior: false,
     material: parent.material ?? '',
