@@ -24,6 +24,8 @@ import { RockGeneratorModal } from './RockGeneratorModal'
 import { CONFIGURATOR_UI_ENABLED } from '../configurators/featureFlags'
 import { SEAT_3D_PREVIEW_ENABLED } from '../seat3d/featureFlags'
 import { useSeat3dStore } from '../seat3d/useSeat3dStore'
+import { DEV_FEEDBACK_ENABLED } from '../devFeedback/featureFlags'
+import { useDevFeedbackStore } from '../devFeedback/useDevFeedbackStore'
 import { StuecklisteModal } from './StuecklisteModal'
 import { MaterialCatalogModal } from './MaterialCatalogModal'
 import { NestingModal } from './NestingModal'
@@ -1269,6 +1271,20 @@ export function Toolbar() {
                   Tastenkürzel
                 </button>
               </li>
+              {DEV_FEEDBACK_ENABLED && (
+                <li>
+                  <button
+                    type="button"
+                    className="menubar-dropdown-btn"
+                    onClick={() => {
+                      useDevFeedbackStore.getState().setOpen(true)
+                      closeMenu()
+                    }}
+                  >
+                    Feedback / Dev-Todo
+                  </button>
+                </li>
+              )}
             </ul>
           )}
         </div>
