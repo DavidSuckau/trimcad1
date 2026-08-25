@@ -2,7 +2,6 @@ import type { Curve, Drill, Notch, PatternPiece, Point } from '../types/model'
 import { bezierAt, curvesBounds, pointAtPathLength, totalPathLength } from './curveToPath'
 import { deriveCutLineForPiece } from './deriveCutLineForPiece'
 import { chamferCutLineCornersInSeamAllowance } from './facingChamfer'
-import { getEffectiveSoftVerticesCut } from './seamUtils'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 
@@ -155,7 +154,7 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
     if (derived.ok) cutForChamfer = derived.cutLine
   }
 
-  const draftBase: PatternPiece = {
+  const draft: PatternPiece = {
     ...parent,
     cutLine: cutForChamfer,
     seamLine,
@@ -164,16 +163,14 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
     grainLine: cloneGrain(parent.grainLine),
     internalLines: cloneCurves(parent.internalLines),
     internalCircles: cloneCircles(parent.internalCircles),
+    // Cut neu abgeleitet → Mutter-softVertices (Cut-Indizes) ungültig.
+    // softVerticesMaster steuert nur, welche Naht-Ecken keine Fase bekommen.
     softVertices: [],
     softVerticesMaster: [...(parent.softVerticesMaster ?? [])],
     roundedCorners: parent.roundedCorners ? parent.roundedCorners.map((r) => ({ ...r })) : undefined,
     edgeSeamAllowances: parent.edgeSeamAllowances
       ? parent.edgeSeamAllowances.map((e) => ({ ...e }))
       : undefined,
-  }
-  const draft: PatternPiece = {
-    ...draftBase,
-    softVertices: getEffectiveSoftVerticesCut(draftBase),
   }
 
   let cutLine = chamferCutLineCornersInSeamAllowance(draft)
@@ -204,7 +201,7 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
     softVertices: [],
     softVerticesMaster: [...(parent.softVerticesMaster ?? [])],
     roundedCorners: draft.roundedCorners,
-    fillInterior: true,
+    fillInterior: false,
     material: parent.material ?? '',
     description: parent.description ?? '',
     bomQuantity: parent.bomQuantity ?? 1,
@@ -246,7 +243,7 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       transform: { ...p.transform },
       facingParentId: parentId,
       kind: 'facing',
-      fillInterior: true,
+      fillInterior: false,
       symmetryConstraint: undefined,
     }
     if (

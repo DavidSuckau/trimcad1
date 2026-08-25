@@ -450,7 +450,9 @@ function buildBlockContent(piece: PatternPiece, fileScale: number): string {
     const cy = ic.center.y * fileScale
     const r = ic.radius * fileScale
     if (![cx, cy, r].every(Number.isFinite)) continue
-    out.push(dxfCircle(ASTM_LAYER.INTERNAL, cx, cy, r))
+    // Loch-Kreise auf BOUNDARY (Schnitt), Markierungskreise auf INTERNAL
+    const layer = ic.mode === 'hole' ? ASTM_LAYER.BOUNDARY : ASTM_LAYER.INTERNAL
+    out.push(dxfCircle(layer, cx, cy, r))
   }
 
   const label = piece.name || piece.number || ''

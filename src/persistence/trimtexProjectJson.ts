@@ -38,6 +38,10 @@ export type TrimTexProjectImageSession = {
   imageSizePx: { width: number; height: number } | null
   imagePosition: Point
   renderMmPerPixel: number
+  /** mm/Pixel horizontal (nach 10×10-cm-Winkel); optional für ältere Projekte. */
+  renderMmPerPixelX?: number
+  /** mm/Pixel vertikal (nach 10×10-cm-Winkel); optional für ältere Projekte. */
+  renderMmPerPixelY?: number
   locked?: boolean
 }
 
@@ -90,14 +94,25 @@ function isCurve(v: unknown): v is Curve {
   return false
 }
 
-function parseInternalCircle(v: unknown): { id: string; center: Point; radius: number } | null {
+function parseInternalCircle(v: unknown): {
+  id: string
+  center: Point
+  radius: number
+  mode?: 'line' | 'hole'
+} | null {
   if (typeof v !== 'object' || v === null) return null
   const o = v as Record<string, unknown>
   if (typeof o.id !== 'string' || !o.id) return null
   if (!isPoint(o.center)) return null
   const r = Number(o.radius)
   if (!Number.isFinite(r) || r <= 0) return null
-  return { id: o.id, center: { ...(o.center as Point) }, radius: r }
+  const mode = o.mode === 'hole' ? ('hole' as const) : o.mode === 'line' ? ('line' as const) : undefined
+  return {
+    id: o.id,
+    center: { ...(o.center as Point) },
+    radius: r,
+    ...(mode ? { mode } : {}),
+  }
 }
 
 function isViewState(v: unknown): v is ViewState {
@@ -599,6 +614,8 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
       img.imagePosition &&
       isPoint(img.imagePosition)
     ) {
+      const optMm = (v: unknown): number | undefined =>
+        typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
       imageDigitizeSession = {
         imageDataUrl: typeof img.imageDataUrl === 'string' ? img.imageDataUrl : null,
         imageSizePx:
@@ -613,6 +630,8 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
             : null,
         imagePosition: { ...(img.imagePosition as Point) },
         renderMmPerPixel: img.renderMmPerPixel,
+        renderMmPerPixelX: optMm(img.renderMmPerPixelX),
+        renderMmPerPixelY: optMm(img.renderMmPerPixelY),
         locked: Boolean(img.locked),
       }
     }

@@ -101,7 +101,8 @@ function buildBlockContent(piece: PatternPiece, scale: number): string {
     out.push(dxfPolyline(AAMA_LAYERS.INTERNAL, scaledIntPts, false))
   }
   for (const ic of piece.internalCircles) {
-    out.push(dxfCircle(AAMA_LAYERS.INTERNAL, ic.center.x * scale, ic.center.y * scale, ic.radius * scale))
+    const layer = ic.mode === 'hole' ? AAMA_LAYERS.CUT : AAMA_LAYERS.INTERNAL
+    out.push(dxfCircle(layer, ic.center.x * scale, ic.center.y * scale, ic.radius * scale))
   }
 
   // TEXT layer: Teilename/Nummer

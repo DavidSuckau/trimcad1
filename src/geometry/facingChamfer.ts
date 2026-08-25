@@ -1,6 +1,5 @@
 import type { Curve, PatternPiece, Point } from '../types/model'
 import { bezierAt, signedAreaCurves } from './curveToPath'
-import { getEffectiveSoftVerticesCut } from './seamUtils'
 import { interiorAngleAtVertexDegrees } from './softVertexPromotion'
 
 const MIN_CHAMFER_MM = 0.5
@@ -88,7 +87,6 @@ function bestSharpCutCornerForSeamVertex(
   seam: Curve[],
   seamIndex: number,
   maxPairDist: number,
-  softCut: Set<number>,
   expectedSaMm: number,
 ): { index: number; dist: number; C: Point } | null {
   if (cut.length < 3) return null
@@ -99,7 +97,8 @@ function bestSharpCutCornerForSeamVertex(
   let best: { index: number; dist: number; C: Point; saErr: number; angle: number; minEdge: number } | null =
     null
   for (let i = 0; i < cut.length; i++) {
-    if (softCut.has(i)) continue
+    // Kein softCut-Skip: Fehlmapping Mutter-Soft → Cut-Ecke würde sonst Miter-Ecken
+    // überspringen. Tessellationspunkte scheitern am Innenwinkel-Filter (~180°).
     const C = vertexAt(cut, i)
     const d = Math.hypot(C.x - S.x, C.y - S.y)
     if (d < minDist || d > maxDist) continue
@@ -279,7 +278,6 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
   const cut = piece.cutLine
   if (cut.length < 3) return cloneCurves(cut)
 
-  const softCut = new Set(getEffectiveSoftVerticesCut(piece))
   const softMaster = new Set(piece.softVerticesMaster ?? [])
   const saDefault = piece.seamAllowanceMm ?? 0
   const maxSa = maxSeamAllowanceMm(piece)
@@ -300,13 +298,20 @@ export function chamferCutLineCornersInSeamAllowance(piece: PatternPiece): Curve
   const useVertexIndexAsRing = cut.every((c) => c.type === 'line') && ring0.length === cut.length
 
   for (let si = 0; si < seam.length; si++) {
-    if (softMaster.has(si)) continue
+    // Nur explizit weiche Naht-Ecken überspringen (nicht Cut-Soft-Mapping)
+    if (softMaster.has(si)) {
+      const deg = interiorAngleAtVertexDegrees(seam, si)
+      // Weicher Punkt auf gerader Kante (~180°) ohnehin kein Chamfer-Kandidat
+      if (deg == null || deg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
+      // Weiche scharfe Ecke: bewusst keine Fase
+      continue
+    }
     const interiorDeg = interiorAngleAtVertexDegrees(seam, si)
     if (interiorDeg == null || interiorDeg > MAX_INTERIOR_DEG_FOR_CHAMFER) continue
 
     const S = vertexAt(seam, si)
     const saAtCorner = seamAllowanceAtVertex(piece, si, seam.length)
-    const corner = bestSharpCutCornerForSeamVertex(cut, S, seam, si, maxPairDist, softCut, saAtCorner)
+    const corner = bestSharpCutCornerForSeamVertex(cut, S, seam, si, maxPairDist, saAtCorner)
     if (!corner) continue
 
     let ringIndex = corner.index

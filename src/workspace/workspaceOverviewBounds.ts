@@ -102,10 +102,15 @@ export function boundsForWorkspaceImage(session: {
   imagePosition: Point
   imageSizePx: { width: number; height: number } | null
   renderMmPerPixel: number
+  renderMmPerPixelX?: number
+  renderMmPerPixelY?: number
 }): WorldBounds | null {
   if (!session.imageSizePx) return null
-  const w = session.imageSizePx.width * session.renderMmPerPixel
-  const h = session.imageSizePx.height * session.renderMmPerPixel
+  const iso = session.renderMmPerPixel > 0 ? session.renderMmPerPixel : 1
+  const mx = session.renderMmPerPixelX != null && session.renderMmPerPixelX > 0 ? session.renderMmPerPixelX : iso
+  const my = session.renderMmPerPixelY != null && session.renderMmPerPixelY > 0 ? session.renderMmPerPixelY : iso
+  const w = session.imageSizePx.width * mx
+  const h = session.imageSizePx.height * my
   const cx = session.imagePosition.x
   const cy = session.imagePosition.y
   const left = cx - w / 2
@@ -138,6 +143,8 @@ export type OverviewImageSession = {
   imagePosition: Point
   imageSizePx: { width: number; height: number } | null
   renderMmPerPixel: number
+  renderMmPerPixelX?: number
+  renderMmPerPixelY?: number
 }
 
 /**

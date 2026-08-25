@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useStore, undoAction, redoAction } from '../store/useStore'
 import { canvasTextSize } from '../ui/uiTextScale'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
+import { effectiveMmPerPixelXY } from '../utils/imageCalibration'
 import { CanvasToolbar } from './CanvasToolbar'
 import {
   curveToPathD,
@@ -123,6 +124,7 @@ import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasT
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
+import { isInternalCircleHole, pathWithInternalCircleHoles } from '../geometry/internalCirclePath'
 import { isFacingDerivedPiece, sortPiecesFacingBehind } from '../geometry/facingPiece'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 
@@ -283,6 +285,8 @@ function workspaceImageLayout(session: {
   imagePosition: Point
   imageSizePx: { width: number; height: number } | null
   renderMmPerPixel: number
+  renderMmPerPixelX?: number
+  renderMmPerPixelY?: number
 }): {
   cx: number
   cy: number
@@ -295,8 +299,15 @@ function workspaceImageLayout(session: {
 } | null {
   if (!session.imageSizePx) return null
   const imageSizePx = session.imageSizePx
-  const w = imageSizePx.width * session.renderMmPerPixel
-  const h = imageSizePx.height * session.renderMmPerPixel
+  const xy = effectiveMmPerPixelXY({
+    imagePosition: session.imagePosition,
+    imageSizePx,
+    renderMmPerPixel: session.renderMmPerPixel,
+    renderMmPerPixelX: session.renderMmPerPixelX,
+    renderMmPerPixelY: session.renderMmPerPixelY,
+  })
+  const w = imageSizePx.width * xy.x
+  const h = imageSizePx.height * xy.y
   const cx = session.imagePosition.x
   const cy = session.imagePosition.y
   return {
@@ -480,7 +491,13 @@ function findInternalLineNotchSnap(
 
 function isWorldInsideWorkspaceImage(
   world: Point,
-  session: { imagePosition: Point; imageSizePx: { width: number; height: number } | null; renderMmPerPixel: number }
+  session: {
+    imagePosition: Point
+    imageSizePx: { width: number; height: number } | null
+    renderMmPerPixel: number
+    renderMmPerPixelX?: number
+    renderMmPerPixelY?: number
+  },
 ): boolean {
   const lay = workspaceImageLayout(session)
   if (!lay) return false
@@ -1398,12 +1415,15 @@ const PieceGroup = memo(function PieceGroup({
     dashed = false,
   ) => {
     if (!pathD || strokeOnly) return null
+    const fillD = pathWithInternalCircleHoles(pathD, internalCircles)
+    const hasHoles = fillD !== pathD
     if (!symClips || !symKeepClipId || !symMirrorClipId) {
       return (
         <path
-          d={pathD}
+          d={fillD}
           fill={dashed ? dashedFill : solidFill}
           fillOpacity={dashed ? dashedFillOpacity : solidFillOpacity}
+          fillRule={hasHoles ? 'evenodd' : undefined}
           stroke="none"
           pointerEvents="none"
         />
@@ -1415,9 +1435,10 @@ const PieceGroup = memo(function PieceGroup({
     if (!symClips || !symKeepClipId || !symMirrorClipId) {
       return (
         <path
-          d={pathD}
+          d={fillD}
           fill={effectiveFill}
           fillOpacity={dashed ? dashedFillOpacity : solidFillOpacity}
+          fillRule={hasHoles ? 'evenodd' : undefined}
           stroke="none"
           pointerEvents="none"
         />
@@ -1426,17 +1447,19 @@ const PieceGroup = memo(function PieceGroup({
     return (
       <>
         <path
-          d={pathD}
+          d={fillD}
           fill={effectiveFill}
           fillOpacity={T.piece.symmetryMirrorFillOpacity}
+          fillRule={hasHoles ? 'evenodd' : undefined}
           clipPath={`url(#${symMirrorClipId})`}
           stroke="none"
           pointerEvents="none"
         />
         <path
-          d={pathD}
+          d={fillD}
           fill={effectiveFill}
           fillOpacity={T.piece.symmetryKeepFillOpacity}
+          fillRule={hasHoles ? 'evenodd' : undefined}
           clipPath={`url(#${symKeepClipId})`}
           stroke="none"
           pointerEvents="none"
@@ -1524,6 +1547,7 @@ const PieceGroup = memo(function PieceGroup({
       )}
       {showInternalLines !== false && internalCircles.map((ic) => {
         const isHovered = hoveredInternalCircleId === ic.id
+        const isHole = isInternalCircleHole(ic)
         const w = (isHovered ? T.internalLine.strokeWidthHover : T.internalLine.strokeWidth) * ptPs
         return (
           <circle
@@ -1532,10 +1556,16 @@ const PieceGroup = memo(function PieceGroup({
             cy={ic.center.y}
             r={ic.radius}
             fill="none"
-            stroke={isHovered ? T.internalLine.strokeHover : T.internalLine.stroke}
+            stroke={
+              isHovered
+                ? T.internalLine.strokeHover
+                : isHole
+                  ? T.piece.stroke
+                  : T.internalLine.stroke
+            }
             strokeWidth={w}
-            strokeDasharray={scaleSvgDashArray(T.internalLine.dash, ptPs)}
-            opacity={isHovered ? 1 : T.internalLine.opacity}
+            strokeDasharray={isHole ? undefined : scaleSvgDashArray(T.internalLine.dash, ptPs)}
+            opacity={isHovered ? 1 : isHole ? 0.95 : T.internalLine.opacity}
             pointerEvents="none"
           />
         )
@@ -2160,6 +2190,10 @@ export function WorkspaceCanvas() {
     setPiecePropertiesDialogPieceId,
     setEdgeSeamAllowance,
     setWorkspaceImageLocked,
+    imageScaleCalibration,
+    beginImageScaleCalibration,
+    addImageScaleCalibrationPoint,
+    setImageScaleCalibration,
     exitAllModes,
     notchSettings,
     activeNotchPresetIndex,
@@ -2297,6 +2331,10 @@ export function WorkspaceCanvas() {
       setPiecePropertiesDialogPieceId: s.setPiecePropertiesDialogPieceId,
       setEdgeSeamAllowance: s.setEdgeSeamAllowance,
       setWorkspaceImageLocked: s.setWorkspaceImageLocked,
+      imageScaleCalibration: s.imageScaleCalibration,
+      beginImageScaleCalibration: s.beginImageScaleCalibration,
+      addImageScaleCalibrationPoint: s.addImageScaleCalibrationPoint,
+      setImageScaleCalibration: s.setImageScaleCalibration,
       exitAllModes: s.exitAllModes,
       notchSettings: s.notchSettings,
       activeNotchPresetIndex: s.activeNotchPresetIndex,
@@ -2414,6 +2452,13 @@ export function WorkspaceCanvas() {
     | { kind: 'notchMove'; pieceId: string; notchId: string }
     | { kind: 'drill'; pieceId: string; center: Point; current: Point }
     | { kind: 'internalCircle'; pieceId: string; center: Point; current: Point }
+    | {
+        kind: 'internalCircleMove'
+        pieceId: string
+        circleId: string
+        startLocal: Point
+        centerAtDown: Point
+      }
     | { kind: 'ruler'; start: Point; current: Point }
     | { kind: 'image-move'; startWorld: Point; startImagePos: Point }
     | {
@@ -2569,6 +2614,13 @@ export function WorkspaceCanvas() {
     radiusStr: string
     /** Gesetzt bei Bearbeitung per Leertaste auf existierenden Kreis. */
     circleId?: string
+  } | null>(null)
+  /** Leertaste auf gehovertem Kreis: Linie / Loch / Radius. */
+  const [internalCircleSpaceMenu, setInternalCircleSpaceMenu] = useState<{
+    clientX: number
+    clientY: number
+    pieceId: string
+    circleId: string
   } | null>(null)
   /** Rechteck ziehen: Leertaste → Breite/Höhe per Tastatur (Ecke = erster Klick, Richtung aus Zug). */
   const [rectangleSizeEditor, setRectangleSizeEditor] = useState<{
@@ -3063,6 +3115,7 @@ export function WorkspaceCanvas() {
       e.preventDefault()
       closeSegmentMenu()
       setWorkspaceImageQuickMenu(null)
+      setInternalCircleSpaceMenu(null)
       const world = toWorld(e.clientX, e.clientY)
       if (tool === 'pan') {
         setDragging({
@@ -3074,6 +3127,10 @@ export function WorkspaceCanvas() {
         return
       }
       const layoutOnly = !contourEditEnabled
+      if (!layoutOnly && imageScaleCalibration) {
+        addImageScaleCalibrationPoint(world)
+        return
+      }
       const sym = pieceSymmetryState
       if (sym && contourEditEnabled && selectedPieceIds.length === 1 && selectedPieceIds[0] === sym.pieceId) {
         const piece = pieces.find((x) => x.id === sym.pieceId)
@@ -3941,6 +3998,30 @@ export function WorkspaceCanvas() {
         return
       }
       if (tool === 'select') {
+        if (
+          !layoutOnly &&
+          contourEditEnabled &&
+          hoveredInternalCircle &&
+          !hoveredSeamAssignmentId &&
+          !internalCircleRadiusEditor &&
+          !internalCircleSpaceMenu
+        ) {
+          const piece = pieces.find((p) => p.id === hoveredInternalCircle.pieceId)
+          const ic = piece?.internalCircles.find((c) => c.id === hoveredInternalCircle.circleId)
+          if (piece && ic) {
+            const local = worldToPieceLocal(world, piece)
+            setDragging({
+              kind: 'internalCircleMove',
+              pieceId: piece.id,
+              circleId: ic.id,
+              startLocal: { ...local },
+              centerAtDown: { ...ic.center },
+            })
+            selectPiece(piece.id, e.shiftKey)
+            ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+            return
+          }
+        }
         if (rotateAroundPivotPieceId) {
           const piece = pieces.find((p) => p.id === rotateAroundPivotPieceId)
           if (!piece || piece.cutLine.length < 3) {
@@ -4571,6 +4652,8 @@ export function WorkspaceCanvas() {
       canvasVertexPointUiScale,
       showPivotRotationUi,
       profileFitConfirm,
+      imageScaleCalibration,
+      addImageScaleCalibrationPoint,
     ]
   )
 
@@ -5165,9 +5248,15 @@ export function WorkspaceCanvas() {
           for (const p of piecesForHover) {
             const local = worldToPieceLocal(world, p)
             for (const ic of p.internalCircles) {
-              const ringD = Math.abs(Math.hypot(local.x - ic.center.x, local.y - ic.center.y) - ic.radius)
-              if (ringD < INTERNAL_LINE_HOVER_HIT && (!bestInternalCircle || ringD < bestInternalCircle.dist)) {
-                bestInternalCircle = { dist: ringD, pieceId: p.id, circleId: ic.id }
+              const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
+              const ringD = Math.abs(distCenter - ic.radius)
+              const diskHit = distCenter <= ic.radius + INTERNAL_LINE_HOVER_HIT
+              const hitD = diskHit ? Math.min(ringD, distCenter * 0.25 + 0.01) : ringD
+              if (
+                (diskHit || ringD < INTERNAL_LINE_HOVER_HIT) &&
+                (!bestInternalCircle || hitD < bestInternalCircle.dist)
+              ) {
+                bestInternalCircle = { dist: hitD, pieceId: p.id, circleId: ic.id }
               }
             }
             if (p.internalLines.length === 0) continue
@@ -5231,9 +5320,15 @@ export function WorkspaceCanvas() {
               for (const p of piecesForNotchHover) {
                 const local = worldToPieceLocal(worldForNotch, p)
                 for (const ic of p.internalCircles) {
-                  const ringD = Math.abs(Math.hypot(local.x - ic.center.x, local.y - ic.center.y) - ic.radius)
-                  if (ringD < INTERNAL_LINE_HOVER_HIT_ELSE && (!bestInternalCircle || ringD < bestInternalCircle.dist)) {
-                    bestInternalCircle = { dist: ringD, pieceId: p.id, circleId: ic.id }
+                  const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
+                  const ringD = Math.abs(distCenter - ic.radius)
+                  const diskHit = distCenter <= ic.radius + INTERNAL_LINE_HOVER_HIT_ELSE
+                  const hitD = diskHit ? Math.min(ringD, distCenter * 0.25 + 0.01) : ringD
+                  if (
+                    (diskHit || ringD < INTERNAL_LINE_HOVER_HIT_ELSE) &&
+                    (!bestInternalCircle || hitD < bestInternalCircle.dist)
+                  ) {
+                    bestInternalCircle = { dist: hitD, pieceId: p.id, circleId: ic.id }
                   }
                 }
                 if (p.internalLines.length === 0) continue
@@ -5697,6 +5792,19 @@ export function WorkspaceCanvas() {
         const world = toWorld(e.clientX, e.clientY)
         const current = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'internalCircle' ? { ...d, current } : d))
+      } else if (dragging.kind === 'internalCircleMove') {
+        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        if (!piece) return
+        const world = toWorld(e.clientX, e.clientY)
+        const local = worldToPieceLocal(world, piece)
+        const dx = local.x - dragging.startLocal.x
+        const dy = local.y - dragging.startLocal.y
+        updateInternalCircle(dragging.pieceId, dragging.circleId, {
+          center: {
+            x: dragging.centerAtDown.x + dx,
+            y: dragging.centerAtDown.y + dy,
+          },
+        })
       } else if (dragging.kind === 'ruler') {
         const world = toWorld(e.clientX, e.clientY)
         const current = snapRulerToNearestPoint(world, pieces)
@@ -5749,6 +5857,7 @@ export function WorkspaceCanvas() {
       canvasDigitizeUiScale,
       canvasVertexPointUiScale,
       showPivotRotationUi,
+      updateInternalCircle,
     ]
   )
 
@@ -5816,6 +5925,7 @@ export function WorkspaceCanvas() {
     setDragging(null)
     setLineLengthEditor(null)
     setInternalCircleRadiusEditor(null)
+    setInternalCircleSpaceMenu(null)
     setRectangleSizeEditor(null)
     setWorkspaceImageQuickMenu(null)
     setGrainContextMenu(null)
@@ -5841,7 +5951,8 @@ export function WorkspaceCanvas() {
     setNotchEdgeLineCountEditor(null)
     setNotchEdgeSpaceMenu(null)
     setNotchMoveDistanceEditor(null)
-  }, [closeSegmentMenu])
+    setImageScaleCalibration(null)
+  }, [closeSegmentMenu, setImageScaleCalibration])
 
   useEffect(() => {
     if (tool !== 'notch') {
@@ -5932,6 +6043,11 @@ export function WorkspaceCanvas() {
           setTool('select')
         }
         setLineLengthEditor(null)
+        return
+      }
+      if (!inInput && internalCircleSpaceMenu && e.key === 'Escape') {
+        e.preventDefault()
+        setInternalCircleSpaceMenu(null)
         return
       }
       if (!inInput && internalCircleRadiusEditor && e.key === 'Escape') {
@@ -6103,22 +6219,18 @@ export function WorkspaceCanvas() {
         !hoveredSeamAssignmentId &&
         e.key === ' '
       ) {
-        const piece = pieces.find((p) => p.id === hoveredInternalCircle.pieceId)
-        const ic = piece?.internalCircles.find((c) => c.id === hoveredInternalCircle.circleId)
-        if (piece && ic) {
-          e.preventDefault()
-          const dir = { x: 1, y: 0 }
-          const current = { x: ic.center.x + dir.x * ic.radius, y: ic.center.y + dir.y * ic.radius }
-          setDragging({ kind: 'internalCircle', pieceId: piece.id, center: { ...ic.center }, current })
-          setInternalCircleRadiusEditor({
-            pieceId: piece.id,
-            center: { ...ic.center },
-            dir,
-            radiusStr: ic.radius >= 0.5 ? ic.radius.toFixed(1) : '10',
-            circleId: ic.id,
-          })
+        e.preventDefault()
+        if (internalCircleSpaceMenu) {
+          setInternalCircleSpaceMenu(null)
           return
         }
+        setInternalCircleSpaceMenu({
+          clientX: lastPointerClientRef.current.x,
+          clientY: lastPointerClientRef.current.y,
+          pieceId: hoveredInternalCircle.pieceId,
+          circleId: hoveredInternalCircle.circleId,
+        })
+        return
       }
       if (contourEditEnabled && !inInput && !dragging && tool === 'notch' && e.key === ' ') {
         e.preventDefault()
@@ -6158,6 +6270,12 @@ export function WorkspaceCanvas() {
       if (!inInput && workspaceImageQuickMenu && e.key === 'Escape') {
         e.preventDefault()
         setWorkspaceImageQuickMenu(null)
+        return
+      }
+      if (!inInput && imageScaleCalibration && e.key === 'Escape') {
+        e.preventDefault()
+        setImageScaleCalibration(null)
+        setToastMessage('info:Maßstab-Kalibrierung abgebrochen.')
         return
       }
       if (
@@ -6895,6 +7013,8 @@ export function WorkspaceCanvas() {
         }
         setTool('select')
       }
+    } else if (dragging?.kind === 'internalCircleMove') {
+      // Position bereits live aktualisiert
     } else if (dragging?.kind === 'roundCorner') {
       if (cornerRoundEditorRef.current) {
         setDragging(null)
@@ -7041,8 +7161,10 @@ export function WorkspaceCanvas() {
         cursor:
           rulerMode
             ? 'crosshair'
-            : dragging?.kind === 'rotate'
+            : dragging?.kind === 'rotate' || dragging?.kind === 'internalCircleMove'
               ? 'grabbing'
+              : hoveredInternalCircle && tool === 'select' && contourEditEnabled
+                ? 'grab'
               : (hoveredRotationRingPieceId != null || hoveredRotationHandlePieceId != null) && tool === 'select'
                 ? 'grab'
             : tool === 'pan'
@@ -7796,25 +7918,24 @@ export function WorkspaceCanvas() {
           </>
         )}
         <defs>
+          {/* Kaschierung: nur Schraffur, keine farbige Flächenfüllung (Material-Füllung gilt nur für Normalteile). */}
           <pattern
             id="facing-hatch-light"
-            width="10"
-            height="10"
+            width="8"
+            height="8"
             patternUnits="userSpaceOnUse"
             patternTransform="rotate(45)"
           >
-            <rect width="10" height="10" fill="#e8d4bc" />
-            <path d="M0 0 H10" stroke="#9a6b3f" strokeWidth="2.2" opacity="0.55" />
+            <path d="M0 0 H8" stroke="#6b7280" strokeWidth="1.1" opacity="0.7" />
           </pattern>
           <pattern
             id="facing-hatch-dark"
-            width="10"
-            height="10"
+            width="8"
+            height="8"
             patternUnits="userSpaceOnUse"
             patternTransform="rotate(45)"
           >
-            <rect width="10" height="10" fill="#3d3228" />
-            <path d="M0 0 H10" stroke="#c4a882" strokeWidth="2.2" opacity="0.5" />
+            <path d="M0 0 H8" stroke="#9ca3af" strokeWidth="1.1" opacity="0.65" />
           </pattern>
         </defs>
         <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>
@@ -7823,13 +7944,7 @@ export function WorkspaceCanvas() {
             imageDigitizeSession.imageSizePx && (
               (() => {
                 const session = imageDigitizeSession
-                const effMmPerPixel = session.renderMmPerPixel
                 const imageDataUrl = session.imageDataUrl ?? undefined
-                const imageSizePx = session.imageSizePx!
-                const imgW = imageSizePx.width * effMmPerPixel
-                const imgH = imageSizePx.height * effMmPerPixel
-                const x = session.imagePosition.x - imgW / 2
-                const y = session.imagePosition.y - imgH / 2
                 const lay = workspaceImageLayout(session)
                 if (!lay) return null
                 const corners = [
@@ -7839,17 +7954,18 @@ export function WorkspaceCanvas() {
                   { cx: lay.right, cy: lay.bottom },
                 ]
                 const handleR = 5
+                const calPts = imageScaleCalibration?.pointsWorld ?? []
 
                 return (
                   <g pointerEvents="none">
                     <image
                       href={imageDataUrl}
-                      x={x}
-                      y={y}
-                      width={imgW}
-                      height={imgH}
+                      x={lay.left}
+                      y={lay.top}
+                      width={lay.w}
+                      height={lay.h}
                       opacity={WORKSPACE_IMAGE_OPACITY}
-                      preserveAspectRatio="xMidYMid meet"
+                      preserveAspectRatio="none"
                     />
                     {workspaceImageSelected && (
                       <>
@@ -7865,6 +7981,7 @@ export function WorkspaceCanvas() {
                           vectorEffect="non-scaling-stroke"
                         />
                         {!session.locked &&
+                          !imageScaleCalibration &&
                           corners.map((c, i) => (
                             <circle
                               key={`img-handle-${i}`}
@@ -7878,6 +7995,44 @@ export function WorkspaceCanvas() {
                             />
                           ))}
                       </>
+                    )}
+                    {imageScaleCalibration && (
+                      <g>
+                        {calPts.length >= 2 && (
+                          <line
+                            x1={calPts[0]!.x}
+                            y1={calPts[0]!.y}
+                            x2={calPts[1]!.x}
+                            y2={calPts[1]!.y}
+                            stroke="#2563eb"
+                            strokeWidth={2}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        )}
+                        {calPts.length >= 3 && (
+                          <line
+                            x1={calPts[0]!.x}
+                            y1={calPts[0]!.y}
+                            x2={calPts[2]!.x}
+                            y2={calPts[2]!.y}
+                            stroke="#2563eb"
+                            strokeWidth={2}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        )}
+                        {calPts.map((p, i) => (
+                          <circle
+                            key={`img-scale-pt-${i}`}
+                            cx={p.x}
+                            cy={p.y}
+                            r={4}
+                            fill={i === 0 ? '#dc2626' : '#2563eb'}
+                            stroke="#fff"
+                            strokeWidth={1.5}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        ))}
+                      </g>
                     )}
                   </g>
                 )
@@ -10070,7 +10225,7 @@ export function WorkspaceCanvas() {
           </button>
         </form>
       )}
-      {!dragging && hoveredInternalCircle && !internalCircleRadiusEditor && (
+      {!dragging && hoveredInternalCircle && !internalCircleRadiusEditor && !internalCircleSpaceMenu && (
         <div
           style={{
             position: 'absolute',
@@ -10086,9 +10241,120 @@ export function WorkspaceCanvas() {
             pointerEvents: 'none',
           }}
         >
-          Kreis hovern + Leertaste: Radius aendern — Entf: Kreis loeschen
+          Kreis: ziehen = verschieben · Leertaste = Linie/Loch/Radius · Entf = löschen
         </div>
       )}
+      {internalCircleSpaceMenu && (() => {
+        const piece = pieces.find((p) => p.id === internalCircleSpaceMenu.pieceId)
+        const ic = piece?.internalCircles.find((c) => c.id === internalCircleSpaceMenu.circleId)
+        if (!piece || !ic) return null
+        const isHole = ic.mode === 'hole'
+        const itemStyle: CSSProperties = {
+          display: 'block',
+          width: '100%',
+          padding: '8px 14px',
+          background: 'none',
+          border: 'none',
+          textAlign: 'left',
+          cursor: 'pointer',
+          fontSize: fs(13),
+        }
+        return (
+          <div
+            role="menu"
+            style={{
+              position: 'fixed',
+              left: Math.min(
+                internalCircleSpaceMenu.clientX + 6,
+                (typeof window !== 'undefined' ? window.innerWidth : 800) - 220,
+              ),
+              top: internalCircleSpaceMenu.clientY + 6,
+              zIndex: 10002,
+              background: '#fff',
+              border: '1px solid #ccc',
+              borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+              padding: '4px 0',
+              minWidth: 200,
+              fontSize: fs(13),
+              fontFamily: 'sans-serif',
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: '6px 12px', color: '#666', fontSize: fs(11), borderBottom: '1px solid #eee' }}>
+              Interner Kreis
+            </div>
+            <button
+              type="button"
+              style={{
+                ...itemStyle,
+                fontWeight: !isHole ? 700 : 400,
+                background: !isHole ? '#f0f7ff' : 'none',
+              }}
+              onClick={() => {
+                updateInternalCircle(internalCircleSpaceMenu.pieceId, ic.id, { mode: 'line' })
+                setInternalCircleSpaceMenu(null)
+                setToastMessage('info:Kreis als Linie (Markierung).')
+              }}
+            >
+              Nur Linie
+            </button>
+            <button
+              type="button"
+              style={{
+                ...itemStyle,
+                fontWeight: isHole ? 700 : 400,
+                background: isHole ? '#f0f7ff' : 'none',
+              }}
+              onClick={() => {
+                updateInternalCircle(internalCircleSpaceMenu.pieceId, ic.id, { mode: 'hole' })
+                setInternalCircleSpaceMenu(null)
+                setToastMessage('info:Kreis als Loch — Ausschnitt im Zuschnitt.')
+              }}
+            >
+              Loch (Ausschnitt)
+            </button>
+            <button
+              type="button"
+              style={{ ...itemStyle, borderTop: '1px solid #eee' }}
+              onClick={() => {
+                const dir = { x: 1, y: 0 }
+                const current = {
+                  x: ic.center.x + dir.x * ic.radius,
+                  y: ic.center.y + dir.y * ic.radius,
+                }
+                setDragging({
+                  kind: 'internalCircle',
+                  pieceId: piece.id,
+                  center: { ...ic.center },
+                  current,
+                })
+                setInternalCircleRadiusEditor({
+                  pieceId: piece.id,
+                  center: { ...ic.center },
+                  dir,
+                  radiusStr: ic.radius >= 0.5 ? ic.radius.toFixed(1) : '10',
+                  circleId: ic.id,
+                })
+                setInternalCircleSpaceMenu(null)
+              }}
+            >
+              Radius ändern…
+            </button>
+            <button
+              type="button"
+              style={{ ...itemStyle, borderTop: '1px solid #eee', color: '#b91c1c' }}
+              onClick={() => {
+                removeInternalCircle(internalCircleSpaceMenu.pieceId, ic.id)
+                setInternalCircleSpaceMenu(null)
+                setHoveredInternalCircle(null)
+              }}
+            >
+              Löschen
+            </button>
+          </div>
+        )
+      })()}
       {!dragging && hoveredInternalLine && !lineLengthEditor && (
         <div style={{
           position: 'absolute',
@@ -10108,9 +10374,39 @@ export function WorkspaceCanvas() {
       )}
       {tool === 'select' &&
         !dragging &&
+        imageScaleCalibration &&
+        imageDigitizeSession?.imageDataUrl && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 56,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(21,101,192,0.92)',
+              color: '#fff',
+              padding: '6px 10px',
+              borderRadius: 6,
+              fontSize: fs(12),
+              fontWeight: 600,
+              zIndex: 9998,
+              pointerEvents: 'none',
+              maxWidth: '90%',
+              textAlign: 'center',
+            }}
+          >
+            {imageScaleCalibration.pointsWorld.length === 0
+              ? 'Maßstab 10×10 cm: Ecke des Winkels klicken (Esc = Abbruch)'
+              : imageScaleCalibration.pointsWorld.length === 1
+                ? 'Maßstab: Ende des waagerechten 10-cm-Schenkels'
+                : 'Maßstab: Ende des senkrechten 10-cm-Schenkels'}
+          </div>
+        )}
+      {tool === 'select' &&
+        !dragging &&
         hoveredWorkspaceImage &&
         imageDigitizeSession?.imageDataUrl &&
         !workspaceImageQuickMenu &&
+        !imageScaleCalibration &&
         !lineLengthEditor && (
           <div
             style={{
@@ -10160,6 +10456,27 @@ export function WorkspaceCanvas() {
           <div style={{ padding: '6px 12px', color: '#666', fontSize: fs(11), borderBottom: '1px solid #eee' }}>
             Hintergrundbild
           </div>
+          <button
+            type="button"
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '8px 14px',
+              background: 'none',
+              border: 'none',
+              textAlign: 'left',
+              cursor: 'pointer',
+              fontSize: fs(13),
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+            onClick={() => {
+              beginImageScaleCalibration()
+              setWorkspaceImageQuickMenu(null)
+            }}
+          >
+            Maßstab 10×10 cm…
+          </button>
           {!imageDigitizeSession.locked ? (
             <button
               type="button"

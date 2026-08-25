@@ -26,6 +26,11 @@ export type InternalCircle = {
   id: string
   center: Point
   radius: number
+  /**
+   * `line` (Default): nur Markierung / Innenlinie.
+   * `hole`: Ausschnitt im Zuschnitt — Fläche durchsichtig (Hintergrund sichtbar).
+   */
+  mode?: 'line' | 'hole'
 }
 
 export type NotchType = 'single' | 'double' | 'v'

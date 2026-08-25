@@ -88,7 +88,7 @@ describe('chamferCutLineCornersInSeamAllowance', () => {
   it('weiche Ecke wird nicht abgeschrägt', () => {
     const cut = square(120, 0)
     const piece = basePiece(cut, square(100, 10), 10)
-    piece.softVertices = [0, 1, 2, 3]
+    piece.softVerticesMaster = [0, 1, 2, 3]
     const out = chamferCutLineCornersInSeamAllowance(piece)
     expect(out).toHaveLength(4)
   })

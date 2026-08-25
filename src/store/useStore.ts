@@ -90,6 +90,12 @@ import { generateConfiguratorPartGeometry } from '../configurators/generators'
 import { getDefaultConfiguratorParts } from '../configurators/registry'
 import { batchTargetKey, filterBatchTargets, mergeBatchTargets } from '../workspace/workspaceMarqueeSelection'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
+import {
+  computeMmPerPixelXYFromRightAngle,
+  effectiveMmPerPixelXY,
+  IMAGE_SCALE_REF_MM,
+  worldToImagePixel,
+} from '../utils/imageCalibration'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
 import { formatProfileEdgeGeometryWarnings, mergeWarnToasts } from '../profile/profileEdgeWarnings'
@@ -411,16 +417,29 @@ type Tool =
 
 type NahtTrimMode = 'full' | '45'
 
-/** Hintergrundbild auf der Arbeitsfläche (ohne Kalibrierung, nur Anzeige). */
+/** Hintergrundbild auf der Arbeitsfläche. */
 type ImageDigitizeSession = {
   imageDataUrl: string | null
   imageSizePx: { width: number; height: number } | null
   /** Bildposition im Workspace (mm), Mittelpunkt entspricht dem Bildzentrum. */
   imagePosition: Point
-  /** mm pro Bildpixel für Darstellung (Skalierung auf der Fläche). */
+  /**
+   * mm pro Bildpixel (isotrop / Legacy). Bei X/Y-Kalibrierung geometrisches Mittel
+   * bzw. Fallback, wenn renderMmPerPixelX/Y fehlen.
+   */
   renderMmPerPixel: number
+  /** mm pro Bildpixel horizontal (nach 10×10-cm-Winkel-Kalibrierung). */
+  renderMmPerPixelX?: number
+  /** mm pro Bildpixel vertikal (nach 10×10-cm-Winkel-Kalibrierung). */
+  renderMmPerPixelY?: number
   /** true: Bild nicht mehr verschieben/skalieren (nur Auswahl aufheben / wieder freigeben). */
   locked?: boolean
+}
+
+/** 3-Punkt-Kalibrierung: Ecke + zwei Schenkelenden eines 10×10-cm-Winkels auf dem Foto. */
+type ImageScaleCalibrationState = {
+  /** Weltkoordinaten der gesetzten Punkte (0..2). */
+  pointsWorld: Point[]
 }
 
 export type NotchType = 'keine' | 'strich' | 'kerbe'
@@ -537,6 +556,8 @@ type Store = {
   massstabDialog: { pieceId: string; curveIndices: number[]; currentLengthMm: number } | null
   digitizeState: DigitizeState | null
   imageDigitizeSession: ImageDigitizeSession | null
+  /** 10×10-cm-Winkel auf dem Foto: Punkte setzen bis 3, dann Maßstab anwenden. */
+  imageScaleCalibration: ImageScaleCalibrationState | null
   /** Hintergrundbild ist ausgewählt (wie ein Teil). */
   workspaceImageSelected: boolean
   /** Konfigurator-Modale/Instanzen sind rein UI-Staat (noch nicht im Projekt persistiert). */
@@ -665,7 +686,7 @@ type Store = {
   updateInternalCircle: (
     pieceId: string,
     circleId: string,
-    patch: Partial<Pick<InternalCircle, 'center' | 'radius'>>
+    patch: Partial<Pick<InternalCircle, 'center' | 'radius' | 'mode'>>
   ) => void
   removeInternalCircle: (pieceId: string, circleId: string) => void
   addInternalLines: (pieceId: string, curves: Curve[]) => void
@@ -788,6 +809,11 @@ type Store = {
   setWorkspaceImageSelected: (selected: boolean) => void
   setWorkspaceImageLocked: (locked: boolean) => void
   cancelImageSession: () => void
+  setImageScaleCalibration: (v: ImageScaleCalibrationState | null) => void
+  beginImageScaleCalibration: () => void
+  addImageScaleCalibrationPoint: (world: Point) => void
+  applyImageScaleCalibration: () => void
+  setImageRenderMmPerPixelXY: (mmPerPixelX: number, mmPerPixelY: number) => void
 
   /** Teilfelder der Arbeitsfläche (Metadaten, Name, …). */
   updateWorkspace: (patch: Partial<Workspace>) => void
@@ -1022,6 +1048,7 @@ export const useStore = create<Store>()(
   massstabDialog: null,
   digitizeState: null,
   imageDigitizeSession: null,
+  imageScaleCalibration: null,
   workspaceImageSelected: false,
   configuratorModalOpen: false,
   configuratorInstances: [],
@@ -1187,7 +1214,7 @@ export const useStore = create<Store>()(
       name: `${nameBase} Kaschierung`,
       facingParentId: parent.id,
       kind: 'facing',
-      fillInterior: true,
+      fillInterior: false,
       transform: {
         x: parent.transform.x + offset.x,
         y: parent.transform.y + offset.y,
@@ -2077,7 +2104,12 @@ export const useStore = create<Store>()(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             const id = circle.id ?? 'ic' + Math.random().toString(36).slice(2, 10)
-            const next: InternalCircle = { id, center: { ...circle.center }, radius: circle.radius }
+            const next: InternalCircle = {
+              id,
+              center: { ...circle.center },
+              radius: circle.radius,
+              ...(circle.mode === 'hole' ? { mode: 'hole' as const } : {}),
+            }
             return { ...p, internalCircles: [...p.internalCircles, next] }
           })
         ),
@@ -2104,6 +2136,7 @@ export const useStore = create<Store>()(
                       ...c,
                       ...(patch.radius !== undefined ? { radius: patch.radius } : {}),
                       ...(patch.center !== undefined ? { center: { ...patch.center } } : {}),
+                      ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
                     }
               ),
             }
@@ -4264,6 +4297,7 @@ export const useStore = create<Store>()(
       rockGeneratorModalOpen: false,
       showScan3dModal: false,
       toastMessage: null,
+      imageScaleCalibration: null,
       batchSelectionFilter: 'all',
       batchSelectionTargets: [],
       batchUiHighlightByTargetId: {},
@@ -4311,12 +4345,15 @@ export const useStore = create<Store>()(
         imageSizePx: { width: widthPx, height: heightPx },
         imagePosition: { x: 0, y: 0 },
         renderMmPerPixel,
+        renderMmPerPixelX: renderMmPerPixel,
+        renderMmPerPixelY: renderMmPerPixel,
         locked: false,
       },
       tool: 'select',
       workspaceImageSelected: true,
       selectedPieceIds: [],
       digitizeState: null,
+      imageScaleCalibration: null,
     })
   },
   setImagePosition: (pos) =>
@@ -4331,8 +4368,30 @@ export const useStore = create<Store>()(
       if (!s.imageDigitizeSession || s.imageDigitizeSession.locked) return s
       const v = Number.isFinite(mmPerPixel) ? mmPerPixel : s.imageDigitizeSession.renderMmPerPixel
       const clamped = Math.min(500, Math.max(1e-4, v))
+      const prev = effectiveMmPerPixelXY(s.imageDigitizeSession)
+      const ratio = clamped / Math.max(1e-9, Math.sqrt(prev.x * prev.y))
       return {
-        imageDigitizeSession: { ...s.imageDigitizeSession, renderMmPerPixel: clamped },
+        imageDigitizeSession: {
+          ...s.imageDigitizeSession,
+          renderMmPerPixel: clamped,
+          renderMmPerPixelX: prev.x * ratio,
+          renderMmPerPixelY: prev.y * ratio,
+        },
+      }
+    }),
+  setImageRenderMmPerPixelXY: (mmPerPixelX, mmPerPixelY) =>
+    set((s) => {
+      if (!s.imageDigitizeSession) return s
+      const cx = Math.min(500, Math.max(1e-4, mmPerPixelX))
+      const cy = Math.min(500, Math.max(1e-4, mmPerPixelY))
+      return {
+        imageDigitizeSession: {
+          ...s.imageDigitizeSession,
+          renderMmPerPixelX: cx,
+          renderMmPerPixelY: cy,
+          renderMmPerPixel: Math.sqrt(cx * cy),
+        },
+        imageScaleCalibration: null,
       }
     }),
   setWorkspaceImageSelected: (selected) => set({ workspaceImageSelected: selected }),
@@ -4345,8 +4404,88 @@ export const useStore = create<Store>()(
       imageDigitizeSession: null,
       workspaceImageSelected: false,
       digitizeState: null,
+      imageScaleCalibration: null,
       tool: 'select',
     })),
+  setImageScaleCalibration: (v) => set({ imageScaleCalibration: v }),
+  beginImageScaleCalibration: () =>
+    set((s) => {
+      if (!s.imageDigitizeSession?.imageDataUrl || !s.imageDigitizeSession.imageSizePx) {
+        return { toastMessage: 'warn:Bitte zuerst ein Bild einfügen.' }
+      }
+      return {
+        imageScaleCalibration: { pointsWorld: [] },
+        tool: 'select',
+        workspaceImageSelected: true,
+        selectedPieceIds: [],
+        toastMessage: 'info:Maßstab 10×10 cm: 1) Ecke des Winkels · 2) Ende waagerecht · 3) Ende senkrecht.',
+      }
+    }),
+  addImageScaleCalibrationPoint: (world) => {
+    const s = get()
+    if (!s.imageScaleCalibration || !s.imageDigitizeSession?.imageSizePx) return
+    const pts = [...s.imageScaleCalibration.pointsWorld, { ...world }]
+    if (pts.length < 3) {
+      const nextHint =
+        pts.length === 1
+          ? 'info:2/3: Ende des waagerechten 10-cm-Schenkels klicken.'
+          : 'info:3/3: Ende des senkrechten 10-cm-Schenkels klicken.'
+      set({ imageScaleCalibration: { pointsWorld: pts }, toastMessage: nextHint })
+      return
+    }
+    set({ imageScaleCalibration: { pointsWorld: pts.slice(0, 3) } })
+    get().applyImageScaleCalibration()
+  },
+  applyImageScaleCalibration: () => {
+    const s = get()
+    const cal = s.imageScaleCalibration
+    const session = s.imageDigitizeSession
+    if (!cal || cal.pointsWorld.length < 3 || !session?.imageSizePx) {
+      set({ toastMessage: 'warn:Bitte drei Punkte setzen (Ecke + zwei Schenkel).' })
+      return
+    }
+    const size = session.imageSizePx
+    const xy = effectiveMmPerPixelXY({
+      imagePosition: session.imagePosition,
+      imageSizePx: size,
+      renderMmPerPixel: session.renderMmPerPixel,
+      renderMmPerPixelX: session.renderMmPerPixelX,
+      renderMmPerPixelY: session.renderMmPerPixelY,
+    })
+    const toPx = (w: Point) =>
+      worldToImagePixel({
+        world: w,
+        imagePosition: session.imagePosition,
+        imageSizePx: size,
+        mmPerPixelEffective: session.renderMmPerPixel,
+        mmPerPixelX: xy.x,
+        mmPerPixelY: xy.y,
+      })
+    const [c, a, b] = cal.pointsWorld
+    const result = computeMmPerPixelXYFromRightAngle({
+      cornerPx: toPx(c),
+      armAPx: toPx(a),
+      armBPx: toPx(b),
+      refMm: IMAGE_SCALE_REF_MM,
+    })
+    if (!result) {
+      set({ toastMessage: 'warn:Winkel ungültig — Punkte zu nah beieinander?' })
+      return
+    }
+    const cx = Math.min(500, Math.max(1e-4, result.mmPerPixelX))
+    const cy = Math.min(500, Math.max(1e-4, result.mmPerPixelY))
+    set({
+      imageDigitizeSession: {
+        ...session,
+        renderMmPerPixelX: cx,
+        renderMmPerPixelY: cy,
+        renderMmPerPixel: Math.sqrt(cx * cy),
+        locked: true,
+      },
+      imageScaleCalibration: null,
+      toastMessage: `success:Maßstab gesetzt (${IMAGE_SCALE_REF_MM}×${IMAGE_SCALE_REF_MM} mm): X ${cx.toFixed(3)} / Y ${cy.toFixed(3)} mm/px.`,
+    })
+  },
 
   updateWorkspace: (patch) =>
     set((s) => ({
@@ -4423,6 +4562,7 @@ export const useStore = create<Store>()(
       activeNotchPresetIndex: 0,
       imageDigitizeSession: project.imageDigitizeSession,
       workspaceImageSelected: Boolean(project.imageDigitizeSession?.imageDataUrl),
+      imageScaleCalibration: null,
       selectedPieceIds: firstId ? [firstId] : [],
       selectedPoint: null,
       tool: 'select',

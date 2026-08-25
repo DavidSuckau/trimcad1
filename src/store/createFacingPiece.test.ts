@@ -62,7 +62,7 @@ describe('createFacingPiece', () => {
     expect(child.facingParentId).toBe('parent')
     expect(child.kind).toBe('facing')
     expect(child.name).toBe('Vorderteil Kaschierung')
-    expect(child.fillInterior).toBe(true)
+    expect(child.fillInterior).toBe(false)
     expect(child.transform.x).toBeGreaterThan(20)
     expect(child.transform.y).toBe(30)
     expect(child.transform.rotation).toBe(15)

@@ -3,6 +3,7 @@ import { signedAreaCurves, curvesBounds } from '../geometry/curveToPath'
 import { getNotchPositionAndAngleOnCutLine } from '../geometry/notchOnCurve'
 import { getNotchPositionAndAngleOnInternalLine, isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import { getPieceContourDisplayPaths } from '../components/pieceSolidContourPath'
+import { isInternalCircleHole, pathWithInternalCircleHoles } from '../geometry/internalCirclePath'
 import { getGrainArrowLayout } from '../geometry/grainArrowLayout'
 import { getCurvesForSeamEdge } from '../geometry/seamUtils'
 import { buildProfileOffsetPathD, getProfileAssignmentDisplayCurves } from '../geometry/internalLineProfile'
@@ -11,7 +12,7 @@ import {
   computeWorkspaceOverviewViewBox,
   type OverviewImageSession,
 } from './workspaceOverviewBounds'
-import { sortPiecesFacingBehind } from '../geometry/facingPiece'
+import { sortPiecesFacingBehind, isFacingDerivedPiece } from '../geometry/facingPiece'
 import { canvasTheme as T } from '../theme/canvasTheme'
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
@@ -45,21 +46,29 @@ export function buildWorkspaceOverviewSvgDocument(
   parts.push(
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet">`,
   )
+  parts.push(`<defs>
+  <pattern id="facing-hatch-overview" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+    <path d="M0 0 H8" stroke="#6b7280" stroke-width="1.1" opacity="0.7"/>
+  </pattern>
+</defs>`)
   if (imgBounds && imageDataUrl && iw > 0 && ih > 0) {
     parts.push(
-      `<image href="${escapeXmlAttr(imageDataUrl)}" x="${imgBounds.minX}" y="${imgBounds.minY}" width="${iw}" height="${ih}" opacity="0.42" preserveAspectRatio="xMidYMid meet"/>`,
+      `<image href="${escapeXmlAttr(imageDataUrl)}" x="${imgBounds.minX}" y="${imgBounds.minY}" width="${iw}" height="${ih}" opacity="0.42" preserveAspectRatio="none"/>`,
     )
   }
   for (const p of sortPiecesFacingBehind(pieces)) {
     const tx = pieceGroupTransform(p)
-    const useFill = p.fillInterior != null && p.fillInterior !== false
+    const isFacing = isFacingDerivedPiece(p)
+    const useFill = !isFacing && p.fillInterior != null && p.fillInterior !== false
     const materialFill = pieceInteriorFillFromMaterial(p.material, false)
-    const fill = useFill
-      ? typeof p.fillInterior === 'string'
-        ? p.fillInterior
-        : materialFill ?? T.piece.fillSelected
-      : T.piece.fill
-    const fillOp = useFill ? '0.82' : '0'
+    const fill = isFacing
+      ? 'url(#facing-hatch-overview)'
+      : useFill
+        ? typeof p.fillInterior === 'string'
+          ? p.fillInterior
+          : materialFill ?? T.piece.fillSelected
+        : T.piece.fill
+    const fillOp = isFacing ? '1' : useFill ? '0.82' : '0'
 
     const { solidPath, dashedPath, hasSeam, solidStrokeOnly, dashedStrokeOnly } = getPieceContourDisplayPaths(
       p,
@@ -70,21 +79,42 @@ export function buildWorkspaceOverviewSvgDocument(
     const dashedFillOp = dashedStrokeOnly ? '0' : fillOp
     const solidFill = solidStrokeOnly ? 'none' : fill
     const solidFillOp = solidStrokeOnly ? '0' : fillOp
+    const dashedFillD =
+      dashedPath && !dashedStrokeOnly ? pathWithInternalCircleHoles(dashedPath, p.internalCircles) : dashedPath
+    const solidFillD =
+      solidPath && !solidStrokeOnly ? pathWithInternalCircleHoles(solidPath, p.internalCircles) : solidPath
+    const dashedEvenodd = dashedFillD && dashedFillD !== dashedPath ? 'evenodd' : undefined
+    const solidEvenodd = solidFillD && solidFillD !== solidPath ? 'evenodd' : undefined
 
     parts.push(`<g transform="${escapeXmlAttr(tx)}">`)
     if (hasSeam && dashedPath && solidPath) {
       parts.push(
-        `<path d="${escapeXmlAttr(dashedPath)}" fill="${dashedFill}" fill-opacity="${dashedFillOp}" stroke="${T.overview.strokeSeam}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
+        `<path d="${escapeXmlAttr(dashedFillD ?? dashedPath)}" fill="${dashedFill}" fill-opacity="${dashedFillOp}"${dashedEvenodd ? ` fill-rule="${dashedEvenodd}"` : ''} stroke="none"/>`,
       )
       parts.push(
-        `<path d="${escapeXmlAttr(solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
+        `<path d="${escapeXmlAttr(dashedPath)}" fill="none" stroke="${T.overview.strokeSeam}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
+      )
+      parts.push(
+        `<path d="${escapeXmlAttr(solidFillD ?? solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}"${solidEvenodd ? ` fill-rule="${solidEvenodd}"` : ''} stroke="none"/>`,
+      )
+      parts.push(
+        `<path d="${escapeXmlAttr(solidPath)}" fill="none" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
     } else if (solidPath) {
       parts.push(
-        `<path d="${escapeXmlAttr(solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidth}"/>`,
+        `<path d="${escapeXmlAttr(solidFillD ?? solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}"${solidEvenodd ? ` fill-rule="${solidEvenodd}"` : ''} stroke="none"/>`,
+      )
+      parts.push(
+        `<path d="${escapeXmlAttr(solidPath)}" fill="none" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidth}"/>`,
       )
     } else {
       parts.push(`<circle cx="0" cy="0" r="3" fill="none" stroke="${T.overview.empty}" stroke-width="0.5"/>`)
+    }
+    for (const ic of p.internalCircles) {
+      const hole = isInternalCircleHole(ic)
+      parts.push(
+        `<circle cx="${ic.center.x}" cy="${ic.center.y}" r="${ic.radius}" fill="none" stroke="${hole ? T.overview.stroke : '#6b7280'}" stroke-width="${hole ? T.overview.strokeWidth : 0.6}"${hole ? '' : ' stroke-dasharray="4 3"'} opacity="${hole ? '0.95' : '0.7'}"/>`,
+      )
     }
 
     for (const n of p.notches) {

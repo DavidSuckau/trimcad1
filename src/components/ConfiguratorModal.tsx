@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store/useStore'
 import type { ConfiguratorPartParams } from '../configurators/types'
-import type { ConfiguratorPatchProposal } from '../configurators/chatPatch'
-import { ConfiguratorAiChatPanel } from './ConfiguratorAiChatPanel'
 import { validateLaserBoxParams } from '../configurators/boxValidation'
 import { mergeLaserBoxParamsForPart } from '../configurators/laserBoxSync'
 
@@ -44,7 +42,6 @@ export function ConfiguratorModal() {
   )
   const isRock = selectedInstance?.kindId === 'rock'
   const isLaserBox = selectedInstance?.kindId === 'laserBox'
-  const isAiEditable = selectedInstance?.kindId === 'tshirt'
 
   const instanceLabel = selectedInstance?.kindId === 'tshirt' ? 'T-Shirt' : selectedInstance?.kindId === 'rock' ? 'Rock' : 'Laser-Cut Box'
 
@@ -87,19 +84,6 @@ export function ConfiguratorModal() {
       return
     }
     updateConfiguratorPartParams(selectedInstance.id, selectedPart.id, draft)
-    regenerateConfiguratorPart(selectedInstance.id, selectedPart.id)
-  }
-
-  const onApplyAiProposal = (proposal: ConfiguratorPatchProposal) => {
-    if (!selectedInstance || !selectedPart) return
-    if (proposal.scope === 'all_parts') {
-      for (const part of selectedInstance.parts) {
-        updateConfiguratorPartParams(selectedInstance.id, part.id, proposal.patch)
-        regenerateConfiguratorPart(selectedInstance.id, part.id)
-      }
-      return
-    }
-    updateConfiguratorPartParams(selectedInstance.id, selectedPart.id, proposal.patch)
     regenerateConfiguratorPart(selectedInstance.id, selectedPart.id)
   }
 
@@ -500,14 +484,6 @@ export function ConfiguratorModal() {
                     </button>
                   </div>
 
-                  {isAiEditable && (
-                    <ConfiguratorAiChatPanel
-                      kindId={selectedInstance.kindId}
-                      partLabel={selectedPart.label}
-                      currentParams={selectedPart.params}
-                      onApplyProposal={onApplyAiProposal}
-                    />
-                  )}
                 </>
               ) : (
                 <>
