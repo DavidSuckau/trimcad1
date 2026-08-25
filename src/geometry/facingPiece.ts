@@ -127,7 +127,7 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
   softVertices: number[]
   softVerticesMaster: number[]
   roundedCorners: PatternPiece['roundedCorners']
-  fillInterior: true
+  fillInterior: false
   material: string
   description: string
   bomQuantity: number
