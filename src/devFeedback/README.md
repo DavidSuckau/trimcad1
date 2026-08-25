@@ -1,43 +1,32 @@
 # Entwickler-Feedback (GitHub Issues)
 
-Nutzer melden Bugs/Wünsche über **Hilfe → Feedback / Dev-Todo**. Einträge werden als Issues im GitHub-Repo angelegt.
+**Hilfe → Feedback / Dev-Todo**
 
-## Server (Pflicht für Senden + Liste)
+## Was funktioniert wo
 
-In `.env`:
+| Umgebung | Liste | Senden |
+|----------|-------|--------|
+| **GitHub Pages** (live) | ✓ direkt von GitHub | GitHub-Tab öffnen → absenden |
+| **Lokal** (`npm run dev:secure`) | ✓ | ✓ direkt in der App (Proxy) |
 
-```env
-GITHUB_TOKEN=ghp_...          # PAT mit repo / Issues (fine-grained: Issues read+write)
-GITHUB_REPO=DavidSuckau/trimcad1
-GITHUB_FEEDBACK_LABEL=trimtex-feedback   # optional, Default
-```
-
-Proxy starten (zusammen mit Vite):
+## Einmal-Setup (lokal, optional)
 
 ```bash
+npm run setup:feedback   # Label + .env mit gh-Token
 npm run dev:secure
 ```
 
-Oder nur Proxy:
+Das Skript legt das Label `trimtex-feedback` an und schreibt `GITHUB_TOKEN` in `.env` (nicht committen).
 
-```bash
-node server/aiProxyServer.mjs
-```
+## GitHub Pages
 
-Beim ersten Start das Label **`trimtex-feedback`** im GitHub-Repo anlegen (Issues → Labels).
+Beim Build setzt `deploy.yml` automatisch:
+- `VITE_FEEDBACK_PROXY_ENABLED=false`
+- Repo + Label für direkte GitHub-API
 
-## Produktion (alle Rechner)
+Nutzer brauchen zum **Senden** ein GitHub-Konto (Issue-Formular). Die **Liste** geht für alle ohne Login.
 
-Statisches GitHub-Pages-Hosting hat keinen `/api`-Proxy. Den Server separat hosten (Railway, Fly.io, VPS) und in der Build-Umgebung setzen:
+## Deaktivieren / Entfernen
 
-```env
-VITE_FEEDBACK_API_BASE=https://dein-proxy.example.com/api/feedback
-```
-
-## Deaktivieren
-
-`src/devFeedback/featureFlags.ts` → `DEV_FEEDBACK_ENABLED = false`
-
-## Entfernen
-
-Ordner `src/devFeedback/` löschen, Einträge in `App.tsx` + `Toolbar.tsx`, GitHub-Routen in `server/aiProxyServer.mjs`.
+`featureFlags.ts` → `DEV_FEEDBACK_ENABLED = false`  
+Ordner `src/devFeedback/` + Toolbar/App + Proxy-Routen löschen.

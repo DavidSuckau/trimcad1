@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "dev:secure": "concurrently -k -n VITE,AI \"vite\" \"node server/aiProxyServer.mjs\"",
+    "setup:feedback": "node scripts/setup-feedback.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "ai-proxy": "node server/aiProxyServer.mjs",

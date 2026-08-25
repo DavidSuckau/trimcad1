@@ -94,12 +94,19 @@ export function DevFeedbackModal() {
         appVersion: APP_VERSION,
         userAgent: navigator.userAgent.slice(0, 200),
       })
-      setMessage({
-        kind: 'ok',
-        text: `Eintrag #${created.number} wurde angelegt.`,
-      })
-      setTitle('')
-      setBody('')
+      if (created.openedExternally) {
+        setMessage({
+          kind: 'ok',
+          text: 'GitHub-Issue im neuen Tab geöffnet — bitte dort auf „Submit new issue“ klicken.',
+        })
+      } else {
+        setMessage({
+          kind: 'ok',
+          text: `Eintrag #${created.number} wurde angelegt.`,
+        })
+        setTitle('')
+        setBody('')
+      }
       void loadIssues()
     } catch (e) {
       setMessage({
@@ -128,8 +135,8 @@ export function DevFeedbackModal() {
               Entwickler-Todo / Feedback
             </h2>
             <p className="dev-feedback-subtitle">
-              Einträge landen als GitHub-Issues im Projekt — von jedem Rechner sichtbar, wenn der
-              Feedback-Server läuft.
+              Einträge landen als GitHub-Issues — Liste für alle sichtbar. Senden öffnet ggf. GitHub
+              (GitHub Pages) oder geht direkt (lokal mit Proxy).
             </p>
           </div>
           <button type="button" className="dev-feedback-close" onClick={() => setOpen(false)}>

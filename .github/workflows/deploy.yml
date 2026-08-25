@@ -28,6 +28,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          VITE_GITHUB_REPO: DavidSuckau/trimcad1
+          VITE_GITHUB_FEEDBACK_LABEL: trimtex-feedback
+          VITE_FEEDBACK_PROXY_ENABLED: 'false'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
