@@ -1,6 +1,7 @@
 import type { FeedbackIssueWithMeta } from './feedbackIssueFilter'
 import type { FeedbackIssueStats } from './feedbackStats'
 import { formatOpenDays } from './feedbackStats'
+import { FeedbackTrendChart } from './FeedbackTrendChart'
 
 const STATUS_LABEL: Record<string, string> = {
   open: 'Offen',
@@ -48,6 +49,7 @@ export function FeedbackStatsPanel({ stats, issues, expanded, onToggle }: Props)
 
       {expanded && (
         <div className="dev-feedback-stats-detail">
+          {issues.length > 0 && <FeedbackTrendChart issues={issues} />}
           {(['open', 'in_progress', 'closed'] as const).map((key) => {
             const list = groups[key]
             if (list.length === 0) return null
