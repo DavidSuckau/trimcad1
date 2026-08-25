@@ -22,6 +22,8 @@ import { MassstabModal } from './MassstabModal'
 import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { CONFIGURATOR_UI_ENABLED } from '../configurators/featureFlags'
+import { SEAT_3D_PREVIEW_ENABLED } from '../seat3d/featureFlags'
+import { useSeat3dStore } from '../seat3d/useSeat3dStore'
 import { StuecklisteModal } from './StuecklisteModal'
 import { MaterialCatalogModal } from './MaterialCatalogModal'
 import { NestingModal } from './NestingModal'
@@ -664,6 +666,20 @@ export function Toolbar() {
                   3D-Scan zeichnen
                 </button>
               </li>
+              {SEAT_3D_PREVIEW_ENABLED && (
+                <li>
+                  <button
+                    type="button"
+                    className="menubar-dropdown-btn"
+                    onClick={() => {
+                      useSeat3dStore.getState().setOpen(true)
+                      closeMenu()
+                    }}
+                  >
+                    Sitz-3D-Vorschau
+                  </button>
+                </li>
+              )}
               <li className="menubar-separator" />
               <li>
                 <button type="button" className="menubar-dropdown-btn" onClick={() => handleErzeugen('rectangle')}>

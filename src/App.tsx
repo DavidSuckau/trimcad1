@@ -7,8 +7,12 @@ import { HelpModal } from './components/HelpModal'
 import { ShortcutListModal } from './components/ShortcutListModal'
 import { PiecePropertiesModal } from './components/PiecePropertiesModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { SEAT_3D_PREVIEW_ENABLED } from './seat3d/featureFlags'
 
 const Scan3dModal = lazy(() => import('./components/Scan3dModal').then((m) => ({ default: m.Scan3dModal })))
+const Seat3dModal = lazy(() =>
+  import('./seat3d/Seat3dModal').then((m) => ({ default: m.Seat3dModal })),
+)
 
 export default function App() {
   return (
@@ -29,6 +33,7 @@ export default function App() {
         <PiecePropertiesModal />
         <Suspense fallback={null}>
           <Scan3dModal />
+          {SEAT_3D_PREVIEW_ENABLED ? <Seat3dModal /> : null}
         </Suspense>
       </div>
     </ErrorBoundary>
