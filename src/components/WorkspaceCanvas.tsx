@@ -125,7 +125,8 @@ import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
 import { isInternalCircleHole, pathWithInternalCircleHoles } from '../geometry/internalCirclePath'
-import { isFacingDerivedPiece, sortPiecesFacingBehind } from '../geometry/facingPiece'
+import { sortPiecesFacingBehind } from '../geometry/facingPiece'
+import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 
 let T: CanvasTheme = canvasTheme
@@ -2149,6 +2150,7 @@ export function WorkspaceCanvas() {
     addDrill,
     addPiece,
     createFacingPiece,
+    createMirrorPiece,
     setTool,
     insertPointOnCutLine,
     updateVertex,
@@ -2290,6 +2292,7 @@ export function WorkspaceCanvas() {
       addDrill: s.addDrill,
       addPiece: s.addPiece,
       createFacingPiece: s.createFacingPiece,
+      createMirrorPiece: s.createMirrorPiece,
       setTool: s.setTool,
       insertPointOnCutLine: s.insertPointOnCutLine,
       updateVertex: s.updateVertex,
@@ -3529,9 +3532,9 @@ export function WorkspaceCanvas() {
           const p = pieces[i]
           const local = worldToPieceLocal(world, p)
           if (isPointInsidePiece(local, p)) {
-            if (isFacingDerivedPiece(p)) {
+            if (isLinkedDerivedPiece(p)) {
               setToastMessage(
-                'info:Kaschierungen werden nur von der Mutter synchronisiert – Nahtzugabe hier nicht editierbar.'
+                'info:Abhängige Teile (Kaschierung/Spiegelkopie) werden nur von der Mutter synchronisiert – Nahtzugabe hier nicht editierbar.'
               )
               setPendingNahtzugabeClick(false)
               return
@@ -6432,9 +6435,9 @@ export function WorkspaceCanvas() {
       if (contourEditEnabled && grainFlipHover && !grainContextMenu && !inInput && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
         const hoverPiece = pieces.find((p) => p.id === grainFlipHover.pieceId)
-        if (isFacingDerivedPiece(hoverPiece)) {
+        if (isLinkedDerivedPiece(hoverPiece)) {
           setToastMessage(
-            'info:Kaschierungen werden nur von der Mutter synchronisiert – Nahtzugabe hier nicht editierbar.'
+            'info:Abhängige Teile (Kaschierung/Spiegelkopie) werden nur von der Mutter synchronisiert – Nahtzugabe hier nicht editierbar.'
           )
           return
         }
@@ -7586,7 +7589,7 @@ export function WorkspaceCanvas() {
       )}
       {grainContextMenu && (() => {
         const menuPiece = pieces.find((p) => p.id === grainContextMenu.pieceId)
-        const isFacingPiece = isFacingDerivedPiece(menuPiece)
+        const isLinkedPiece = isLinkedDerivedPiece(menuPiece)
         const menuBtnStyle: React.CSSProperties = {
           display: 'block',
           width: '100%',
@@ -7622,7 +7625,7 @@ export function WorkspaceCanvas() {
               fontFamily: 'sans-serif',
             }}
           >
-            {!isFacingPiece && (
+            {!isLinkedPiece && (
               <button
                 type="button"
                 style={menuBtnStyle}
@@ -7653,7 +7656,7 @@ export function WorkspaceCanvas() {
             <button
               type="button"
               title={
-                isFacingPiece
+                isLinkedPiece
                   ? 'Kopie als unabhängiges Teil (ohne Sync zur Mutter)'
                   : undefined
               }
@@ -7663,9 +7666,14 @@ export function WorkspaceCanvas() {
               onClick={() => {
                 const piece = pieces.find((p) => p.id === grainContextMenu.pieceId)
                 if (!piece) return
-                if (isFacingDerivedPiece(piece)) {
+                if (isLinkedDerivedPiece(piece)) {
                   // Snapshot ohne Abhängigkeit – sonst entstünde nur eine zweite Sync-Tochter
-                  const { facingParentId: _fp, kind: _k, ...rest } = piece
+                  const {
+                    facingParentId: _fp,
+                    mirrorParentId: _mp,
+                    kind: _k,
+                    ...rest
+                  } = piece
                   addPiece({
                     ...rest,
                     id: undefined,
@@ -7673,6 +7681,7 @@ export function WorkspaceCanvas() {
                     name: piece.name.endsWith(' (Kopie)') ? piece.name : `${piece.name} (Kopie)`,
                     kind: undefined,
                     facingParentId: undefined,
+                    mirrorParentId: undefined,
                   })
                 } else {
                   addPiece({
@@ -7688,7 +7697,7 @@ export function WorkspaceCanvas() {
             >
               Teil kopieren
             </button>
-            {!isFacingPiece && (
+            {!isLinkedPiece && (
               <button
                 type="button"
                 title="Abhängiges Kaschierungsteil neben der Mutter anlegen (Kontur folgt der Mutter)"
@@ -7702,6 +7711,22 @@ export function WorkspaceCanvas() {
                 }}
               >
                 Kaschierung erzeugen
+              </button>
+            )}
+            {!isLinkedPiece && (
+              <button
+                type="button"
+                title="Abhängige Spiegelkopie neben der Mutter anlegen (geflippt, folgt der Mutter)"
+                style={menuBtnStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                onClick={() => {
+                  createMirrorPiece(grainContextMenu.pieceId)
+                  setGrainContextMenu(null)
+                  setGrainFlipHover(null)
+                }}
+              >
+                Spiegelkopie erzeugen
               </button>
             )}
             <button
@@ -8513,7 +8538,7 @@ export function WorkspaceCanvas() {
               const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
-                if (!piece || isFacingDerivedPiece(piece)) return []
+                if (!piece || isLinkedDerivedPiece(piece)) return []
                 const useSeamMaster = useSeamLineForVertexEditing(piece)
                 const displayedMaster = piece ? getDisplayedMasterCurves(piece) : null
                 const curvesForVertices = displayedMaster?.curves ?? (useSeamMaster ? piece!.seamLine : piece?.cutLine ?? [])
@@ -8580,7 +8605,7 @@ export function WorkspaceCanvas() {
               const HOVER_SCALE = 1.3
               return selectedPieceIds.flatMap((pieceId) => {
                 const piece = pieces.find((p) => p.id === pieceId)
-                if (!piece || isFacingDerivedPiece(piece)) return []
+                if (!piece || isLinkedDerivedPiece(piece)) return []
                 const curvesDraw = getDisplayedMasterCurves(piece).curves
                 const [fill, stroke] = COLOR_PUNKT_AUF_KURVE
                 return curvesDraw.flatMap((c, ci) => {
@@ -8616,7 +8641,7 @@ export function WorkspaceCanvas() {
               const nodes: React.ReactNode[] = []
               for (const pieceId of selectedPieceIds) {
                 const piece = pieces.find((p) => p.id === pieceId)
-                if (!piece || isFacingDerivedPiece(piece) || piece.internalLines.length === 0) continue
+                if (!piece || isLinkedDerivedPiece(piece) || piece.internalLines.length === 0) continue
                 const lines = piece.internalLines
                 const n = lines.length
                 const softJ = new Set(piece.internalLineSoftJunctions ?? [])

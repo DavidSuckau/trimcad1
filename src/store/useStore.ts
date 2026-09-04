@@ -109,11 +109,15 @@ import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
 import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece'
 import {
   buildFacingGeometryFromParent,
-  facingChildIds,
   facingOffsetBesideParent,
-  isFacingDerivedPiece,
-  syncFacingPiecesFromParents,
 } from '../geometry/facingPiece'
+import {
+  buildMirrorGeometryFromParent,
+  isLinkedDerivedPiece,
+  linkedChildIds,
+  mirrorOffsetBesideParent,
+  syncLinkedPiecesFromParents,
+} from '../geometry/mirrorPiece'
 import {
   finalizePieceContourEdit,
   mapContourVertexEditForSymmetry,
@@ -253,7 +257,7 @@ function cloneCurvesArray(curves: Curve[]): Curve[] {
 }
 
 const FACING_GEOMETRY_LOCKED_TOAST =
-  'info:Kaschierungen werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
+  'info:Abhängige Teile (Kaschierung/Spiegelkopie) werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
 
 const FACING_GEOMETRY_UPDATE_KEYS: (keyof PatternPiece)[] = [
   'cutLine',
@@ -276,13 +280,13 @@ function updateTouchesFacingGeometry(upd: Partial<PatternPiece>): boolean {
   return FACING_GEOMETRY_UPDATE_KEYS.some((k) => Object.prototype.hasOwnProperty.call(upd, k))
 }
 
-/** Blockiert manuelle Geometrie-Edits an abgeleiteten Kaschierungen (Position/Drehung bleiben erlaubt). */
+/** Blockiert manuelle Geometrie-Edits an Kaschierung/Spiegelkopie (Position/Drehung bleiben erlaubt). */
 function facingGeometryEditBlocked(
   pieces: PatternPiece[],
   pieceId: string
 ): { toastMessage: string } | null {
   const p = pieces.find((x) => x.id === pieceId)
-  if (!isFacingDerivedPiece(p)) return null
+  if (!isLinkedDerivedPiece(p)) return null
   return { toastMessage: FACING_GEOMETRY_LOCKED_TOAST }
 }
 
@@ -572,6 +576,8 @@ type Store = {
   deletePiece: (id: string) => void
   /** Erzeugt eine abhängige Kaschierung (Tochter) aus dem Mutterteil. */
   createFacingPiece: (parentId: string) => string | null
+  /** Erzeugt eine abhängige Spiegelkopie (geflippt) aus dem Mutterteil. */
+  createMirrorPiece: (parentId: string) => string | null
   selectPiece: (id: string | null, addToSelection?: boolean) => void
   setTool: (t: Tool) => void
   setCanvasThemeMode: (m: 'light' | 'dark') => void
@@ -1116,7 +1122,7 @@ export const useStore = create<Store>()(
 
   updatePiece: (id, upd) =>
     set((s) => {
-      if (isFacingDerivedPiece(s.workspace.pieces.find((p) => p.id === id)) && updateTouchesFacingGeometry(upd)) {
+      if (isLinkedDerivedPiece(s.workspace.pieces.find((p) => p.id === id)) && updateTouchesFacingGeometry(upd)) {
         return { toastMessage: FACING_GEOMETRY_LOCKED_TOAST }
       }
       let toastMessage: string | null = null
@@ -1192,14 +1198,14 @@ export const useStore = create<Store>()(
             }).pieces
           : pieces
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(piecesAfterSeamTrim) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(piecesAfterSeamTrim) },
         ...(toastMessage ? { toastMessage } : {}),
       }
     }),
 
   deletePiece: (id) =>
     set((s) => {
-      const removeIds = new Set([id, ...facingChildIds(s.workspace.pieces, id)])
+      const removeIds = new Set([id, ...linkedChildIds(s.workspace.pieces, id)])
       return {
         workspace: {
           ...s.workspace,
@@ -1227,8 +1233,11 @@ export const useStore = create<Store>()(
   createFacingPiece: (parentId) => {
     const parent = get().workspace.pieces.find((p) => p.id === parentId)
     if (!parent) return null
-    if (parent.facingParentId || parent.kind === 'facing') {
-      set({ toastMessage: 'warn:Aus einer Kaschierung kann keine weitere Kaschierung erzeugt werden.' })
+    if (isLinkedDerivedPiece(parent)) {
+      set({
+        toastMessage:
+          'warn:Aus einer Kaschierung oder Spiegelkopie kann keine weitere abhängige Kopie erzeugt werden.',
+      })
       return null
     }
     if (parent.cutLine.length < 3) {
@@ -1254,6 +1263,43 @@ export const useStore = create<Store>()(
           : {}),
       },
       symmetryConstraint: undefined,
+    })
+    return id
+  },
+
+  createMirrorPiece: (parentId) => {
+    const parent = get().workspace.pieces.find((p) => p.id === parentId)
+    if (!parent) return null
+    if (isLinkedDerivedPiece(parent)) {
+      set({
+        toastMessage:
+          'warn:Aus einer Kaschierung oder Spiegelkopie kann keine weitere abhängige Kopie erzeugt werden.',
+      })
+      return null
+    }
+    if (parent.cutLine.length < 3) {
+      set({ toastMessage: 'warn:Teil hat keine gültige Kontur für eine Spiegelkopie.' })
+      return null
+    }
+    const geom = buildMirrorGeometryFromParent(parent)
+    const offset = mirrorOffsetBesideParent(parent)
+    const nameBase = parent.name?.trim() || `Teil ${parent.number}`
+    const id = get().addPiece({
+      ...geom,
+      name: `${nameBase} Spiegel`,
+      mirrorParentId: parent.id,
+      kind: 'mirror',
+      transform: {
+        x: parent.transform.x + offset.x,
+        y: parent.transform.y + offset.y,
+        rotation: parent.transform.rotation,
+        mirrored: parent.transform.mirrored,
+        ...(parent.transform.pivotLocal
+          ? { pivotLocal: { ...parent.transform.pivotLocal } }
+          : {}),
+      },
+      symmetryConstraint: undefined,
+      facingParentId: undefined,
     })
     return id
   },
@@ -2097,7 +2143,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) =>
             p.id === pieceId ? { ...p, internalLines: [...p.internalLines, curve] } : p
           )
@@ -2113,7 +2159,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) =>
             p.id === pieceId ? { ...p, internalLines: [...p.internalLines, ...curves] } : p
           )
@@ -2129,7 +2175,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             const id = circle.id ?? 'ic' + Math.random().toString(36).slice(2, 10)
@@ -2153,7 +2199,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             return {
@@ -2182,7 +2228,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) =>
             p.id !== pieceId ? p : { ...p, internalCircles: p.internalCircles.filter((c) => c.id !== circleId) }
           )
@@ -2198,7 +2244,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId || curveIndex < 0 || curveIndex >= p.internalLines.length) return p
             const internalLines = p.internalLines.filter((_, i) => i !== curveIndex)
@@ -2265,7 +2311,7 @@ export const useStore = create<Store>()(
         const notches = remapNotchesAfterInternalLineSplit(p.notches, curveIndex, newLines)
         return { ...p, internalLines: newLines, internalLineSoftJunctions, notches }
       })
-      return { workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) } }
+      return { workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) } }
     })
     return inserted
   },
@@ -2277,7 +2323,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             if (curveIndex < 0 || curveIndex >= p.internalLines.length) return p
@@ -2306,7 +2352,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             const il = p.internalLines
@@ -2338,7 +2384,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((piece) => {
             if (piece.id !== pieceId) return piece
             const lines = piece.internalLines.map((c) =>
@@ -2380,7 +2426,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             if (curveIndex < 0 || curveIndex >= p.internalLines.length) return p
@@ -2463,7 +2509,7 @@ export const useStore = create<Store>()(
         manualSeamTrimReset ? TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL : null
       )
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(piecesAfterSeamTrim) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(piecesAfterSeamTrim) },
         ...(mergedCurvePointToast ? { toastMessage: mergedCurvePointToast } : {}),
       }
     }),
@@ -2501,7 +2547,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(
+          pieces: syncLinkedPiecesFromParents(
             s.workspace.pieces.map((p) => {
               if (p.id !== pieceId) return p
               const candidates = appendSymmetricMirroredNotches(p, toAdd)
@@ -2519,7 +2565,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) =>
             p.id === pieceId ? { ...p, notches: p.notches.filter((n) => n.id !== notchId) } : p
           )
@@ -2591,7 +2637,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(
+          pieces: syncLinkedPiecesFromParents(
             s.workspace.pieces.map((p) => {
               if (p.id !== pieceId) return p
               return {
@@ -2627,7 +2673,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) =>
             p.id === pieceId ? { ...p, drills: [...p.drills, drill] } : p
           )
@@ -2698,7 +2744,7 @@ export const useStore = create<Store>()(
         )
       })
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) },
         ...(toastMessage ? { toastMessage } : {}),
       }
     }),
@@ -2831,7 +2877,7 @@ export const useStore = create<Store>()(
           nahtTrimPickCutVertexActive: false,
           workspace: {
             ...s.workspace,
-            pieces: syncFacingPiecesFromParents(s.workspace.pieces.map((p) => (p.id === targetId ? updatedTarget : p))),
+            pieces: syncLinkedPiecesFromParents(s.workspace.pieces.map((p) => (p.id === targetId ? updatedTarget : p))),
           },
           toastMessage:
             trimMode === '45'
@@ -2885,7 +2931,7 @@ export const useStore = create<Store>()(
         nahtTrimPickCutVertexActive: false,
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(s.workspace.pieces.map((p) => (p.id === targetId ? updatedTarget : p))),
+          pieces: syncLinkedPiecesFromParents(s.workspace.pieces.map((p) => (p.id === targetId ? updatedTarget : p))),
         },
         toastMessage:
           'success:Naht trimmen ausgeführt: Nur die Außenkontur wurde beschnitten, Nahtlinie blieb unverändert.',
@@ -2899,7 +2945,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             // Nahtlinie wird wieder zur einzigen Kontur (cutLine)
@@ -2961,7 +3007,7 @@ export const useStore = create<Store>()(
         return forceCutVerticesSoftAfterPromotion(next, mappedSoft)
       })
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) },
         ...(toastMessage ? { toastMessage } : {}),
       }
     }),
@@ -2983,7 +3029,7 @@ export const useStore = create<Store>()(
           // Bei Master-Kontur-Splits (cutLine oder seamLine) müssen die SeamAssignment-Indizes remapped werden.
           // getCurvesForSeamEdge erwartet Master-Indizes, und `curveIndex` ist auf genau dieser Master-Kontur angegeben.
           seamAssignments: adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
-          pieces: syncFacingPiecesFromParents(s.workspace.pieces.map((p) => {
+          pieces: syncLinkedPiecesFromParents(s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             const mappedInsert = mapCurveEditForSymmetry(p, curveIndex, point)
             const editCurveIndex = mappedInsert.curveIndex
@@ -3140,7 +3186,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(s.workspace.pieces.map((p) => {
+          pieces: syncLinkedPiecesFromParents(s.workspace.pieces.map((p) => {
             const seamAllowance = p.seamAllowanceMm
             const useSeamMaster = useSeamLineForVertexEditing(p)
             const curves = useSeamMaster ? p.seamLine : p.cutLine
@@ -3351,7 +3397,7 @@ export const useStore = create<Store>()(
         manualSeamTrimReset ? TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL : null
       )
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) },
         ...(mergedToast ? { toastMessage: mergedToast } : {}),
       }
     }),
@@ -3456,7 +3502,7 @@ export const useStore = create<Store>()(
         manualSeamTrimReset ? TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL : null
       )
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) },
         ...(mergedToastMove ? { toastMessage: mergedToastMove } : {}),
       }
     }),
@@ -3585,7 +3631,7 @@ export const useStore = create<Store>()(
         workspace: {
           ...s.workspace,
           seamAssignments: oldN > 3 ? adjustSeamAfterRemove(s.workspace.seamAssignments, pieceId, editVertexIndex, oldN) : s.workspace.seamAssignments,
-          pieces: syncFacingPiecesFromParents(newPieces),
+          pieces: syncLinkedPiecesFromParents(newPieces),
           profileAssignments,
         },
         ...(mergedToast ? { toastMessage: mergedToast } : {}),
@@ -3663,7 +3709,7 @@ export const useStore = create<Store>()(
         return {
           workspace: {
             ...s.workspace,
-            pieces: syncFacingPiecesFromParents(
+            pieces: syncLinkedPiecesFromParents(
               s.workspace.pieces.map((p) => (p.id === pieceId ? reconciled.piece : p)),
             ),
           },
@@ -3736,7 +3782,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(
+          pieces: syncLinkedPiecesFromParents(
             s.workspace.pieces.map((p) => (p.id === pieceId ? reconciled.piece : p)),
           ),
         },
@@ -3804,7 +3850,7 @@ export const useStore = create<Store>()(
         manualSeamTrimReset ? TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL : null
       )
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) },
         ...(mergedToastConv ? { toastMessage: mergedToastConv } : {}),
       }
     }),
@@ -3851,7 +3897,7 @@ export const useStore = create<Store>()(
         profileAssignments = remapProfileAssignmentsForPiece(oldPiece, newPiece, profileAssignments)
       }
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(newPieces), profileAssignments },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(newPieces), profileAssignments },
       }
     }),
 
@@ -3924,7 +3970,7 @@ export const useStore = create<Store>()(
         manualSeamTrimReset ? TOAST_MANUAL_SEAM_TRIM_RESET_PARALLEL : null
       )
       return {
-        workspace: { ...s.workspace, pieces: syncFacingPiecesFromParents(pieces) },
+        workspace: { ...s.workspace, pieces: syncLinkedPiecesFromParents(pieces) },
         ...(mergedOffsetToast ? { toastMessage: mergedOffsetToast } : {}),
       }
     }),
@@ -3936,7 +3982,7 @@ export const useStore = create<Store>()(
       return {
       workspace: {
         ...s.workspace,
-        pieces: syncFacingPiecesFromParents(
+        pieces: syncLinkedPiecesFromParents(
           s.workspace.pieces.map((p) => {
             if (p.id !== pieceId || p.seamAllowanceMm == null || p.cutLine.length < 3) return p
             // Schutz gegen versehentliches Überschreiben der Master-Naht:
@@ -4017,7 +4063,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(
+          pieces: syncLinkedPiecesFromParents(
             s.workspace.pieces.map((p) =>
               p.id === pieceId
                 ? applySharpCornerPromotion({
@@ -4108,7 +4154,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(
+          pieces: syncLinkedPiecesFromParents(
             s.workspace.pieces.map((p) =>
               p.id === pieceId
                 ? applySharpCornerPromotion({
@@ -4142,7 +4188,7 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
-          pieces: syncFacingPiecesFromParents(
+          pieces: syncLinkedPiecesFromParents(
             s.workspace.pieces.map((p) =>
               p.id === pieceId ? { ...r.piece, symmetryConstraint } : p
             )

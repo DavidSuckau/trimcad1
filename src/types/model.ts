@@ -185,8 +185,13 @@ export type PatternPiece = {
    * Geometrie wird aus der Mutter abgeleitet (inkl. Cut-Eckenabschrägung in der Nahtzugabe).
    */
   facingParentId?: string
-  /** Semantik des Teils; `facing` = Kaschierung / Beleg. */
-  kind?: 'facing'
+  /**
+   * Wenn gesetzt: dieses Teil ist eine **Spiegelkopie** (Tochter) des Mutterteils mit dieser ID.
+   * Geometrie = vertikal gespiegelte Kopie der Mutter; folgt allen Konturänderungen.
+   */
+  mirrorParentId?: string
+  /** Semantik des Teils; `facing` = Kaschierung / Beleg, `mirror` = abhängige Spiegelkopie. */
+  kind?: 'facing' | 'mirror'
 }
 
 export type ViewState = {

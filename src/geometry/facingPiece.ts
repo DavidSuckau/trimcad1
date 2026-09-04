@@ -239,7 +239,8 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
     const parentId = p.facingParentId
     if (!parentId) return p
     const parent = byId.get(parentId)
-    if (!parent || parent.facingParentId) return p
+    if (!parent || parent.facingParentId || parent.kind === 'facing' || parent.mirrorParentId || parent.kind === 'mirror')
+      return p
     const geom = buildFacingGeometryFromParent(parent)
     const synced: PatternPiece = {
       ...p,

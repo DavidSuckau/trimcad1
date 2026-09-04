@@ -287,10 +287,12 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
     })(),
     ...(() => {
       const parentId = (raw as { facingParentId?: unknown }).facingParentId
+      const mirrorParentId = (raw as { mirrorParentId?: unknown }).mirrorParentId
       const kind = (raw as { kind?: unknown }).kind
-      const out: { facingParentId?: string; kind?: 'facing' } = {}
+      const out: { facingParentId?: string; mirrorParentId?: string; kind?: 'facing' | 'mirror' } = {}
       if (typeof parentId === 'string' && parentId.length > 0) out.facingParentId = parentId
-      if (kind === 'facing') out.kind = 'facing'
+      if (typeof mirrorParentId === 'string' && mirrorParentId.length > 0) out.mirrorParentId = mirrorParentId
+      if (kind === 'facing' || kind === 'mirror') out.kind = kind
       return out
     })(),
   }

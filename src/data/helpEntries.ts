@@ -184,7 +184,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Laufrichtung (Grain) Kontextmenü',
     description:
-      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln, Löschen, Kopieren, Kaschierung erzeugen und Teil-Eigenschaften. „Kaschierung erzeugen“ legt ein abhängiges Tochterteil neben der Mutter an (gefüllte Schraffur, Außenecken in der Nahtzugabe angephast); Kontur/Notches folgen der Mutter, Position der Kaschierung bleibt lokal. Nur im Layout-Modus (Kontur bearbeiten aus): Teil ausgewählt, am Schaft ziehen zum parallelen Verschieben; an Anfang oder Ende (Punkte) ziehen, um die Linie länger/kürzer zu machen und die Richtung anzupassen. Loslassen mit Linienmitte nahe einer Schnittkontur-Kante: parallel zur Kante ausrichten und auf die Kante legen. Umschalt beim Loslassen: kein Snappen. Im Kontur-Bearbeitungsmodus ist die Laufrichtung nicht verschiebbar.',
+      'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln, Löschen, Kopieren, Kaschierung erzeugen, Spiegelkopie erzeugen und Teil-Eigenschaften. „Kaschierung erzeugen“ legt ein abhängiges Tochterteil neben der Mutter an (gefüllte Schraffur, Außenecken in der Nahtzugabe angephast); „Spiegelkopie erzeugen“ legt eine geflippte abhängige Kopie an. Kontur/Notches folgen der Mutter, Position bleibt lokal. Nur im Layout-Modus (Kontur bearbeiten aus): Teil ausgewählt, am Schaft ziehen zum parallelen Verschieben; an Anfang oder Ende (Punkte) ziehen, um die Linie länger/kürzer zu machen und die Richtung anzupassen. Loslassen mit Linienmitte nahe einer Schnittkontur-Kante: parallel zur Kante ausrichten und auf die Kante legen. Umschalt beim Loslassen: kein Snappen. Im Kontur-Bearbeitungsmodus ist die Laufrichtung nicht verschiebbar.',
     access: 'Laufrichtungspfeil mit Maus anfahren → Leertaste bzw. Ziehen',
     shortcut: 'Leertaste',
   },
@@ -192,8 +192,16 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Kaschierung erzeugen',
     description:
-      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt ein abhängiges Kaschierungsteil neben dem Mutterteil. Die Schnittkontur erhält an scharfen Ecken Chamfers maximal bis zum Naht-Eckpunkt; die Nahtlinie bleibt eckig. Die Kaschierung wird nur von der Mutter synchronisiert – Kontur, Kerben und Internals sind dort nicht manuell editierbar (Position/Drehung, Material und Laufrichtung schon; Laufrichtung im Layout-Modus verschieben). Aus einer Kaschierung kann keine weitere erzeugt werden; Löschen der Mutter entfernt auch die Kaschierung.',
+      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt ein abhängiges Kaschierungsteil neben dem Mutterteil. Die Schnittkontur erhält an scharfen Ecken Chamfers maximal bis zum Naht-Eckpunkt; die Nahtlinie bleibt eckig. Die Kaschierung wird nur von der Mutter synchronisiert – Kontur, Kerben und Internals sind dort nicht manuell editierbar (Position/Drehung, Material und Laufrichtung schon; Laufrichtung im Layout-Modus verschieben). Aus einer Kaschierung oder Spiegelkopie kann keine weitere abhängige Kopie erzeugt werden; Löschen der Mutter entfernt auch die Kaschierung.',
     access: 'Laufrichtungspfeil anfahren → Leertaste → Kaschierung erzeugen',
+    shortcut: 'Leertaste',
+  },
+  {
+    category: 'Werkzeuge',
+    name: 'Spiegelkopie erzeugen',
+    description:
+      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie neben dem Mutterteil. Kontur, Kerben und Internals folgen der Mutter bei jeder Änderung; Position/Drehung, Material und Laufrichtung bleiben lokal editierbar. Aus einer Kaschierung oder Spiegelkopie kann keine weitere abhängige Kopie erzeugt werden; Löschen der Mutter entfernt auch die Spiegelkopie.',
+    access: 'Laufrichtungspfeil anfahren → Leertaste → Spiegelkopie erzeugen',
     shortcut: 'Leertaste',
   },
   {
