@@ -9,9 +9,10 @@ import { FeedbackStatsPanel } from './FeedbackStatsPanel'
 import { formatOpenDays, type FeedbackIssueStats } from './feedbackStats'
 import { useDevFeedbackStore } from './useDevFeedbackStore'
 import { validateFeedbackForm } from './validateFeedback'
+import { APP_VERSION_LABEL } from '../branding'
 import './devFeedback.css'
 
-const APP_VERSION = 'TrimTex 1.0.0'
+const APP_VERSION = APP_VERSION_LABEL
 
 type Tab = 'new' | 'list'
 
@@ -254,7 +255,7 @@ export function DevFeedbackModal() {
               )}
               {!listError && !loadingList && activeIssues.length === 0 && (
                 <p className="dev-feedback-empty">
-                  Keine offenen TrimTex-Einträge. Nach dem Senden ggf. „Aktualisieren“ — oder direkt
+                  Keine offenen trim-cad.de-Einträge. Nach dem Senden ggf. „Aktualisieren“ — oder direkt
                   auf{' '}
                   <a
                     href={`https://github.com/DavidSuckau/trimcad1/issues?q=is%3Aissue+is%3Aopen+label%3A${encodeURIComponent('trimtex-feedback')}`}

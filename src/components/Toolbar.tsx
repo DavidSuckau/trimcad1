@@ -31,6 +31,7 @@ import { MaterialCatalogModal } from './MaterialCatalogModal'
 import { NestingModal } from './NestingModal'
 import { ProfileAssignmentDialog } from './ProfileAssignmentDialog'
 import logoTrimtexUrl from '../assets/logo-trimtex.png'
+import { APP_NAME } from '../branding'
 
 type ToolId =
   | 'select'
@@ -461,7 +462,8 @@ export function Toolbar() {
   return (
     <header className="menubar" ref={menuRef}>
       <div className="menubar-brand">
-        <img src={logoTrimtexUrl} alt="TrimTex" className="menubar-logo" />
+        <img src={logoTrimtexUrl} alt={APP_NAME} className="menubar-logo" />
+        <span className="menubar-brand-name">{APP_NAME}</span>
       </div>
       <div className="menubar-divider" role="presentation" aria-hidden />
       <input

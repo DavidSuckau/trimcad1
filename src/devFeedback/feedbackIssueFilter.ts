@@ -1,4 +1,5 @@
 import { GITHUB_FEEDBACK_LABEL } from './featureFlags'
+import { APP_NAME } from '../branding'
 import {
   daysSince,
   resolveFeedbackStatus,
@@ -8,7 +9,7 @@ import {
 
 export type { FeedbackIssueWithMeta, FeedbackStatus }
 
-/** Issues aus dem TrimTex-Feedback (Label oder typischer Issue-Text). */
+/** Issues aus dem App-Feedback (Label oder typischer Issue-Text). */
 export function isTrimtexFeedbackIssue(row: {
   labels?: { name?: string }[]
   body?: string | null
@@ -18,7 +19,11 @@ export function isTrimtexFeedbackIssue(row: {
   const labels = row.labels ?? []
   if (labels.some((l) => l.name === GITHUB_FEEDBACK_LABEL)) return true
   const body = row.body ?? ''
-  return body.includes('**Gemeldet von:**') || body.includes('**TrimTex:**')
+  return (
+    body.includes('**Gemeldet von:**') ||
+    body.includes(`**${APP_NAME}:**`) ||
+    body.includes('**TrimTex:**')
+  )
 }
 
 function labelNames(row: { labels?: { name?: string }[] }): string[] {

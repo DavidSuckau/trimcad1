@@ -1382,8 +1382,11 @@ const PieceGroup = memo(function PieceGroup({
   const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
   const isDialogHighlightActive = isDialogHovered
   const isFacing = piece.kind === 'facing' || !!piece.facingParentId
+  const isMirror = piece.kind === 'mirror' || !!piece.mirrorParentId
   const facingHatchFill =
     _themeMode === 'dark' ? 'url(#facing-hatch-dark)' : 'url(#facing-hatch-light)'
+  const mirrorLinkHatchFill =
+    _themeMode === 'dark' ? 'url(#mirror-link-hatch-dark)' : 'url(#mirror-link-hatch-light)'
   const interiorFill = isDialogHighlightActive
     ? T.piece.fillDialogHover
     : isFacing
@@ -1396,11 +1399,18 @@ const PieceGroup = memo(function PieceGroup({
           ? T.piece.fillSelected
           : T.piece.fill
   const interiorFillOpacity =
-    interiorFill === 'none' ? undefined : isFacing ? 1 : isSelected && T.piece.fill === 'none' ? 1 : 0.82
+    interiorFill === 'none'
+      ? undefined
+      : isFacing
+        ? 1
+        : isSelected && T.piece.fill === 'none'
+          ? 1
+          : 0.82
   const dashedFill = dashedStrokeOnly ? 'none' : interiorFill
   const dashedFillOpacity = dashedStrokeOnly ? undefined : interiorFillOpacity
   const solidFill = solidStrokeOnly ? 'none' : interiorFill
   const solidFillOpacity = solidStrokeOnly ? undefined : interiorFillOpacity
+  const mirrorWash = _themeMode === 'dark' ? '#9ca3af' : '#6b7280'
 
   const sym = piece.symmetryConstraint
   const symClips =
@@ -1469,6 +1479,34 @@ const PieceGroup = memo(function PieceGroup({
     )
   }
 
+  /** Spiegelkopie: Materialfarbe bleibt, darüber Grauwash + andere Schraffur als Kaschierung. */
+  const renderMirrorLinkOverlay = (pathD: string | null, strokeOnly: boolean) => {
+    if (!isMirror || !pathD || strokeOnly || isDialogHighlightActive) return null
+    const fillD = pathWithInternalCircleHoles(pathD, internalCircles)
+    const hasHoles = fillD !== pathD
+    const rule = hasHoles ? ('evenodd' as const) : undefined
+    return (
+      <>
+        <path
+          d={fillD}
+          fill={mirrorWash}
+          fillOpacity={0.18}
+          fillRule={rule}
+          stroke="none"
+          pointerEvents="none"
+        />
+        <path
+          d={fillD}
+          fill={mirrorLinkHatchFill}
+          fillOpacity={1}
+          fillRule={rule}
+          stroke="none"
+          pointerEvents="none"
+        />
+      </>
+    )
+  }
+
   const solidStroke = isDialogHighlightActive ? T.piece.strokeDialogHover
     : isHovered ? T.piece.strokeHover
       : isSelected ? T.piece.strokeSelected
@@ -1497,6 +1535,7 @@ const PieceGroup = memo(function PieceGroup({
       {hasSeam && dashedPath && (
         <>
           {renderSplitFill(dashedPath, !!dashedStrokeOnly, true)}
+          {renderMirrorLinkOverlay(dashedPath, !!dashedStrokeOnly)}
           <path
             d={dashedPath}
             fill="none"
@@ -1511,6 +1550,7 @@ const PieceGroup = memo(function PieceGroup({
       {solidPath && (
         <>
           {renderSplitFill(solidPath, !!solidStrokeOnly, false)}
+          {renderMirrorLinkOverlay(solidPath, !!solidStrokeOnly)}
           <path
             d={solidPath}
             fill="none"
@@ -8003,6 +8043,25 @@ export function WorkspaceCanvas() {
             patternTransform="rotate(45)"
           >
             <path d="M0 0 H8" stroke="#9ca3af" strokeWidth="1.1" opacity="0.65" />
+          </pattern>
+          {/* Spiegelkopie: Gegenrichtung zur Kaschierung; liegt über Materialfarbe. */}
+          <pattern
+            id="mirror-link-hatch-light"
+            width="9"
+            height="9"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(-45)"
+          >
+            <path d="M0 0 H9" stroke="#4b5563" strokeWidth="0.85" opacity="0.5" />
+          </pattern>
+          <pattern
+            id="mirror-link-hatch-dark"
+            width="9"
+            height="9"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(-45)"
+          >
+            <path d="M0 0 H9" stroke="#d1d5db" strokeWidth="0.85" opacity="0.45" />
           </pattern>
         </defs>
         <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>

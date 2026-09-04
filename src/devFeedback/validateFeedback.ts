@@ -1,3 +1,5 @@
+import { APP_NAME } from '../branding'
+
 export type FeedbackForm = {
   title: string
   body: string
@@ -20,7 +22,7 @@ export function buildIssueBody(form: FeedbackForm, meta: { appVersion: string; u
   const author = form.authorName.trim() || 'Anonym'
   return [
     `**Gemeldet von:** ${author}`,
-    `**TrimTex:** ${meta.appVersion}`,
+    `**${APP_NAME}:** ${meta.appVersion}`,
     `**Browser:** ${meta.userAgent}`,
     '',
     '---',

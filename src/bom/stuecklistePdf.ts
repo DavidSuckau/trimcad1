@@ -22,6 +22,7 @@ import {
 } from './naehplan'
 import { buildWorkspaceOverviewSvgDocument } from '../workspace/buildWorkspaceOverviewSvg'
 import type { OverviewImageSession } from '../workspace/workspaceOverviewBounds'
+import { APP_NAME } from '../branding'
 
 function fmtAreaM2(mm2: number): string {
   return (mm2 / 1_000_000).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
@@ -536,7 +537,7 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
     const pw = doc.internal.pageSize.getWidth()
     const ph = doc.internal.pageSize.getHeight()
     doc.text(`Seite ${i} / ${totalPages}`, pw - margin - 1, ph - 4, { align: 'right' })
-    doc.text(`TrimTex · ${workspace.name}`, margin, ph - 4)
+    doc.text(`${APP_NAME} · ${workspace.name}`, margin, ph - 4)
   }
 
   const datePart = new Date().toISOString().slice(0, 10)

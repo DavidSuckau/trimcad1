@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './index.css'
 import faviconUrl from './assets/logo-trimtex.png'
+import { APP_DOCUMENT_TITLE } from './branding'
+
+document.title = APP_DOCUMENT_TITLE
 
 {
   let link = document.querySelector<HTMLLinkElement>("link[rel='icon']")

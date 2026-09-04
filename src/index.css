@@ -68,6 +68,7 @@ body {
 .menubar-brand {
   display: flex;
   align-items: center;
+  gap: 0.45rem;
   flex-shrink: 0;
   padding: 0 0.15rem;
 }
@@ -78,6 +79,15 @@ body {
   object-fit: contain;
   user-select: none;
   pointer-events: none;
+}
+
+.menubar-brand-name {
+  font-size: 0.92rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #1f2937;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .menubar-divider {

@@ -1,6 +1,7 @@
 import { extractFirstJsonObject } from './configuratorChatAi'
 import { WORKSPACE_KI_DOCUMENTATION } from '../assistant/workspaceHelpContext'
 import { validateWorkspaceProposal, type WorkspaceChatProposal } from '../workspace/workspaceChatActions'
+import { APP_NAME } from '../branding'
 
 type ChatCompletionsResponse = {
   choices?: Array<{
@@ -14,13 +15,13 @@ type ChatCompletionsResponse = {
 const MODEL = 'gpt-4o-mini'
 
 const HELP_SYSTEM_PROMPT = [
-  'Du bist die eingebettete Hilfe fuer TrimTex (Zuschnitt-Arbeitsflaeche, 2D-Schnittmuster).',
+  `Du bist die eingebettete Hilfe fuer ${APP_NAME} (Zuschnitt-Arbeitsflaeche, 2D-Schnittmuster).`,
   'Beantworte Nutzerfragen ausschliesslich auf Basis des folgenden Dokuments.',
   'Wenn etwas dort nicht steht, sage ehrlich, dass du es nicht weisst oder der Nutzer Menue Hilfe / F1 nutzen soll.',
   'Antwort auf Deutsch, klar strukturiert, kurze Absaetze. Keine erfundenen Tastenkuerzel.',
   'Unterscheide: D = Digitalisieren ohne Alt; Alt+D (Mac: ⌥D) = Drehpunkt (nicht Digitalisieren).',
   '',
-  '--- DOKUMENTATION (TrimTex KI-Nutzerhilfe-Quelle) ---',
+  `--- DOKUMENTATION (${APP_NAME} KI-Nutzerhilfe-Quelle) ---`,
   '',
 ].join('\n')
 
@@ -82,7 +83,7 @@ export type WorkspaceChatRequestArgs = {
 
 function buildPrompt(args: WorkspaceChatRequestArgs): string {
   const parts = [
-    'Du bist ein Assistent fuer die TrimTex-Zuschnitt-Arbeitsflaeche (2D-Teile).',
+    `Du bist ein Assistent fuer die ${APP_NAME}-Zuschnitt-Arbeitsflaeche (2D-Teile).`,
     'Gib AUSSCHLIESSLICH valides JSON ohne Markdown zurueck.',
     'Koordinaten immer in mm: Weltkoordinaten fuer neue Teile, lokale Teilkoordinaten fuer Kerben/Bohrungen auf einem bestehenden Teil.',
     'Erlaubte Aktionen (actions ist ein Array, Reihenfolge beachten):',

@@ -554,7 +554,7 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
   }
   const o = parsed as Record<string, unknown>
   if (o.format !== TRIMTEX_PROJECT_FORMAT) {
-    return { ok: false, error: 'Keine TrimTex-Projektdatei (format fehlt oder falsch).' }
+    return { ok: false, error: 'Keine trim-cad.de-Projektdatei (format fehlt oder falsch).' }
   }
   if (o.version !== TRIMTEX_PROJECT_VERSION) {
     return { ok: false, error: `Projektversion ${String(o.version)} wird nicht unterstützt.` }

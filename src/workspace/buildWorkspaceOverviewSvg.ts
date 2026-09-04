@@ -13,6 +13,7 @@ import {
   type OverviewImageSession,
 } from './workspaceOverviewBounds'
 import { sortPiecesFacingBehind, isFacingDerivedPiece } from '../geometry/facingPiece'
+import { isMirrorDerivedPiece } from '../geometry/mirrorPiece'
 import { canvasTheme as T } from '../theme/canvasTheme'
 import { pieceInteriorFillFromMaterial } from '../theme/materialFillColor'
 import { strokeColorForProfileKey } from '../profile/profileKeyColor'
@@ -50,6 +51,9 @@ export function buildWorkspaceOverviewSvgDocument(
   <pattern id="facing-hatch-overview" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
     <path d="M0 0 H8" stroke="#6b7280" stroke-width="1.1" opacity="0.7"/>
   </pattern>
+  <pattern id="mirror-link-hatch-overview" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+    <path d="M0 0 H9" stroke="#4b5563" stroke-width="0.85" opacity="0.5"/>
+  </pattern>
 </defs>`)
   if (imgBounds && imageDataUrl && iw > 0 && ih > 0) {
     parts.push(
@@ -59,6 +63,7 @@ export function buildWorkspaceOverviewSvgDocument(
   for (const p of sortPiecesFacingBehind(pieces)) {
     const tx = pieceGroupTransform(p)
     const isFacing = isFacingDerivedPiece(p)
+    const isMirror = isMirrorDerivedPiece(p)
     const useFill = !isFacing && p.fillInterior != null && p.fillInterior !== false
     const materialFill = pieceInteriorFillFromMaterial(p.material, false)
     const fill = isFacing
@@ -86,17 +91,30 @@ export function buildWorkspaceOverviewSvgDocument(
     const dashedEvenodd = dashedFillD && dashedFillD !== dashedPath ? 'evenodd' : undefined
     const solidEvenodd = solidFillD && solidFillD !== solidPath ? 'evenodd' : undefined
 
+    const appendMirrorOverlay = (fillPath: string | null | undefined, evenodd: string | undefined) => {
+      if (!isMirror || !fillPath) return
+      const rule = evenodd ? ` fill-rule="${evenodd}"` : ''
+      parts.push(
+        `<path d="${escapeXmlAttr(fillPath)}" fill="#6b7280" fill-opacity="0.18"${rule} stroke="none"/>`,
+      )
+      parts.push(
+        `<path d="${escapeXmlAttr(fillPath)}" fill="url(#mirror-link-hatch-overview)" fill-opacity="1"${rule} stroke="none"/>`,
+      )
+    }
+
     parts.push(`<g transform="${escapeXmlAttr(tx)}">`)
     if (hasSeam && dashedPath && solidPath) {
       parts.push(
         `<path d="${escapeXmlAttr(dashedFillD ?? dashedPath)}" fill="${dashedFill}" fill-opacity="${dashedFillOp}"${dashedEvenodd ? ` fill-rule="${dashedEvenodd}"` : ''} stroke="none"/>`,
       )
+      appendMirrorOverlay(dashedFillD ?? dashedPath, dashedEvenodd)
       parts.push(
         `<path d="${escapeXmlAttr(dashedPath)}" fill="none" stroke="${T.overview.strokeSeam}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
       parts.push(
         `<path d="${escapeXmlAttr(solidFillD ?? solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}"${solidEvenodd ? ` fill-rule="${solidEvenodd}"` : ''} stroke="none"/>`,
       )
+      appendMirrorOverlay(solidFillD ?? solidPath, solidEvenodd)
       parts.push(
         `<path d="${escapeXmlAttr(solidPath)}" fill="none" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidthSeam}"/>`,
       )
@@ -104,6 +122,7 @@ export function buildWorkspaceOverviewSvgDocument(
       parts.push(
         `<path d="${escapeXmlAttr(solidFillD ?? solidPath)}" fill="${solidFill}" fill-opacity="${solidFillOp}"${solidEvenodd ? ` fill-rule="${solidEvenodd}"` : ''} stroke="none"/>`,
       )
+      appendMirrorOverlay(solidFillD ?? solidPath, solidEvenodd)
       parts.push(
         `<path d="${escapeXmlAttr(solidPath)}" fill="none" stroke="${T.overview.stroke}" stroke-width="${T.overview.strokeWidth}"/>`,
       )
