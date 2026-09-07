@@ -8,6 +8,11 @@ import { APP_VERSION } from '../branding'
 import { canvasTextSize } from '../ui/uiTextScale'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import { effectiveMmPerPixelXY } from '../utils/imageCalibration'
+import {
+  clientPosEqualRough,
+  shallowEqualHover,
+  withStableSetState,
+} from '../utils/stableSetState'
 import { CanvasToolbar } from './CanvasToolbar'
 import {
   curveToPathD,
@@ -660,6 +665,19 @@ function isPointInGrainArrowArea(local: Point, piece: PatternPiece): boolean {
  *  oder nah genug an der Konturlinie (cutLine/seamLine) ist. */
 const CONTOUR_HIT_MM = 3
 function isPointInsidePiece(local: Point, piece: PatternPiece): boolean {
+  const outer = piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+  const outerBounds = outer.length > 0 ? curvesBounds(outer) : null
+  if (outerBounds) {
+    const pad = CONTOUR_HIT_MM
+    if (
+      local.x < outerBounds.minX - pad ||
+      local.x > outerBounds.maxX + pad ||
+      local.y < outerBounds.minY - pad ||
+      local.y > outerBounds.maxY + pad
+    ) {
+      return false
+    }
+  }
   if (piece.seamLine.length >= 3 && isPointInClosedCurves(local, piece.seamLine)) return true
   if (piece.cutLine.length >= 3 && isPointInClosedCurves(local, piece.cutLine)) return true
   if (piece.cutLine.length > 0) {
@@ -671,6 +689,21 @@ function isPointInsidePiece(local: Point, piece: PatternPiece): boolean {
     if (nr && nr.distance <= CONTOUR_HIT_MM) return true
   }
   return false
+}
+
+/** Grobfilter: lokaler Punkt außerhalb der Kontur-BBox (+Pad) → teure Hit-Tests überspringen. */
+function localPointInPieceBoundsPad(local: Point, piece: PatternPiece, padMm: number): boolean {
+  const curves =
+    piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine.length > 0 ? piece.cutLine : null
+  if (!curves) return true
+  const b = curvesBounds(curves)
+  if (!b) return true
+  return (
+    local.x >= b.minX - padMm &&
+    local.x <= b.maxX + padMm &&
+    local.y >= b.minY - padMm &&
+    local.y <= b.maxY + padMm
+  )
 }
 
 /** Mittelpunkt eines Kurvensegments (Linie: Mitte; Bézier: Punkt bei t=0.5). */
@@ -2470,7 +2503,7 @@ export function WorkspaceCanvas() {
   /** Weltpunkt für Vorschau Linie 2. Spiegelpunkt (Symmetrie-Modus). */
   const [symmetryHoverWorld, setSymmetryHoverWorld] = useState<Point | null>(null)
   /** Symmetrie: gerade Master-Kante als Achse (wie Wasserwaage). */
-  const [hoveredSymmetryEdge, setHoveredSymmetryEdge] = useState<{
+  const [hoveredSymmetryEdge, setHoveredSymmetryEdgeRaw] = useState<{
     pieceId: string
     edgeIndex: number
     curveIndices: number[]
@@ -2479,8 +2512,16 @@ export function WorkspaceCanvas() {
     curveHitT: number
     snapPointLocal: Point
   } | null>(null)
+  const setHoveredSymmetryEdge = useMemo(
+    () => withStableSetState(setHoveredSymmetryEdgeRaw, shallowEqualHover),
+    [],
+  )
   /** Symmetrie: Index in `piece.internalLines` des Teils unter dem Mauszeiger. */
-  const [hoveredSymmetryInternalIdx, setHoveredSymmetryInternalIdx] = useState<number | null>(null)
+  const [hoveredSymmetryInternalIdx, setHoveredSymmetryInternalIdxRaw] = useState<number | null>(null)
+  const setHoveredSymmetryInternalIdx = useMemo(
+    () => withStableSetState(setHoveredSymmetryInternalIdxRaw),
+    [],
+  )
   /** Tastatur-Modus: F gedrückt -> gerade Kante wählen, dann direkt entlang dieser Kante spiegeln. */
   const [flipByEdgeActive, setFlipByEdgeActive] = useState(false)
   const [grainContextMenu, setGrainContextMenu] = useState<{
@@ -2569,17 +2610,38 @@ export function WorkspaceCanvas() {
     clientY: number
   } | null>(null)
   const workspaceNoteEditorRef = useRef<HTMLDivElement | null>(null)
-  const [hoveredPieceId, setHoveredPieceId] = useState<string | null>(null)
+  const [hoveredPieceId, setHoveredPieceIdRaw] = useState<string | null>(null)
+  const setHoveredPieceId = useMemo(() => withStableSetState(setHoveredPieceIdRaw), [])
   const [cutSeamSwappedSet, setCutSeamSwappedSet] = useState<Set<string>>(new Set())
   const filteredBatchTargets = useMemo(
     () => filterBatchTargets(batchSelectionTargets, batchSelectionFilter, pieces),
     [batchSelectionTargets, batchSelectionFilter, pieces]
   )
-  const [hoveredDeletablePoint, setHoveredDeletablePoint] = useState<DeletableHoverTarget | null>(null)
-  const [hoveredDeletableNotch, setHoveredDeletableNotch] = useState<{ pieceId: string; notchId: string } | null>(null)
-  const [hoveredPivotForRotationPieceId, setHoveredPivotForRotationPieceId] = useState<string | null>(null)
-  const [hoveredRotationRingPieceId, setHoveredRotationRingPieceId] = useState<string | null>(null)
-  const [hoveredRotationHandlePieceId, setHoveredRotationHandlePieceId] = useState<string | null>(null)
+  const [hoveredDeletablePoint, setHoveredDeletablePointRaw] = useState<DeletableHoverTarget | null>(null)
+  const setHoveredDeletablePoint = useMemo(
+    () => withStableSetState(setHoveredDeletablePointRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredDeletableNotch, setHoveredDeletableNotchRaw] = useState<{ pieceId: string; notchId: string } | null>(null)
+  const setHoveredDeletableNotch = useMemo(
+    () => withStableSetState(setHoveredDeletableNotchRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredPivotForRotationPieceId, setHoveredPivotForRotationPieceIdRaw] = useState<string | null>(null)
+  const setHoveredPivotForRotationPieceId = useMemo(
+    () => withStableSetState(setHoveredPivotForRotationPieceIdRaw),
+    [],
+  )
+  const [hoveredRotationRingPieceId, setHoveredRotationRingPieceIdRaw] = useState<string | null>(null)
+  const setHoveredRotationRingPieceId = useMemo(
+    () => withStableSetState(setHoveredRotationRingPieceIdRaw),
+    [],
+  )
+  const [hoveredRotationHandlePieceId, setHoveredRotationHandlePieceIdRaw] = useState<string | null>(null)
+  const setHoveredRotationHandlePieceId = useMemo(
+    () => withStableSetState(setHoveredRotationHandlePieceIdRaw),
+    [],
+  )
   const [rotateAroundPivotPieceId, setRotateAroundPivotPieceId] = useState<string | null>(null)
   /** Kerbe bearbeiten (Typ/Breite/Tiefe); unabhängig vom Hover, damit das Panel bedienbar bleibt. */
   const [notchEditTarget, setNotchEditTarget] = useState<{ pieceId: string; notchId: string } | null>(null)
@@ -2622,8 +2684,16 @@ export function WorkspaceCanvas() {
     clientY: number
   } | null>(null)
   const [pointPreview, setPointPreview] = useState<{ pieceId: string; point: Point } | null>(null)
-  const [hoveredSegment, setHoveredSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
-  const [hoveredSegmentPos, setHoveredSegmentPos] = useState<{ clientX: number; clientY: number } | null>(null)
+  const [hoveredSegment, setHoveredSegmentRaw] = useState<{ pieceId: string; curveIndex: number } | null>(null)
+  const setHoveredSegment = useMemo(
+    () => withStableSetState(setHoveredSegmentRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredSegmentPos, setHoveredSegmentPosRaw] = useState<{ clientX: number; clientY: number } | null>(null)
+  const setHoveredSegmentPos = useMemo(
+    () => withStableSetState(setHoveredSegmentPosRaw, clientPosEqualRough),
+    [],
+  )
   const [segmentMenuMm, setSegmentMenuMm] = useState('5')
   const [segmentMenuPinned, setSegmentMenuPinned] = useState(false)
   const [pinnedSegment, setPinnedSegment] = useState<{ pieceId: string; curveIndex: number } | null>(null)
@@ -2633,18 +2703,27 @@ export function WorkspaceCanvas() {
   const [frozenSegmentPos, setFrozenSegmentPos] = useState<{ clientX: number; clientY: number } | null>(null)
   const lastSegmentRef = useRef<{ pieceId: string; curveIndex: number } | null>(null)
   const lastSegmentPosRef = useRef<{ clientX: number; clientY: number } | null>(null)
-  const [hoveredSeamForNahtzuordnung, setHoveredSeamForNahtzuordnung] = useState<{
+  const [hoveredSeamForNahtzuordnung, setHoveredSeamForNahtzuordnungRaw] = useState<{
     pieceId: string
     curveIndices: number[]
   } | null>(null)
-  const [hoveredInternalSeamForNahtzuordnung, setHoveredInternalSeamForNahtzuordnung] = useState<{
+  const setHoveredSeamForNahtzuordnung = useMemo(
+    () => withStableSetState(setHoveredSeamForNahtzuordnungRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredInternalSeamForNahtzuordnung, setHoveredInternalSeamForNahtzuordnungRaw] = useState<{
     pieceId: string
     curveIndices: number[]
     startNotchId?: string
     endNotchId?: string
   } | null>(null)
-  const [hoveredSeamAssignmentId, setHoveredSeamAssignmentId] = useState<string | null>(null)
-  const [hoveredProfileEdge, setHoveredProfileEdge] = useState<{
+  const setHoveredInternalSeamForNahtzuordnung = useMemo(
+    () => withStableSetState(setHoveredInternalSeamForNahtzuordnungRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredSeamAssignmentId, setHoveredSeamAssignmentIdRaw] = useState<string | null>(null)
+  const setHoveredSeamAssignmentId = useMemo(() => withStableSetState(setHoveredSeamAssignmentIdRaw), [])
+  const [hoveredProfileEdge, setHoveredProfileEdgeRaw] = useState<{
     pieceId: string
     edgeIndex: number
     curveIndices: number[]
@@ -2652,16 +2731,28 @@ export function WorkspaceCanvas() {
     endNotchId?: string
     onInternalLine?: boolean
   } | null>(null)
-  const [hoveredEdgePicking, setHoveredEdgePicking] = useState<{
+  const setHoveredProfileEdge = useMemo(
+    () => withStableSetState(setHoveredProfileEdgeRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredEdgePicking, setHoveredEdgePickingRaw] = useState<{
     pieceId: string
     edgeIndex: number
     curveIndices: number[]
   } | null>(null)
-  const [hoveredHorizontalLevelEdge, setHoveredHorizontalLevelEdge] = useState<{
+  const setHoveredEdgePicking = useMemo(
+    () => withStableSetState(setHoveredEdgePickingRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredHorizontalLevelEdge, setHoveredHorizontalLevelEdgeRaw] = useState<{
     pieceId: string
     edgeIndex: number
     curveIndices: number[]
   } | null>(null)
+  const setHoveredHorizontalLevelEdge = useMemo(
+    () => withStableSetState(setHoveredHorizontalLevelEdgeRaw, shallowEqualHover),
+    [],
+  )
   const [edgeAllowancePopover, setEdgeAllowancePopover] = useState<{
     pieceId: string
     edgeIndex: number
@@ -2669,13 +2760,25 @@ export function WorkspaceCanvas() {
     clientX: number
     clientY: number
   } | null>(null)
-  const [hoveredCurvepointSegment, setHoveredCurvepointSegment] = useState<{
+  const [hoveredCurvepointSegment, setHoveredCurvepointSegmentRaw] = useState<{
     pieceId: string
     curveIndex: number
     internal?: boolean
   } | null>(null)
-  const [hoveredInternalLine, setHoveredInternalLine] = useState<{ pieceId: string; curveIndex: number } | null>(null)
-  const [hoveredInternalCircle, setHoveredInternalCircle] = useState<{ pieceId: string; circleId: string } | null>(null)
+  const setHoveredCurvepointSegment = useMemo(
+    () => withStableSetState(setHoveredCurvepointSegmentRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredInternalLine, setHoveredInternalLineRaw] = useState<{ pieceId: string; curveIndex: number } | null>(null)
+  const setHoveredInternalLine = useMemo(
+    () => withStableSetState(setHoveredInternalLineRaw, shallowEqualHover),
+    [],
+  )
+  const [hoveredInternalCircle, setHoveredInternalCircleRaw] = useState<{ pieceId: string; circleId: string } | null>(null)
+  const setHoveredInternalCircle = useMemo(
+    () => withStableSetState(setHoveredInternalCircleRaw, shallowEqualHover),
+    [],
+  )
   const [digitizeMouseWorld, setDigitizeMouseWorld] = useState<Point | null>(null)
   const [digitizeNearFirst, setDigitizeNearFirst] = useState(false)
   const [lineLengthEditor, setLineLengthEditor] = useState<{
@@ -2739,7 +2842,8 @@ export function WorkspaceCanvas() {
   const cornerRoundInputRef = useRef<HTMLInputElement | null>(null)
   const notchMoveDistanceInputRef = useRef<HTMLInputElement | null>(null)
   const lastPointerClientRef = useRef({ x: 0, y: 0 })
-  const [hoveredWorkspaceImage, setHoveredWorkspaceImage] = useState(false)
+  const [hoveredWorkspaceImage, setHoveredWorkspaceImageRaw] = useState(false)
+  const setHoveredWorkspaceImage = useMemo(() => withStableSetState(setHoveredWorkspaceImageRaw), [])
   const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
     null
   )
@@ -3027,6 +3131,21 @@ export function WorkspaceCanvas() {
   const effectiveSegmentForHighlight =
     segmentMenuPinned && pinnedSegment ? pinnedSegment : (hoveredSegment ?? frozenSegment ?? hoveredCurvepointSegment)
 
+  /** Naht-Prüfanzeige: Metriken nur neu rechnen wenn Zuordnungen/Teile sich ändern (nicht bei jedem Hover). */
+  const seamPruefMetricsById = useMemo(() => {
+    const map = new Map<string, NonNullable<ReturnType<typeof getSeamAssignmentDisplayMetrics>>>()
+    if (!showSeamPruefanzeigen || seamAssignments.length === 0) return map
+    for (const a of seamAssignments) {
+      if (isInternalSeamAssignment(a)) continue
+      const pieceA = pieces.find((p) => p.id === a.pieceIdA)
+      const pieceB = pieces.find((p) => p.id === a.pieceIdB)
+      if (!pieceA?.cutLine?.length || !pieceB?.cutLine?.length) continue
+      const metrics = getSeamAssignmentDisplayMetrics(a, pieceA, pieceB)
+      if (metrics) map.set(a.id, metrics)
+    }
+    return map
+  }, [showSeamPruefanzeigen, seamAssignments, pieces])
+
   const closeSegmentMenu = useCallback(() => {
     setHoveredSegment(null)
     setHoveredSegmentPos(null)
@@ -3123,9 +3242,13 @@ export function WorkspaceCanvas() {
     const wasDragging = prevDraggingRef.current
     prevDraggingRef.current = dragging
     if (wasDragging && !dragging && dragTriggersSeamAdjustmentCheck(wasDragging.kind)) {
-      checkSeamAdjustment()
+      const t = window.setTimeout(() => {
+        checkSeamAdjustment()
+      }, 50)
+      return () => window.clearTimeout(t)
     }
   }, [dragging, checkSeamAdjustment])
+
 
   const toWorld = useCallback(
     (clientX: number, clientY: number): Point => {
@@ -4905,6 +5028,9 @@ export function WorkspaceCanvas() {
         return
       }
       if (!dragging) {
+        const clientX = e.clientX
+        const clientY = e.clientY
+        lastPointerClientRef.current = { x: clientX, y: clientY }
         const ctnM = containerRef.current
         const svgM = svgRef.current
         const hoverVertexHitMm = ctnM
@@ -4927,8 +5053,7 @@ export function WorkspaceCanvas() {
               worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
             )
           : POINT_INSERT_HIT_FALLBACK_MM
-        const worldImg = toWorld(e.clientX, e.clientY)
-        lastPointerClientRef.current = { x: e.clientX, y: e.clientY }
+        const worldImg = toWorld(clientX, clientY)
         if (tool === 'select' && showPivotRotationUi) {
           const rotationHoverHitMm = ctnM
             ? clampPointHitWorldMm(
@@ -4987,7 +5112,7 @@ export function WorkspaceCanvas() {
         }
         setHoveredWorkspaceImage(imgHover)
         if (nahtzuordnungMode === 'internal') {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = worldImg
           let bestHover: {
             pieceId: string
             curveIndices: number[]
@@ -4997,6 +5122,7 @@ export function WorkspaceCanvas() {
           } | null = null
           for (const p of pieces) {
             const local = worldToPieceLocal(world, p)
+            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
             const hit = hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
             if (hit && (!bestHover || hit.distance < bestHover.distance)) {
               const range = deriveInternalSeamNotchRangeAtClick(p, hit.curveIndex, hit.t)
@@ -5020,13 +5146,14 @@ export function WorkspaceCanvas() {
           )
           setHoveredSeamForNahtzuordnung(null)
         } else if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = worldImg
           let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
           for (const p of pieces) {
             if (!p.cutLine?.length) continue
+            const local = worldToPieceLocal(world, p)
+            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
             const hasSeam = p.seamLine.length >= 3
             const curvesForHit = hasSeam ? p.seamLine : p.cutLine
-            const local = worldToPieceLocal(world, p)
             const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
             if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
             if (hasSeam) {
@@ -5058,11 +5185,12 @@ export function WorkspaceCanvas() {
           setHoveredInternalSeamForNahtzuordnung(null)
         }
         if (edgeSeamPickingActive && !edgeAllowancePopover) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = worldImg
           let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
           for (const p of pieces) {
             if (p.seamAllowanceMm == null || p.seamLine.length < 3) continue
             const local = worldToPieceLocal(world, p)
+            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
             const nearest = nearestCurveIndexAndPoint(local, p.seamLine)
             if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
             const edges = enumerateEdges(p)
@@ -5080,7 +5208,7 @@ export function WorkspaceCanvas() {
           setHoveredEdgePicking(null)
         }
         if (tool === 'profil') {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = worldImg
           let bestEdge: {
             pieceId: string
             edgeIndex: number
@@ -5092,6 +5220,7 @@ export function WorkspaceCanvas() {
           } | null = null
           for (const p of pieces) {
             const local = worldToPieceLocal(world, p)
+            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
             if (p.internalLines.length > 0) {
               const nearestInt = nearestCurveIndexAndPoint(local, p.internalLines)
               if (nearestInt && nearestInt.distance < SEAM_HIT_MM) {
@@ -5168,7 +5297,7 @@ export function WorkspaceCanvas() {
           setHoveredProfileEdge(null)
         }
         if (horizontalLevelPickingActive && selectedPieceIds.length === 1) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = worldImg
           const selId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === selId)
           let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
@@ -5200,7 +5329,7 @@ export function WorkspaceCanvas() {
           setHoveredHorizontalLevelEdge(null)
         }
         if (pieceSymmetryState?.phase === 'pickEdge' && selectedPieceIds.length === 1) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = worldImg
           const selId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === selId)
           let bestEdge: {
@@ -5243,7 +5372,7 @@ export function WorkspaceCanvas() {
         if (pieceSymmetryState?.phase === 'pickInternalLine' && selectedPieceIds.length === 1) {
           const p = pieces.find((x) => x.id === selectedPieceIds[0])
           if (p && pieceSymmetryState.pieceId === p.id && p.internalLines.length > 0) {
-            const world = toWorld(e.clientX, e.clientY)
+            const world = worldImg
             const local = worldToPieceLocal(world, p)
             const r = nearestCurveIndexAndPoint(local, p.internalLines)
             if (r && r.distance < SYMMETRY_INTERNAL_HOVER_MM) setHoveredSymmetryInternalIdx(r.curveIndex)
@@ -5260,7 +5389,7 @@ export function WorkspaceCanvas() {
           (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
           selectedPieceIds.length > 0
         ) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = toWorld(clientX, clientY)
           const piecesForHover = pieces.filter((p) => selectedPieceIds.includes(p.id))
           const piecesForNotchHover =
             piecesForHover.some((p) => p.notches.length > 0) ? piecesForHover : pieces
@@ -5421,7 +5550,7 @@ export function WorkspaceCanvas() {
           setHoveredDeletableNotch(null)
         } else {
           setHoveredDeletablePoint(null)
-          const worldForNotch = toWorld(e.clientX, e.clientY)
+          const worldForNotch = toWorld(clientX, clientY)
           const selectedPiecesForNotch = selectedPieceIds.length > 0
             ? pieces.filter((p) => selectedPieceIds.includes(p.id))
             : []
@@ -5496,7 +5625,7 @@ export function WorkspaceCanvas() {
           }
         }
         if (tool === 'notch') {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = toWorld(clientX, clientY)
           const piecesToCheck =
             selectedPieceIds.length === 1 ? pieces.filter((p) => p.id === selectedPieceIds[0]) : pieces
           let best: {
@@ -5584,7 +5713,7 @@ export function WorkspaceCanvas() {
         }
         setNotchPreview(null)
         if (tool === 'kante') {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = toWorld(clientX, clientY)
           const HOVER_SEGMENT_HIT = 12
           let bestSeg: { distance: number; pieceId: string; curveIndex: number } | null = null
           const piecesToCheck =
@@ -5606,7 +5735,7 @@ export function WorkspaceCanvas() {
           }
           if (bestSeg) {
             const seg = { pieceId: bestSeg.pieceId, curveIndex: bestSeg.curveIndex }
-            const pos = { clientX: e.clientX, clientY: e.clientY }
+            const pos = { clientX, clientY }
             lastSegmentRef.current = seg
             lastSegmentPosRef.current = pos
             setHoveredSegment(seg)
@@ -5622,7 +5751,7 @@ export function WorkspaceCanvas() {
           setHoveredInternalCircle(null)
         }
         if (tool === 'point' && selectedPieceIds.length === 1) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = toWorld(clientX, clientY)
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
           if (!p) {
@@ -5643,7 +5772,7 @@ export function WorkspaceCanvas() {
           setPointPreview(null)
         }
         if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = toWorld(clientX, clientY)
           const pieceId = selectedPieceIds[0]
           const p = pieces.find((x) => x.id === pieceId)
           if (!p) {
@@ -5678,7 +5807,7 @@ export function WorkspaceCanvas() {
           nahtzuordnungMode !== 'second' &&
           nahtzuordnungMode !== 'internal'
         ) {
-          const world = toWorld(e.clientX, e.clientY)
+          const world = toWorld(clientX, clientY)
           for (let i = pieces.length - 1; i >= 0; i--) {
             const p = pieces[i]
             const local = worldToPieceLocal(world, p)
@@ -10000,7 +10129,7 @@ export function WorkspaceCanvas() {
               const segsB = idxB.map((ci) => curvesB[ci]).filter(Boolean)
               if (segsA.length === 0 || segsB.length === 0) return null
 
-              const metrics = getSeamAssignmentDisplayMetrics(a, pieceA, pieceB)
+              const metrics = seamPruefMetricsById.get(a.id)
               if (!metrics) return null
 
               const {
