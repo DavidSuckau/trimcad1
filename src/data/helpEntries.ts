@@ -182,6 +182,14 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
+    name: 'Teil-Symmetrie (Spiegelachse)',
+    description:
+      'Macht ein Teil symmetrisch zu einer Spiegelachse (zeichnen, interne Linie oder gerade Kante). Eine Seite ist Vorlage; die andere folgt bei Konturänderungen mit. Die Achse bleibt als gestrichelte Linie sichtbar. Achse anfahren und Leertaste: „Spiegelung entfernen“ – die aktuelle Form bleibt, beide Seiten sind danach unabhängig editierbar.',
+    access: 'Werkzeug Symmetrie · danach Achse anfahren → Leertaste → Spiegelung entfernen',
+    shortcut: 'Leertaste',
+  },
+  {
+    category: 'Werkzeuge',
     name: 'Laufrichtung (Grain) Kontextmenü',
     description:
       'Laufrichtungspfeil anfahren und Leertaste: Menü zum Spiegeln, Löschen, Kopieren, Kaschierung erzeugen, Spiegelkopie erzeugen und Teil-Eigenschaften. „Kaschierung erzeugen“ legt ein abhängiges Tochterteil neben der Mutter an (gefüllte Schraffur, Außenecken in der Nahtzugabe angephast); „Spiegelkopie erzeugen“ legt eine geflippte abhängige Kopie an. Kontur/Notches folgen der Mutter, Position bleibt lokal. Material folgt der Mutter und ist am Tochterteil gesperrt. Nur im Layout-Modus (Kontur bearbeiten aus): Teil ausgewählt, am Schaft ziehen zum parallelen Verschieben; an Anfang oder Ende (Punkte) ziehen, um die Linie länger/kürzer zu machen und die Richtung anzupassen. Loslassen mit Linienmitte nahe einer Schnittkontur-Kante: parallel zur Kante ausrichten und auf die Kante legen. Umschalt beim Loslassen: kein Snappen. Im Kontur-Bearbeitungsmodus ist die Laufrichtung nicht verschiebbar.',

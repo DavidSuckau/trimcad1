@@ -72,7 +72,8 @@ import {
   edgeTotalLength,
   masterSoftVertexIndexSet,
 } from '../geometry/seamUtils'
-import { dragTriggersSeamAdjustmentCheck, getSeamAssignmentDisplayMetrics } from '../geometry/seamAdjustmentCheck'
+import { dragTriggersSeamAdjustmentCheck } from '../geometry/seamAdjustmentCheck'
+import { buildSeamPruefOverlayEntries } from '../geometry/seamPruefOverlayModel'
 import {
   useSeamLineForVertexEditing,
   useSeamLineForPointCurveEditing,
@@ -1356,6 +1357,7 @@ const PieceGroup = memo(function PieceGroup({
   isRotationRingHovered,
   isRotationHandleHovered,
   isRotationActive,
+  isSymmetryAxisHovered = false,
   hoveredInternalLineCurveIndex,
   hoveredInternalCircleId,
   onContextMenu,
@@ -1392,6 +1394,8 @@ const PieceGroup = memo(function PieceGroup({
   isRotationRingHovered?: boolean
   isRotationHandleHovered?: boolean
   isRotationActive?: boolean
+  /** Aktive Spiegelachse (Teil-Symmetrie) unter dem Zeiger. */
+  isSymmetryAxisHovered?: boolean
   hoveredInternalLineCurveIndex?: number | null
   hoveredInternalCircleId?: string | null
   onContextMenu?: (e: React.MouseEvent) => void
@@ -1707,11 +1711,11 @@ const PieceGroup = memo(function PieceGroup({
             y1={clipped.p1.y}
             x2={clipped.p2.x}
             y2={clipped.p2.y}
-            stroke="#0d9488"
-            strokeWidth={1.05 * ptPs}
+            stroke={isSymmetryAxisHovered ? '#0f766e' : '#0d9488'}
+            strokeWidth={(isSymmetryAxisHovered ? 2.2 : 1.05) * ptPs}
             strokeDasharray={scaleSvgDashArray('6 4', ptPs)}
             pointerEvents="none"
-            opacity={0.85}
+            opacity={isSymmetryAxisHovered ? 1 : 0.85}
           />
         )
       })()}
@@ -2224,6 +2228,7 @@ export function WorkspaceCanvas() {
     pieceSymmetryState,
     setPieceSymmetryState,
     applyPieceSymmetry,
+    clearPieceSymmetry,
     alignPieceEdgeHorizontal,
     nahtzuordnungMode,
     setNahtzuordnungMode,
@@ -2368,6 +2373,7 @@ export function WorkspaceCanvas() {
       pieceSymmetryState: s.pieceSymmetryState,
       setPieceSymmetryState: s.setPieceSymmetryState,
       applyPieceSymmetry: s.applyPieceSymmetry,
+      clearPieceSymmetry: s.clearPieceSymmetry,
       alignPieceEdgeHorizontal: s.alignPieceEdgeHorizontal,
       nahtzuordnungMode: s.nahtzuordnungMode,
       setNahtzuordnungMode: s.setNahtzuordnungMode,
@@ -2522,6 +2528,32 @@ export function WorkspaceCanvas() {
     () => withStableSetState(setHoveredSymmetryInternalIdxRaw),
     [],
   )
+  /** Hover über bestehende Spiegelachse (Teil-Symmetrie). */
+  const [hoveredSymmetryAxis, setHoveredSymmetryAxisRaw] = useState<{
+    pieceId: string
+    clientX: number
+    clientY: number
+  } | null>(null)
+  const setHoveredSymmetryAxis = useMemo(
+    () =>
+      withStableSetState(
+        setHoveredSymmetryAxisRaw,
+        (a, b) =>
+          a === b ||
+          (a != null &&
+            b != null &&
+            a.pieceId === b.pieceId &&
+            Math.abs(a.clientX - b.clientX) < 4 &&
+            Math.abs(a.clientY - b.clientY) < 4) ||
+          (a == null && b == null),
+      ),
+    [],
+  )
+  const [symmetryAxisSpaceMenu, setSymmetryAxisSpaceMenu] = useState<{
+    pieceId: string
+    clientX: number
+    clientY: number
+  } | null>(null)
   /** Tastatur-Modus: F gedrückt -> gerade Kante wählen, dann direkt entlang dieser Kante spiegeln. */
   const [flipByEdgeActive, setFlipByEdgeActive] = useState(false)
   const [grainContextMenu, setGrainContextMenu] = useState<{
@@ -3131,20 +3163,20 @@ export function WorkspaceCanvas() {
   const effectiveSegmentForHighlight =
     segmentMenuPinned && pinnedSegment ? pinnedSegment : (hoveredSegment ?? frozenSegment ?? hoveredCurvepointSegment)
 
-  /** Naht-Prüfanzeige: Metriken nur neu rechnen wenn Zuordnungen/Teile sich ändern (nicht bei jedem Hover). */
-  const seamPruefMetricsById = useMemo(() => {
-    const map = new Map<string, NonNullable<ReturnType<typeof getSeamAssignmentDisplayMetrics>>>()
-    if (!showSeamPruefanzeigen || seamAssignments.length === 0) return map
-    for (const a of seamAssignments) {
-      if (isInternalSeamAssignment(a)) continue
-      const pieceA = pieces.find((p) => p.id === a.pieceIdA)
-      const pieceB = pieces.find((p) => p.id === a.pieceIdB)
-      if (!pieceA?.cutLine?.length || !pieceB?.cutLine?.length) continue
-      const metrics = getSeamAssignmentDisplayMetrics(a, pieceA, pieceB)
-      if (metrics) map.set(a.id, metrics)
+  /** Naht-Prüfanzeige: teure Metriken cachen (Transform-only Moves invalidieren nicht). */
+  const seamPruefCacheRef = useRef<Parameters<typeof buildSeamPruefOverlayEntries>[2]>(new Map())
+  const seamPruefEntries = useMemo(() => {
+    if (!showSeamPruefanzeigen || seamAssignments.length === 0) {
+      seamPruefCacheRef.current.clear()
+      return [] as ReturnType<typeof buildSeamPruefOverlayEntries>
     }
-    return map
+    return buildSeamPruefOverlayEntries(seamAssignments, pieces, seamPruefCacheRef.current)
   }, [showSeamPruefanzeigen, seamAssignments, pieces])
+  const seamPruefById = useMemo(() => {
+    const map = new Map<string, (typeof seamPruefEntries)[number]>()
+    for (const e of seamPruefEntries) map.set(e.assignmentId, e)
+    return map
+  }, [seamPruefEntries])
 
   const closeSegmentMenu = useCallback(() => {
     setHoveredSegment(null)
@@ -4886,6 +4918,7 @@ export function WorkspaceCanvas() {
       setFlipByEdgeActive,
       setPieceSymmetryState,
       applyPieceSymmetry,
+      clearPieceSymmetry,
       setSymmetryHoverWorld,
       hoveredSymmetryEdge,
       hoveredSymmetryInternalIdx,
@@ -5382,6 +5415,27 @@ export function WorkspaceCanvas() {
           }
         } else {
           setHoveredSymmetryInternalIdx(null)
+        }
+        // Bestehende Spiegelachse (Teil-Symmetrie) anfahren → Leertaste-Menü
+        if (!pieceSymmetryState && !symmetryAxisSpaceMenu) {
+          const SYMMETRY_AXIS_HIT_MM = 7
+          let bestAxis: { pieceId: string; dist: number } | null = null
+          for (const p of pieces) {
+            const sc = p.symmetryConstraint
+            if (!sc || p.cutLine.length < 3) continue
+            const local = worldToPieceLocal(worldImg, p)
+            const clipped = symmetryAxisClippedToPieceBounds(sc.axisA, sc.axisB, p.cutLine)
+            if (!clipped) continue
+            const d = distPointToSegmentMm(local, clipped.p1, clipped.p2).d
+            if (d <= SYMMETRY_AXIS_HIT_MM && (!bestAxis || d < bestAxis.dist)) {
+              bestAxis = { pieceId: p.id, dist: d }
+            }
+          }
+          setHoveredSymmetryAxis(
+            bestAxis ? { pieceId: bestAxis.pieceId, clientX, clientY } : null,
+          )
+        } else if (!symmetryAxisSpaceMenu) {
+          setHoveredSymmetryAxis(null)
         }
         if (
           contourEditEnabled &&
@@ -6113,6 +6167,9 @@ export function WorkspaceCanvas() {
       setSymmetryHoverWorld,
       setHoveredSymmetryEdge,
       setHoveredSymmetryInternalIdx,
+      setHoveredSymmetryAxis,
+      symmetryAxisSpaceMenu,
+      clearPieceSymmetry,
       rectangleSizeEditor,
       lineLengthEditor,
       internalCircleRadiusEditor,
@@ -6150,6 +6207,13 @@ export function WorkspaceCanvas() {
     document.addEventListener('pointerdown', onClose)
     return () => document.removeEventListener('pointerdown', onClose)
   }, [grainContextMenu])
+
+  useEffect(() => {
+    if (!symmetryAxisSpaceMenu) return
+    const onClose = () => setSymmetryAxisSpaceMenu(null)
+    document.addEventListener('pointerdown', onClose)
+    return () => document.removeEventListener('pointerdown', onClose)
+  }, [symmetryAxisSpaceMenu])
 
   useEffect(() => {
     if (!pieceContextMenu) return
@@ -6193,6 +6257,8 @@ export function WorkspaceCanvas() {
     setRectangleSizeEditor(null)
     setWorkspaceImageQuickMenu(null)
     setGrainContextMenu(null)
+    setSymmetryAxisSpaceMenu(null)
+    setHoveredSymmetryAxis(null)
     setPieceContextMenu(null)
     setGrainFlipHover(null)
     setNotchPreview(null)
@@ -6665,6 +6731,27 @@ export function WorkspaceCanvas() {
       if (grainContextMenu && !inInput && e.key === 'Escape') {
         e.preventDefault()
         setGrainContextMenu(null)
+        return
+      }
+      if (symmetryAxisSpaceMenu && !inInput && e.key === 'Escape') {
+        e.preventDefault()
+        setSymmetryAxisSpaceMenu(null)
+        return
+      }
+      if (
+        hoveredSymmetryAxis &&
+        !symmetryAxisSpaceMenu &&
+        !grainContextMenu &&
+        !inInput &&
+        !dragging &&
+        e.key === ' '
+      ) {
+        e.preventDefault()
+        setSymmetryAxisSpaceMenu({
+          pieceId: hoveredSymmetryAxis.pieceId,
+          clientX: hoveredSymmetryAxis.clientX,
+          clientY: hoveredSymmetryAxis.clientY,
+        })
         return
       }
       if (pieceContextMenu && !inInput && e.key === 'Escape') {
@@ -7832,6 +7919,81 @@ export function WorkspaceCanvas() {
           Leertaste: Menü · L: Nahtzugabe/Kante
         </div>
       )}
+      {hoveredSymmetryAxis &&
+        !symmetryAxisSpaceMenu &&
+        !grainContextMenu &&
+        !hoveredDeletablePoint &&
+        !hoveredDeletableNotch && (
+          <div
+            style={{
+              position: 'fixed',
+              left: hoveredSymmetryAxis.clientX,
+              top: hoveredSymmetryAxis.clientY,
+              transform: 'translate(8px, 8px)',
+              pointerEvents: 'none',
+              zIndex: 1000,
+              background: 'rgba(15,118,110,0.92)',
+              color: '#fff',
+              padding: '4px 8px',
+              borderRadius: 4,
+              fontSize: fs(12),
+              fontWeight: 600,
+              fontFamily: 'sans-serif',
+            }}
+          >
+            Leertaste: Spiegelung …
+          </div>
+        )}
+      {symmetryAxisSpaceMenu && (
+        <div
+          role="menu"
+          aria-label="Teil-Spiegelung"
+          style={{
+            position: 'fixed',
+            left: symmetryAxisSpaceMenu.clientX,
+            top: symmetryAxisSpaceMenu.clientY,
+            zIndex: 2000,
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              background: '#fff',
+              border: '1px solid #ccc',
+              borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+              minWidth: 200,
+              padding: '4px 0',
+              fontSize: fs(13),
+              fontFamily: 'sans-serif',
+            }}
+          >
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 16px',
+                background: 'none',
+                border: 'none',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontSize: fs(13),
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              onClick={() => {
+                clearPieceSymmetry(symmetryAxisSpaceMenu.pieceId)
+                setSymmetryAxisSpaceMenu(null)
+                setHoveredSymmetryAxis(null)
+              }}
+            >
+              Spiegelung entfernen
+            </button>
+          </div>
+        </div>
+      )}
       {grainContextMenu && (() => {
         const menuPiece = pieces.find((p) => p.id === grainContextMenu.pieceId)
         const isLinkedPiece = isLinkedDerivedPiece(menuPiece)
@@ -8511,6 +8673,7 @@ export function WorkspaceCanvas() {
               }
               isRotationRingHovered={hoveredRotationRingPieceId === piece.id}
               isRotationHandleHovered={hoveredRotationHandlePieceId === piece.id}
+              isSymmetryAxisHovered={hoveredSymmetryAxis?.pieceId === piece.id}
               isRotationActive={dragging != null && dragging.kind === 'rotate' && dragging.pieceId === piece.id}
               notchIdBeingDragged={
                 notchPreview?.pieceId === piece.id
@@ -10121,16 +10284,9 @@ export function WorkspaceCanvas() {
               const pieceA = pieces.find((p) => p.id === a.pieceIdA)
               const pieceB = pieces.find((p) => p.id === a.pieceIdB)
               if (!pieceA?.cutLine?.length || !pieceB?.cutLine?.length) return null
-              const idxA = resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA)
-              const idxB = resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)
-              const curvesA = getCurvesForSeamEdge(pieceA)
-              const curvesB = getCurvesForSeamEdge(pieceB)
-              const segsA = idxA.map((ci) => curvesA[ci]).filter(Boolean)
-              const segsB = idxB.map((ci) => curvesB[ci]).filter(Boolean)
-              if (segsA.length === 0 || segsB.length === 0) return null
 
-              const metrics = seamPruefMetricsById.get(a.id)
-              if (!metrics) return null
+              const entry = seamPruefById.get(a.id)
+              if (!entry) return null
 
               const {
                 diffMm,
@@ -10140,14 +10296,10 @@ export function WorkspaceCanvas() {
                 subPairing,
                 subDiffs,
                 subSegMismatch,
-              } = metrics
+              } = entry.metrics
               const showLengthDiff = diffMm >= 0.1
-              const midResultA = pointAtPathLength(segsA, metrics.lenA / 2)
-              const midResultB = pointAtPathLength(segsB, metrics.lenB / 2)
-              const midALocal = midResultA ? midResultA.point : curveMidpoint(segsA[Math.floor(segsA.length / 2)])
-              const midBLocal = midResultB ? midResultB.point : curveMidpoint(segsB[Math.floor(segsB.length / 2)])
-              const midA = pieceLocalToWorld(midALocal, pieceA)
-              const midB = pieceLocalToWorld(midBLocal, pieceB)
+              const midA = pieceLocalToWorld(entry.midALocal, pieceA)
+              const midB = pieceLocalToWorld(entry.midBLocal, pieceB)
               const dx = midB.x - midA.x
               const dy = midB.y - midA.y
               const len = Math.hypot(dx, dy) || 1
@@ -10166,6 +10318,10 @@ export function WorkspaceCanvas() {
               const metaText = metaParts.join(' · ')
               const warnStack =
                 (showLengthDiff ? 11 : 0) + (notchMismatch ? 11 : 0) + (subSegMismatch ? 11 : 0)
+              /** Detail-Teilstrecken nur bei Hover oder Abweichung — spart viele SVG-Texte. */
+              const showSubDiffLabels =
+                subDiffs != null &&
+                (hoveredSeamAssignmentId === a.id || subSegMismatch)
               return (
                 <g
                   key={a.id}
@@ -10256,7 +10412,8 @@ export function WorkspaceCanvas() {
                       {metaText}
                     </text>
                   )}
-                  {subDiffs && subDiffs.map((sd, i) => {
+                  {showSubDiffLabels &&
+                    subDiffs!.map((sd, i) => {
                     const isMatch = Math.abs(sd.lenA - sd.lenB) < 0.1
                     const color = isMatch ? T.accent.success : T.accent.error
                     const labelA = isMatch ? '✓' : `${sd.lenA.toFixed(1)}`

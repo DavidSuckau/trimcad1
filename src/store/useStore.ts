@@ -813,6 +813,8 @@ type Store = {
   flipPieceAlongAxis: (pieceId: string, axisA: Point, axisB: Point) => void
   /** Behält eine Halbebene, spiegelt sie auf die andere Seite (Master-Kontur wie bei Spiegeln entlang Fadenlauf). */
   applyPieceSymmetry: (pieceId: string, axisA: Point, axisB: Point, keepSide: PieceSymmetryKeepSide) => void
+  /** Entfernt die aktive Teil-Symmetrie; Geometrie bleibt, beide Seiten sind danach unabhängig. */
+  clearPieceSymmetry: (pieceId: string) => void
   /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
   rotatePiece90: (pieceId: string) => void
   /** Rotation eines Teils setzen (Grad), Pivot bleibt fest. Für freie Drehung. */
@@ -4390,6 +4392,27 @@ export const useStore = create<Store>()(
         toastMessage: 'success:Teil symmetrisch gemacht.',
       }
     }),
+
+  clearPieceSymmetry: (pieceId) => {
+    const piece = get().workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece) {
+      set({ toastMessage: 'warn:Teil nicht gefunden.' })
+      return
+    }
+    if (!piece.symmetryConstraint) {
+      set({ toastMessage: 'info:Keine aktive Spiegelung an diesem Teil.' })
+      return
+    }
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === pieceId ? { ...p, symmetryConstraint: undefined } : p
+        ),
+      },
+      toastMessage: 'success:Spiegelung entfernt – Teil ist wieder unabhängig.',
+    }))
+  },
 
   setPieceRotation: (pieceId, rotationDeg) =>
     set((s) => {

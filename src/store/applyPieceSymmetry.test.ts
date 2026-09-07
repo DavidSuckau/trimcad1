@@ -64,4 +64,15 @@ describe('applyPieceSymmetry', () => {
     expect(after.cutLine.length).toBeGreaterThanOrEqual(3)
     expect(after.seamAllowanceMm).toBe(10)
   })
+
+  it('clearPieceSymmetry entfernt Constraint, Kontur bleibt', () => {
+    useStore.getState().applyPieceSymmetry('p1', { x: 50, y: 0 }, { x: 50, y: 100 }, 'left')
+    const before = useStore.getState().workspace.pieces[0]
+    expect(before.symmetryConstraint).toBeTruthy()
+    const cutSnapshot = before.cutLine
+    useStore.getState().clearPieceSymmetry('p1')
+    const after = useStore.getState().workspace.pieces[0]
+    expect(after.symmetryConstraint).toBeUndefined()
+    expect(after.cutLine).toBe(cutSnapshot)
+  })
 })
