@@ -35,6 +35,13 @@ export type InternalCircle = {
 
 export type NotchType = 'single' | 'double' | 'v'
 export type NotchRole = 'nahtanfang' | 'nahtende' | 'beides'
+/**
+ * Semantik der Kerbe:
+ * - `pass` (Default / fehlend): Pass-/Nahtkerben für Zuordnung, Anpassung, Subsegmente
+ * - `ease`: Entspannungsnotches — paarweise an einer Nahtzuordnung, nicht in der Nahtanpassung
+ */
+export type NotchPurpose = 'pass' | 'ease'
+export type EaseNotchSource = 'auto' | 'manual'
 
 export type Notch = {
   id: string
@@ -68,6 +75,17 @@ export type Notch = {
   /** Anteil der Bogenlänge entlang aller `internalLines` [0, 1] (offene Polylinie). */
   internalSNormalized?: number
   internalArcLengthMm?: number
+  /**
+   * Zweck der Kerbe. Fehlend = Pass-Kerbe (Abwärtskompatibilität).
+   * Entspannung (`ease`) zählt nicht in Nahtanpassung / Subsegment-Split.
+   */
+  purpose?: NotchPurpose
+  /** Bei `purpose: 'ease'`: Nahtzuordnung, an die das Ease-Paar gebunden ist. */
+  seamAssignmentId?: string
+  /** Gemeinsamer Schlüssel der beiden Partner-Kerben (A↔B) einer Entspannung. */
+  easePairKey?: string
+  /** Herkunft der Entspannungs-Kerbe (Auto-Vorschlag vs. manuell). */
+  easeSource?: EaseNotchSource
 }
 
 export type Drill = {

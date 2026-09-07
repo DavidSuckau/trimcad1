@@ -2,6 +2,7 @@ import type { PatternPiece, Point, Curve, Notch } from '../types/model'
 import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
+import { isEaseNotch } from './notchPurpose'
 import { isNotchOnInternalLine } from './notchOnInternalLine'
 import { offsetSegmentPoints } from './offset'
 import { useSeamLineForVertexEditing } from './vertexMaster'
@@ -281,13 +282,14 @@ function resolveNotchOnMasterCurves(
   return nearest ? { curveIndex: nearest.curveIndex, t: nearest.t ?? 0 } : null
 }
 
-/** Zählt Notches die auf einer Eckpunkt→Eckpunkt-Kante liegen (nicht an den Eck-Eckpunkten selbst). */
+/** Zählt Pass-Notches die auf einer Eckpunkt→Eckpunkt-Kante liegen (nicht an den Eck-Eckpunkten selbst). */
 export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): number {
   if (curveIndices.length === 0) return 0
   const curvs = curves ?? getCurvesForSeamEdge(piece)
   const ciSet = new Set(curveIndices)
   let count = 0
   for (const n of piece.notches) {
+    if (isEaseNotch(n) || isNotchOnInternalLine(n)) continue
     const ct = resolveNotchOnMasterCurves(n, piece, curvs)
     if (ct && ciSet.has(ct.curveIndex)) count++
   }
@@ -666,7 +668,9 @@ export function materializeNotchAtEdgeArcLengthExact(
   if (total <= 0) return null
 
   const measure = (n: Notch): number | null => {
-    const row = getNotchesOnEdge({ ...piece, notches: [n] }, curveIndices).find((x) => x.notchId === n.id)
+    const row = getNotchesOnEdge({ ...piece, notches: [n] }, curveIndices, undefined, {
+      includeEase: true,
+    }).find((x) => x.notchId === n.id)
     return row?.arcLength ?? null
   }
 
@@ -699,13 +703,24 @@ export function materializeNotchAtEdgeArcLengthExact(
   return best
 }
 
+export type GetNotchesOnEdgeOptions = {
+  /** Entspannungsnotches mitzählen (Default: false — nur Pass-Kerben). */
+  includeEase?: boolean
+}
+
 /**
  * Liefert die Notch-IDs die auf einer Kante (curveIndices) liegen,
  * in der Reihenfolge ihrer Bogenlängen-Position vom Kantenstart.
  *
  * Bei Nahtzugabe: Cut→Master über Normalen-Korrespondenz auf **dieser Kante**.
+ * Entspannungsnotches (`purpose: 'ease'`) sind standardmäßig ausgeschlossen.
  */
-export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], curves?: Curve[]): { notchId: string; arcLength: number }[] {
+export function getNotchesOnEdge(
+  piece: PatternPiece,
+  curveIndices: number[],
+  curves?: Curve[],
+  opts?: GetNotchesOnEdgeOptions,
+): { notchId: string; arcLength: number }[] {
   if (curveIndices.length === 0) return []
 
   const curvs = curves ?? getCurvesForSeamEdge(piece)
@@ -717,6 +732,7 @@ export function getNotchesOnEdge(piece: PatternPiece, curveIndices: number[], cu
 
   for (const n of piece.notches) {
     if (isNotchOnInternalLine(n)) continue
+    if (!opts?.includeEase && isEaseNotch(n)) continue
 
     if (piece.cutLine.length >= 3) {
       const { position } = getNotchPositionAndAngle(n, piece.cutLine)

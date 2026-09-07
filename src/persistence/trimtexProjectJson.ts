@@ -148,6 +148,17 @@ function parseNotchRaw(o: unknown): Notch | null {
   if (sNormalized !== undefined && !Number.isFinite(sNormalized)) return null
   const arcLengthMm = r.arcLengthMm === undefined ? undefined : Number(r.arcLengthMm)
   if (arcLengthMm !== undefined && !Number.isFinite(arcLengthMm)) return null
+  const roleRaw = r.role
+  const role =
+    roleRaw === 'nahtanfang' || roleRaw === 'nahtende' || roleRaw === 'beides' ? roleRaw : undefined
+  const purpose = r.purpose === 'ease' || r.purpose === 'pass' ? r.purpose : undefined
+  const seamAssignmentId =
+    typeof r.seamAssignmentId === 'string' && r.seamAssignmentId.length > 0
+      ? r.seamAssignmentId
+      : undefined
+  const easePairKey =
+    typeof r.easePairKey === 'string' && r.easePairKey.length > 0 ? r.easePairKey : undefined
+  const easeSource = r.easeSource === 'auto' || r.easeSource === 'manual' ? r.easeSource : undefined
   const internalLineIndex =
     r.internalLineIndex === undefined ? undefined : Number(r.internalLineIndex)
   if (internalLineIndex !== undefined && (!Number.isFinite(internalLineIndex) || internalLineIndex < 0)) {
@@ -168,6 +179,11 @@ function parseNotchRaw(o: unknown): Notch | null {
     ...(width !== undefined ? { width } : {}),
     ...(sNormalized !== undefined ? { sNormalized } : {}),
     ...(arcLengthMm !== undefined ? { arcLengthMm } : {}),
+    ...(role !== undefined ? { role } : {}),
+    ...(purpose !== undefined ? { purpose } : {}),
+    ...(seamAssignmentId !== undefined ? { seamAssignmentId } : {}),
+    ...(easePairKey !== undefined ? { easePairKey } : {}),
+    ...(easeSource !== undefined ? { easeSource } : {}),
     ...(internalLineIndex !== undefined ? { internalLineIndex: Math.floor(internalLineIndex) } : {}),
     ...(internalSNormalized !== undefined ? { internalSNormalized } : {}),
     ...(internalArcLengthMm !== undefined ? { internalArcLengthMm } : {}),

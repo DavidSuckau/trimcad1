@@ -125,6 +125,8 @@ import {
   snapGrainLineToContourEdge,
 } from '../geometry/grainArrowLayout'
 import type { PatternPiece, Point, Line, Curve, Notch, SeamAssignment, BatchSelectionFilter, NotchType as ModelNotchType, NotchRole } from '../types/model'
+import { isEaseNotch } from '../geometry/notchPurpose'
+import { easePreviewPoints } from '../geometry/easeNotch'
 import { findMatchingNotchPresetIndex, modelNotchFieldsFromPreset } from '../notch/notchPresetMapping'
 import { SEAM_ASSIGNMENT_KIND_LABELS } from '../types/model'
 import { canvasTheme, canvasThemeDark, type CanvasTheme } from '../theme/canvasTheme'
@@ -1348,6 +1350,7 @@ const PieceGroup = memo(function PieceGroup({
   /** Schaft ziehbar (nur Layout-Modus, nicht Kontur bearbeiten). */
   grainArrowDraggable,
   showNotches,
+  showEaseNotches,
   showDrills,
   showInternalLines,
   showPieceNames,
@@ -1384,6 +1387,7 @@ const PieceGroup = memo(function PieceGroup({
   showGrainDragHandles?: boolean
   grainArrowDraggable?: boolean
   showNotches?: boolean
+  showEaseNotches?: boolean
   showDrills?: boolean
   showInternalLines?: boolean
   showPieceNames?: boolean
@@ -1719,7 +1723,9 @@ const PieceGroup = memo(function PieceGroup({
           />
         )
       })()}
-      {showNotches !== false && notches.map((n) => {
+      {notches.map((n) => {
+        const ease = isEaseNotch(n)
+        if (ease ? showEaseNotches === false : showNotches === false) return null
         if (notchIdBeingDragged === n.id) return null
         const depth = n.depth
         const width = n.width ?? 6
@@ -1740,11 +1746,23 @@ const PieceGroup = memo(function PieceGroup({
           const { fillD: intFillD, edgesD: intEdgesD } = notchCutoutSvgPaths(intPts)
           const intIsLine = intPts.kind === 'line'
           const isHovered = hoveredNotchId === n.id
-          const stroke = isHovered ? T.notch.strokeHover : NOTCH_STROKE
-          const roleFill = n.role ? (isHovered ? T.notch.roleFillHover : T.notch.roleFill) : T.notch.fill
-          const strokeW = isHovered ? 0.7 : 0.4
+          const stroke = ease
+            ? isHovered
+              ? T.notch.easeStrokeHover
+              : T.notch.easeStroke
+            : isHovered
+              ? T.notch.strokeHover
+              : NOTCH_STROKE
+          const roleFill = ease
+            ? T.notch.easeFill
+            : n.role
+              ? isHovered
+                ? T.notch.roleFillHover
+                : T.notch.roleFill
+              : T.notch.fill
+          const strokeW = isHovered ? 0.7 : ease ? 0.35 : 0.4
           return (
-            <g key={n.id} pointerEvents="none">
+            <g key={n.id} pointerEvents="none" opacity={ease ? 0.92 : 1}>
               {intFillD ? <path d={intFillD} fill={roleFill} stroke="none" /> : null}
               <path
                 d={intEdgesD}
@@ -1753,6 +1771,7 @@ const PieceGroup = memo(function PieceGroup({
                 strokeWidth={intIsLine ? Math.max(strokeW, 0.55) : strokeW}
                 strokeLinejoin="round"
                 strokeLinecap={intIsLine ? 'round' : 'butt'}
+                strokeDasharray={ease ? scaleSvgDashArray('1.2 0.9', ptPs) : undefined}
               />
             </g>
           )
@@ -1775,11 +1794,23 @@ const PieceGroup = memo(function PieceGroup({
           }
         }
         const isHovered = hoveredNotchId === n.id
-        const stroke = isHovered ? T.notch.strokeHover : NOTCH_STROKE
-        const roleFill = n.role ? (isHovered ? T.notch.roleFillHover : T.notch.roleFill) : T.notch.fill
-        const strokeW = isHovered ? 0.7 : 0.4
+        const stroke = ease
+          ? isHovered
+            ? T.notch.easeStrokeHover
+            : T.notch.easeStroke
+          : isHovered
+            ? T.notch.strokeHover
+            : NOTCH_STROKE
+        const roleFill = ease
+          ? T.notch.easeFill
+          : n.role
+            ? isHovered
+              ? T.notch.roleFillHover
+              : T.notch.roleFill
+            : T.notch.fill
+        const strokeW = isHovered ? 0.7 : ease ? 0.35 : 0.4
         return (
-          <g key={n.id} pointerEvents="none">
+          <g key={n.id} pointerEvents="none" opacity={ease ? 0.92 : 1}>
             {cutFillD ? <path d={cutFillD} fill={roleFill} stroke="none" /> : null}
             <path
               d={cutEdgesD}
@@ -1788,6 +1819,7 @@ const PieceGroup = memo(function PieceGroup({
               strokeWidth={cutIsLine ? Math.max(strokeW, 0.55) : strokeW}
               strokeLinejoin="round"
               strokeLinecap={cutIsLine ? 'round' : 'butt'}
+              strokeDasharray={ease ? scaleSvgDashArray('1.2 0.9', ptPs) : undefined}
             />
             {seamFillD ? <path d={seamFillD} fill={roleFill} stroke="none" /> : null}
             {seamEdgesD ? (
@@ -1798,6 +1830,7 @@ const PieceGroup = memo(function PieceGroup({
                 strokeWidth={cutIsLine ? Math.max(strokeW, 0.55) : strokeW}
                 strokeLinejoin="round"
                 strokeLinecap={cutIsLine ? 'round' : 'butt'}
+                strokeDasharray={ease ? scaleSvgDashArray('1.2 0.9', ptPs) : undefined}
               />
             ) : null}
           </g>
@@ -2204,6 +2237,7 @@ export function WorkspaceCanvas() {
     showPoints,
     showGrain,
     showNotches,
+    showEaseNotches,
     showDrills,
     showInternalLines,
     showPieceNames,
@@ -2212,6 +2246,7 @@ export function WorkspaceCanvas() {
     showWorkspaceNotes,
     showContourChangePreview,
     showSeamPruefanzeigen,
+    easePreview,
     contourEditEnabled,
     rulerMode,
     setRulerMode,
@@ -2349,6 +2384,8 @@ export function WorkspaceCanvas() {
       showPoints: s.showPoints,
       showGrain: s.showGrain,
       showNotches: s.showNotches,
+      showEaseNotches: s.showEaseNotches,
+      easePreview: s.easePreview,
       showDrills: s.showDrills,
       showInternalLines: s.showInternalLines,
       showPieceNames: s.showPieceNames,
@@ -4012,6 +4049,13 @@ export function WorkspaceCanvas() {
             return
           }
           const movePiece = pieces.find((p) => p.id === bestNotchClick.pieceId)
+          const moveNotch = movePiece?.notches.find((n) => n.id === bestNotchClick.notchId)
+          if (moveNotch && isEaseNotch(moveNotch)) {
+            setToastMessage(
+              'info:Entspannungsnotches paarweise löschen (Entf) oder über die Nahtzuordnung neu setzen — Verschieben nicht möglich.',
+            )
+            return
+          }
           if (movePiece) {
             setNotchPreview(buildNotchMovePreview(movePiece, bestNotchClick.notchId))
           }
@@ -4359,6 +4403,13 @@ export function WorkspaceCanvas() {
         }
         if (contourEditEnabled && hoveredDeletableNotch) {
           const movePiece = pieces.find((p) => p.id === hoveredDeletableNotch.pieceId)
+          const moveNotch = movePiece?.notches.find((n) => n.id === hoveredDeletableNotch.notchId)
+          if (moveNotch && isEaseNotch(moveNotch)) {
+            setToastMessage(
+              'info:Entspannungsnotches paarweise löschen (Entf) oder über die Nahtzuordnung neu setzen — Verschieben nicht möglich.',
+            )
+            return
+          }
           if (movePiece) {
             setNotchPreview(buildNotchMovePreview(movePiece, hoveredDeletableNotch.notchId))
           }
@@ -7655,10 +7706,18 @@ export function WorkspaceCanvas() {
               onClick={(e) => e.stopPropagation()}
               onWheel={(e) => e.stopPropagation()}
             >
-              <span style={{ fontWeight: 600, color: '#1565c0' }}>Kerbe bearbeiten</span>
+              <span style={{ fontWeight: 600, color: isEaseNotch(editNotch) ? '#c2410c' : '#1565c0' }}>
+                {isEaseNotch(editNotch) ? 'Entspannung bearbeiten' : 'Kerbe bearbeiten'}
+              </span>
+              {isEaseNotch(editNotch) ? (
+                <span style={{ fontSize: fs(11), color: '#9a3412' }}>
+                  Paarweise gebunden an Nahtzuordnung — Entf löscht beide Seiten
+                </span>
+              ) : (
               <span style={{ fontSize: fs(11), color: '#666' }}>
                 ⌥/Alt+Klick oder ⌘+Klick (Mac), sonst E mit Cursor auf Kerbe
               </span>
+              )}
               <span
                 style={{
                   fontSize: fs(11),
@@ -7716,6 +7775,7 @@ export function WorkspaceCanvas() {
                   internen Polylinie.
                 </span>
               ) : null}
+              {!isEaseNotch(editNotch) ? (
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
                 role="group"
@@ -7755,7 +7815,8 @@ export function WorkspaceCanvas() {
                   })}
                 </div>
               </div>
-              {matchedPreset === null && (
+              ) : null}
+              {matchedPreset === null && !isEaseNotch(editNotch) && (
                 <span style={{ fontSize: fs(11), color: '#c62828', maxWidth: 280 }}>
                   Kein exakter Treffer zu den 10 Einstellungen (z. B. Doppel-Kerbe). Bitte Preset wählen.
                 </span>
@@ -8719,6 +8780,7 @@ export function WorkspaceCanvas() {
               }
               grainArrowDraggable={!contourEditEnabled}
               showNotches={showNotches}
+              showEaseNotches={showEaseNotches}
               showDrills={showDrills}
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
@@ -10314,7 +10376,7 @@ export function WorkspaceCanvas() {
                     onPointerLeave={() => setHoveredSeamAssignmentId(null)}
                     style={{ cursor: hoveredSeamAssignmentId === a.id ? 'pointer' : 'default' }}
                   >
-                    <title>Leertaste: Nummer und Nahtart · Backspace/Entf: Zuordnung löschen</title>
+                    <title>Leertaste: Nummer, Nahtart, Entspannung · Backspace/Entf: Zuordnung löschen</title>
                     <path
                       d={d}
                       fill="none"
@@ -10390,7 +10452,7 @@ export function WorkspaceCanvas() {
                   style={{ cursor: hoveredSeamAssignmentId === a.id ? 'pointer' : 'default' }}
                 >
                   <title>
-                    Leertaste: Nummer und Nahtart · Backspace/Entf: Zuordnung löschen
+                    Leertaste: Nummer, Nahtart, Entspannung · Backspace/Entf: Zuordnung löschen
                   </title>
                   {/* Unsichtbare breite Linie für Hover-/Trefferfläche */}
                   <line x1={midA.x} y1={midA.y} x2={midB.x} y2={midB.y} stroke="transparent" strokeWidth={14} />
@@ -10489,6 +10551,35 @@ export function WorkspaceCanvas() {
                 </g>
               )
             })}
+          {easePreview &&
+            (() => {
+              const a = workspace.seamAssignments.find((x) => x.id === easePreview.assignmentId)
+              if (!a || isInternalSeamAssignment(a)) return null
+              const pieceA = piecesById.get(a.pieceIdA)
+              const pieceB = piecesById.get(a.pieceIdB)
+              if (!pieceA || !pieceB) return null
+              const pts = easePreviewPoints(a, pieceA, pieceB, easePreview)
+              return (
+                <g key="ease-preview" pointerEvents="none">
+                  {pts.map((p, i) => {
+                    const piece = p.pieceId === pieceA.id ? pieceA : pieceB
+                    const w = pieceLocalToWorld(p.point, piece)
+                    return (
+                      <circle
+                        key={`ease-prev-${i}`}
+                        cx={w.x}
+                        cy={w.y}
+                        r={1.4}
+                        fill={T.notch.easePreview}
+                        fillOpacity={0.85}
+                        stroke="#fff"
+                        strokeWidth={0.25}
+                      />
+                    )
+                  })}
+                </g>
+              )
+            })()}
         </g>
       </svg>
       <div className="workspace-stoff-icon" title="So liegen die Teile auf dem Stoff beim Zuschneiden">

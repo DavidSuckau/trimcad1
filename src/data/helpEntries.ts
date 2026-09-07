@@ -344,6 +344,14 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Naht',
+    name: 'Entspannungsnotches (Ease)',
+    description:
+      'Auf gekrümmten Nahtzuordnungen Entspannung setzen, damit die Nahtzugabe flach liegt. Immer paarweise auf beiden Seiten; zählt nicht in Nahtanpassung / Kerben-Δ. Leertaste auf der Zuordnung → Abstand (z. B. 8 mm) → Vorschlagen → Übernehmen. Anzeige: Anzeige → Entspannung.',
+    access: 'Nahtzuordnung hovern → Leertaste → Entspannung',
+    shortcut: undefined,
+  },
+  {
+    category: 'Naht',
     name: 'Nahtzugabe 5 mm (schnell)',
     description: 'Schnell 5 mm Nahtzugabe auf ausgewählte Teile anwenden.',
     access: 'Menü Bearbeiten → Nahtzugabe 5 mm',
@@ -411,8 +419,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Ansicht',
     name: 'Kerben',
-    description: 'Notches (Kerben) ein- oder ausblenden.',
+    description: 'Pass-Notches (Kerben) ein- oder ausblenden.',
     access: 'Unten → Anzeige → Kerben',
+    shortcut: undefined,
+  },
+  {
+    category: 'Ansicht',
+    name: 'Entspannung',
+    description: 'Entspannungsnotches (Ease) ein- oder ausblenden — unabhängig von Pass-Kerben.',
+    access: 'Unten → Anzeige → Entspannung',
     shortcut: undefined,
   },
   {

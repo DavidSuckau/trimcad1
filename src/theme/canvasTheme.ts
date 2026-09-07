@@ -79,6 +79,11 @@ export const canvasTheme = {
     strokeHover: '#1565c0',
     roleFill: '#1565c0',
     roleFillHover: '#0d47a1',
+    /** Entspannungsnotches (Ease) — flacher Strich, eigene Farbe. */
+    easeStroke: '#c2410c',
+    easeStrokeHover: '#9a3412',
+    easeFill: '#ffedd5',
+    easePreview: '#ea580c',
   },
 
   // ── Bohrungen (Drills) ───────────────────────────────────────────
@@ -280,6 +285,10 @@ export const canvasThemeDark: CanvasTheme = {
     strokeHover: '#4AA5FF',
     roleFill: '#4AA5FF',
     roleFillHover: '#82b1ff',
+    easeStroke: '#fb923c',
+    easeStrokeHover: '#fdba74',
+    easeFill: '#431407',
+    easePreview: '#fb923c',
   },
 
   drill: {

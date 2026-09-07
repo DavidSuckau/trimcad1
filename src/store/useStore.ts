@@ -82,6 +82,15 @@ import { applyUniformScaleToPiece, getReferenceEdgePivotLocal, getReferenceInter
 import { withDefaultGrainLine } from '../geometry/grainArrowLayout'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
 import {
+  buildEasePairDrafts,
+  countEasePairsForAssignment,
+  EASE_DEFAULT_SPACING_MM,
+  suggestEaseRelativeTs,
+  stripEaseNotchesForAssignment,
+  type EaseSuggestion,
+} from '../geometry/easeNotch'
+import { isEaseNotch } from '../geometry/notchPurpose'
+import {
   remapInternalSeamAssignmentsAfterInternalLineRemove,
   remapProfileAssignmentsAfterInternalLineRemove,
 } from '../geometry/internalSeamAssignment'
@@ -483,6 +492,8 @@ type Store = {
   showPoints: boolean
   showGrain: boolean
   showNotches: boolean
+  /** Entspannungsnotches (Ease) ein-/ausblenden — unabhängig von Pass-Kerben. */
+  showEaseNotches: boolean
   showDrills: boolean
   showInternalLines: boolean
   showPieceNames: boolean
@@ -499,6 +510,10 @@ type Store = {
    * Nahtzuordnungen auf der Arbeitsfläche: Verbinder, Längen-Δ, Kerben-Warnung, grüne ✓ bei Übereinstimmung.
    */
   showSeamPruefanzeigen: boolean
+  /**
+   * Geister-Vorschau für Entspannungsnotches (nicht undo-fähig, bis „Übernehmen“).
+   */
+  easePreview: EaseSuggestion | null
   /** Linke Teileliste ein-/ausklappen (mehr Platz für die Arbeitsfläche). */
   sidebarCollapsed: boolean
   /**
@@ -627,6 +642,7 @@ type Store = {
   setShowPoints: (v: boolean) => void
   setShowGrain: (v: boolean) => void
   setShowNotches: (v: boolean) => void
+  setShowEaseNotches: (v: boolean) => void
   setShowDrills: (v: boolean) => void
   setShowInternalLines: (v: boolean) => void
   setShowPieceNames: (v: boolean) => void
@@ -696,6 +712,19 @@ type Store = {
     tOnCurve: number
   ) => void
   removeSeamAssignment: (id: string) => void
+  /**
+   * Entspannung für eine Nahtzuordnung vorschlagen (Geister-Preview, noch nicht geschrieben).
+   * Ersetzt vorhandene Ease dieser Zuordnung erst beim Übernehmen.
+   */
+  suggestEaseForAssignment: (assignmentId: string, spacingMm?: number) => void
+  /** Vorschau verwerfen. */
+  clearEasePreview: () => void
+  /** Vorschau als Ease-Paare schreiben (ersetzt bestehende Ease dieser Zuordnung). */
+  applyEasePreview: () => void
+  /** Alle Entspannungsnotches einer Zuordnung entfernen. */
+  clearEaseForAssignment: (assignmentId: string) => void
+  /** Ein Ease-Paar (beide Seiten) über pairKey entfernen. */
+  removeEasePair: (assignmentId: string, pairKey: string) => void
   setSeamAdjustmentDialog: (v: string | null) => void
   setSeamAdjustmentHoverPieceId: (v: string | null) => void
   setSeamAssignmentMetaDialogId: (v: string | null) => void
@@ -1078,6 +1107,7 @@ export const useStore = create<Store>()(
   showPoints: true,
   showGrain: true,
   showNotches: true,
+  showEaseNotches: true,
   showDrills: true,
   showInternalLines: true,
   showPieceNames: true,
@@ -1087,6 +1117,7 @@ export const useStore = create<Store>()(
   showContourChangePreview: false,
   showLiveBomCost: false,
   showSeamPruefanzeigen: true,
+  easePreview: null,
   sidebarCollapsed: false,
   contourEditEnabled: true,
   rulerMode: false,
@@ -1692,6 +1723,7 @@ export const useStore = create<Store>()(
   setShowPoints: (v) => set({ showPoints: v }),
   setShowGrain: (v) => set({ showGrain: v }),
   setShowNotches: (v) => set({ showNotches: v }),
+  setShowEaseNotches: (v) => set({ showEaseNotches: v }),
   setShowDrills: (v) => set({ showDrills: v }),
   setShowInternalLines: (v) => set({ showInternalLines: v }),
   setShowPieceNames: (v) => set({ showPieceNames: v }),
@@ -1955,11 +1987,153 @@ export const useStore = create<Store>()(
       return {
         workspace: {
           ...s.workspace,
+          pieces: stripEaseNotchesForAssignment(s.workspace.pieces, id),
           seamAssignments: s.workspace.seamAssignments.filter((a) => a.id !== id),
         },
         seamAdjustmentAcknowledged: restAck,
+        easePreview: s.easePreview?.assignmentId === id ? null : s.easePreview,
       }
     }),
+
+  suggestEaseForAssignment: (assignmentId, spacingMm = EASE_DEFAULT_SPACING_MM) => {
+    const s = get()
+    const assignment = s.workspace.seamAssignments.find((a) => a.id === assignmentId)
+    if (!assignment) {
+      set({ toastMessage: 'error:Nahtzuordnung nicht gefunden.' })
+      return
+    }
+    const pieceA = s.workspace.pieces.find((p) => p.id === assignment.pieceIdA)
+    const pieceB = s.workspace.pieces.find((p) => p.id === assignment.pieceIdB)
+    if (!pieceA || !pieceB) {
+      set({ toastMessage: 'error:Teile der Nahtzuordnung fehlen.' })
+      return
+    }
+    const facingA = facingGeometryEditBlocked(s.workspace.pieces, pieceA.id)
+    const facingB = facingGeometryEditBlocked(s.workspace.pieces, pieceB.id)
+    if (facingA || facingB) {
+      set({
+        toastMessage:
+          'error:Entspannung nur an Mutterteilen — Kaschierung/Spiegelkopie folgt der Mutter.',
+      })
+      return
+    }
+    const suggestion = suggestEaseRelativeTs(assignment, pieceA, pieceB, spacingMm)
+    if (!suggestion || suggestion.relativeTs.length === 0) {
+      set({
+        easePreview: null,
+        toastMessage:
+          'info:Keine gekrümmten Bereiche für Entspannung gefunden (oder Kante zu kurz).',
+      })
+      return
+    }
+    set({
+      easePreview: suggestion,
+      toastMessage: `success:Vorschau: ${suggestion.relativeTs.length} Entspannungspaare (Abstand ${spacingMm} mm). Übernehmen im Dialog.`,
+    })
+  },
+
+  clearEasePreview: () => set({ easePreview: null }),
+
+  applyEasePreview: () => {
+    const s = get()
+    const suggestion = s.easePreview
+    if (!suggestion) {
+      set({ toastMessage: 'error:Keine Entspannungs-Vorschau aktiv.' })
+      return
+    }
+    const assignment = s.workspace.seamAssignments.find((a) => a.id === suggestion.assignmentId)
+    if (!assignment) {
+      set({ easePreview: null, toastMessage: 'error:Nahtzuordnung nicht gefunden.' })
+      return
+    }
+    const pieceA = s.workspace.pieces.find((p) => p.id === assignment.pieceIdA)
+    const pieceB = s.workspace.pieces.find((p) => p.id === assignment.pieceIdB)
+    if (!pieceA || !pieceB) {
+      set({ easePreview: null, toastMessage: 'error:Teile der Nahtzuordnung fehlen.' })
+      return
+    }
+    const facingA = facingGeometryEditBlocked(s.workspace.pieces, pieceA.id)
+    const facingB = facingGeometryEditBlocked(s.workspace.pieces, pieceB.id)
+    if (facingA || facingB) {
+      set({
+        toastMessage:
+          'error:Entspannung nur an Mutterteilen — Kaschierung/Spiegelkopie folgt der Mutter.',
+      })
+      return
+    }
+    const drafts = buildEasePairDrafts(assignment, pieceA, pieceB, suggestion, {
+      generateId,
+      source: 'auto',
+    })
+    if (drafts.length === 0) {
+      set({ toastMessage: 'error:Entspannung konnte nicht materialisiert werden.' })
+      return
+    }
+    set((st) => {
+      let pieces = stripEaseNotchesForAssignment(st.workspace.pieces, suggestion.assignmentId)
+      pieces = pieces.map((p) => {
+        if (p.id === pieceA.id) {
+          return {
+            ...p,
+            notches: [...p.notches, ...drafts.map((d) => d.notchA)],
+          }
+        }
+        if (p.id === pieceB.id) {
+          return {
+            ...p,
+            notches: [...p.notches, ...drafts.map((d) => d.notchB)],
+          }
+        }
+        return p
+      })
+      return {
+        workspace: {
+          ...st.workspace,
+          pieces: syncLinkedPiecesFromParents(pieces),
+        },
+        easePreview: null,
+        toastMessage: `success:${drafts.length} Entspannungspaare gesetzt (beide Nahtseiten).`,
+      }
+    })
+  },
+
+  clearEaseForAssignment: (assignmentId) => {
+    const s = get()
+    const n = countEasePairsForAssignment(s.workspace.pieces, assignmentId)
+    set((st) => ({
+      workspace: {
+        ...st.workspace,
+        pieces: syncLinkedPiecesFromParents(
+          stripEaseNotchesForAssignment(st.workspace.pieces, assignmentId),
+        ),
+      },
+      easePreview: st.easePreview?.assignmentId === assignmentId ? null : st.easePreview,
+      toastMessage:
+        n > 0
+          ? `success:${n} Entspannungspaare entfernt.`
+          : 'info:Keine Entspannungsnotches an dieser Zuordnung.',
+    }))
+  },
+
+  removeEasePair: (assignmentId, pairKey) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: syncLinkedPiecesFromParents(
+          s.workspace.pieces.map((p) => ({
+            ...p,
+            notches: p.notches.filter(
+              (n) =>
+                !(
+                  isEaseNotch(n) &&
+                  n.seamAssignmentId === assignmentId &&
+                  n.easePairKey === pairKey
+                ),
+            ),
+          })),
+        ),
+      },
+    })),
 
   addProfileAssignment: (assignment) => {
     const id = generateId()
@@ -2822,16 +2996,33 @@ export const useStore = create<Store>()(
     set((s) => {
       const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
       if (facingBlock) return facingBlock
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      const notch = piece?.notches.find((n) => n.id === notchId)
+      const pairKey = notch && isEaseNotch(notch) ? notch.easePairKey : undefined
+      const assignmentId = notch && isEaseNotch(notch) ? notch.seamAssignmentId : undefined
       return {
-      workspace: {
-        ...s.workspace,
-        pieces: syncLinkedPiecesFromParents(
-          s.workspace.pieces.map((p) =>
-            p.id === pieceId ? { ...p, notches: p.notches.filter((n) => n.id !== notchId) } : p
-          )
-        ),
-      },
-    }
+        workspace: {
+          ...s.workspace,
+          pieces: syncLinkedPiecesFromParents(
+            s.workspace.pieces.map((p) => {
+              if (pairKey && assignmentId) {
+                return {
+                  ...p,
+                  notches: p.notches.filter(
+                    (n) =>
+                      !(
+                        isEaseNotch(n) &&
+                        n.easePairKey === pairKey &&
+                        n.seamAssignmentId === assignmentId
+                      ),
+                  ),
+                }
+              }
+              return p.id === pieceId ? { ...p, notches: p.notches.filter((n) => n.id !== notchId) } : p
+            }),
+          ),
+        },
+      }
     }),
 
   /** No-op: Notches no longer have vertex anchors. Kept for API compatibility. */
