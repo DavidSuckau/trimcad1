@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { loadMaterialCatalog, saveMaterialCatalog } from './materialCatalogStorage'
+import {
+  loadMaterialCatalog,
+  parseMaterialCatalogJson,
+  saveMaterialCatalog,
+  stringifyMaterialCatalog,
+  suggestedMaterialCatalogFilename,
+} from './materialCatalogStorage'
 import { MATERIAL_CATALOG_STORAGE_KEY } from './materialCatalogTypes'
 import type { MaterialCatalogFile } from './materialCatalogTypes'
 
@@ -116,5 +122,51 @@ describe('materialCatalogStorage', () => {
     const loaded = loadMaterialCatalog(storage)
     expect(loaded.projects).toEqual(['Alpha'])
     expect(loaded.rows[0]?.projectName).toBe('Beta')
+  })
+
+  it('parseMaterialCatalogJson roundtrip mit stringify', () => {
+    const file: MaterialCatalogFile = {
+      version: 1,
+      rows: [
+        {
+          id: 'row-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          materialNumber: 'A-1',
+          supplierSku: '',
+          description: 'Leder',
+          supplierName: '',
+          purchasePrice: 8,
+          priceBasis: 'm2',
+          rollWidthMm: null,
+          category: '',
+          thicknessLabel: '',
+          grainDirection: 'frei',
+          storageLocation: '',
+          quantityOnHand: null,
+          projectName: '',
+        },
+      ],
+      projects: ['Demo'],
+    }
+    const parsed = parseMaterialCatalogJson(stringifyMaterialCatalog(file))
+    expect(parsed).toEqual({ ok: true, data: file })
+  })
+
+  it('parseMaterialCatalogJson lehnt ungültiges JSON ab', () => {
+    const parsed = parseMaterialCatalogJson('{ not json')
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error).toMatch(/JSON/)
+  })
+
+  it('parseMaterialCatalogJson lehnt falsche Version ab statt leer zu laden', () => {
+    const parsed = parseMaterialCatalogJson(JSON.stringify({ version: 99, rows: [] }))
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error).toMatch(/99/)
+  })
+
+  it('suggestedMaterialCatalogFilename enthält Datum', () => {
+    expect(suggestedMaterialCatalogFilename(new Date(2026, 8, 7))).toBe(
+      'trimtex-materialdatenbank-2026-09-07.json',
+    )
   })
 })

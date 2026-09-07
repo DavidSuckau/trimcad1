@@ -6,6 +6,10 @@ import { offsetCurvesInwardForSeam } from './offset'
 import { preferStableCutAfterGeometricMirror } from './seamAllowanceInvariants'
 import { useSeamLineForVertexEditing } from './vertexMaster'
 import { facingOffsetBesideParent, isFacingDerivedPiece, syncFacingPiecesFromParents } from './facingPiece'
+import {
+  isThicknessDerivedPiece,
+  syncThicknessPiecesFromParents,
+} from './thicknessCorrection'
 
 function mirrorX(p: Point, cx: number): Point {
   return { x: 2 * cx - p.x, y: p.y }
@@ -244,18 +248,19 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
   return changed ? next : pieces
 }
 
-/** Kaschierungen + Spiegelkopien nach Mutter-Änderung aktualisieren. */
+/** Kaschierungen + Spiegelkopien + Dickenkorrekturen nach Mutter-Änderung aktualisieren. */
 export function syncLinkedPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
-  // Spiegel zuerst, danach Kaschierungen — damit Kaschierungen von Spiegelkopien
-  // die bereits aktualisierte Spiegel-Geometrie (und das Mutter-Material) übernehmen.
-  return syncFacingPiecesFromParents(syncMirrorPiecesFromParents(pieces))
+  // Spiegel zuerst, dann Dickenkorrektur, danach Kaschierungen.
+  return syncFacingPiecesFromParents(
+    syncThicknessPiecesFromParents(syncMirrorPiecesFromParents(pieces)),
+  )
 }
 
 export function mirrorChildIds(pieces: PatternPiece[], parentId: string): string[] {
   return pieces.filter((p) => p.mirrorParentId === parentId).map((p) => p.id)
 }
 
-/** Alle abhängigen Töchter (Kaschierung + Spiegelkopie) einer Mutter, rekursiv. */
+/** Alle abhängigen Töchter (Kaschierung + Spiegelkopie + Dickenkorrektur) einer Mutter, rekursiv. */
 export function linkedChildIds(pieces: PatternPiece[], parentId: string): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -264,7 +269,7 @@ export function linkedChildIds(pieces: PatternPiece[], parentId: string): string
     const id = stack.pop()!
     for (const p of pieces) {
       if (seen.has(p.id)) continue
-      if (p.facingParentId === id || p.mirrorParentId === id) {
+      if (p.facingParentId === id || p.mirrorParentId === id || p.thicknessParentId === id) {
         seen.add(p.id)
         out.push(p.id)
         stack.push(p.id)
@@ -278,7 +283,11 @@ export function isMirrorDerivedPiece(piece: PatternPiece | null | undefined): bo
   return !!piece && (piece.kind === 'mirror' || !!piece.mirrorParentId)
 }
 
-/** Kaschierung oder Spiegelkopie – Geometrie nur über Sync von der Mutter. */
+/** Kaschierung, Spiegelkopie oder verknüpfte Dickenkorrektur – Geometrie nur über Sync von der Mutter. */
 export function isLinkedDerivedPiece(piece: PatternPiece | null | undefined): boolean {
-  return isFacingDerivedPiece(piece) || isMirrorDerivedPiece(piece)
+  if (!piece) return false
+  if (isFacingDerivedPiece(piece) || isMirrorDerivedPiece(piece)) return true
+  if (!isThicknessDerivedPiece(piece)) return false
+  // Gelöste Dickenkorrektur ist unabhängig editierbar.
+  return piece.thicknessCorrection?.linked !== false
 }

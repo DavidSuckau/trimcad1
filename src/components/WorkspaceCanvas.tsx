@@ -128,6 +128,7 @@ import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContour
 import { isInternalCircleHole, pathWithInternalCircleHoles } from '../geometry/internalCirclePath'
 import { sortPiecesFacingBehind } from '../geometry/facingPiece'
 import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
+import { isThicknessDerivedPiece } from '../geometry/thicknessCorrection'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 
 let T: CanvasTheme = canvasTheme
@@ -1384,10 +1385,13 @@ const PieceGroup = memo(function PieceGroup({
   const isDialogHighlightActive = isDialogHovered
   const isFacing = piece.kind === 'facing' || !!piece.facingParentId
   const isMirror = piece.kind === 'mirror' || !!piece.mirrorParentId
+  const isThickness = piece.kind === 'thickness' || !!piece.thicknessParentId
   const facingHatchFill =
     _themeMode === 'dark' ? 'url(#facing-hatch-dark)' : 'url(#facing-hatch-light)'
   const mirrorLinkHatchFill =
     _themeMode === 'dark' ? 'url(#mirror-link-hatch-dark)' : 'url(#mirror-link-hatch-light)'
+  const thicknessHatchFill =
+    _themeMode === 'dark' ? 'url(#thickness-hatch-dark)' : 'url(#thickness-hatch-light)'
   const interiorFill = isDialogHighlightActive
     ? T.piece.fillDialogHover
     : isFacing
@@ -1412,6 +1416,7 @@ const PieceGroup = memo(function PieceGroup({
   const solidFill = solidStrokeOnly ? 'none' : interiorFill
   const solidFillOpacity = solidStrokeOnly ? undefined : interiorFillOpacity
   const mirrorWash = _themeMode === 'dark' ? '#9ca3af' : '#6b7280'
+  const thicknessWash = _themeMode === 'dark' ? '#93c5fd' : '#3b82f6'
 
   const sym = piece.symmetryConstraint
   const symClips =
@@ -1508,6 +1513,34 @@ const PieceGroup = memo(function PieceGroup({
     )
   }
 
+  /** Dickenkorrektur: leichte Blau-Wash + feine Schraffur. */
+  const renderThicknessOverlay = (pathD: string | null, strokeOnly: boolean) => {
+    if (!isThickness || isMirror || isFacing || !pathD || strokeOnly || isDialogHighlightActive) return null
+    const fillD = pathWithInternalCircleHoles(pathD, internalCircles)
+    const hasHoles = fillD !== pathD
+    const rule = hasHoles ? ('evenodd' as const) : undefined
+    return (
+      <>
+        <path
+          d={fillD}
+          fill={thicknessWash}
+          fillOpacity={0.12}
+          fillRule={rule}
+          stroke="none"
+          pointerEvents="none"
+        />
+        <path
+          d={fillD}
+          fill={thicknessHatchFill}
+          fillOpacity={1}
+          fillRule={rule}
+          stroke="none"
+          pointerEvents="none"
+        />
+      </>
+    )
+  }
+
   const solidStroke = isDialogHighlightActive ? T.piece.strokeDialogHover
     : isHovered ? T.piece.strokeHover
       : isSelected ? T.piece.strokeSelected
@@ -1537,6 +1570,7 @@ const PieceGroup = memo(function PieceGroup({
         <>
           {renderSplitFill(dashedPath, !!dashedStrokeOnly, true)}
           {renderMirrorLinkOverlay(dashedPath, !!dashedStrokeOnly)}
+          {renderThicknessOverlay(dashedPath, !!dashedStrokeOnly)}
           <path
             d={dashedPath}
             fill="none"
@@ -1552,6 +1586,7 @@ const PieceGroup = memo(function PieceGroup({
         <>
           {renderSplitFill(solidPath, !!solidStrokeOnly, false)}
           {renderMirrorLinkOverlay(solidPath, !!solidStrokeOnly)}
+          {renderThicknessOverlay(solidPath, !!solidStrokeOnly)}
           <path
             d={solidPath}
             fill="none"
@@ -2192,6 +2227,8 @@ export function WorkspaceCanvas() {
     addPiece,
     createFacingPiece,
     createMirrorPiece,
+    setThicknessCorrectionDialogPieceId,
+    unlinkThicknessPiece,
     setTool,
     insertPointOnCutLine,
     updateVertex,
@@ -2334,6 +2371,8 @@ export function WorkspaceCanvas() {
       addPiece: s.addPiece,
       createFacingPiece: s.createFacingPiece,
       createMirrorPiece: s.createMirrorPiece,
+      setThicknessCorrectionDialogPieceId: s.setThicknessCorrectionDialogPieceId,
+      unlinkThicknessPiece: s.unlinkThicknessPiece,
       setTool: s.setTool,
       insertPointOnCutLine: s.insertPointOnCutLine,
       updateVertex: s.updateVertex,
@@ -3322,16 +3361,47 @@ export function WorkspaceCanvas() {
         const pieceId0 = selectedPieceIds[0]
         const p = pieces.find((x) => x.id === pieceId0)
         if (!p || !p.cutLine?.length) return
+        if (isLinkedDerivedPiece(p)) {
+          setToastMessage(
+            'info:Abhängige Teile (Kaschierung/Spiegelkopie/Dickenkorrektur) können nicht per Maßstab skaliert werden.',
+          )
+          return
+        }
+        const local = worldToPieceLocal(world, p)
+
+        // Interne Linie hat Vorrang, wenn sie näher liegt als die Kontur (Hit-Toleranz).
+        const internalHit =
+          p.internalLines.length > 0
+            ? hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
+            : null
+
         const hasSeam = p.seamLine.length >= 3
         const curvesForHit = hasSeam ? p.seamLine : p.cutLine
-        const local = worldToPieceLocal(world, p)
-        const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
-        if (!nearest || nearest.distance >= SEAM_HIT_MM) return
+        const nearestContour = nearestCurveIndexAndPoint(local, curvesForHit)
+        const contourDist =
+          nearestContour && nearestContour.distance < SEAM_HIT_MM ? nearestContour.distance : Infinity
+
+        if (internalHit && internalHit.distance <= contourDist) {
+          const currentLengthMm = edgeTotalLength(p, internalHit.curveIndices, p.internalLines)
+          if (currentLengthMm < 1e-9) {
+            setToastMessage('error:Länge der internen Linie ist zu klein.')
+            return
+          }
+          setMassstabDialog({
+            pieceId: p.id,
+            curveIndices: internalHit.curveIndices,
+            currentLengthMm,
+            source: 'internalLine',
+          })
+          return
+        }
+
+        if (!nearestContour || nearestContour.distance >= SEAM_HIT_MM) return
         if (hasSeam) {
           const distToCut = nearestCurveIndexAndPoint(local, p.cutLine)?.distance ?? Infinity
-          if (nearest.distance >= distToCut) return
-          const segHit = curvesForHit[nearest.curveIndex]
-          const midHit = segHit ? curveMidpoint(segHit) : nearest.point
+          if (nearestContour.distance >= distToCut) return
+          const segHit = curvesForHit[nearestContour.curveIndex]
+          const midHit = segHit ? curveMidpoint(segHit) : nearestContour.point
           const nr = nearestCurveIndexAndPoint(midHit, p.cutLine)
           if (!nr) return
           const seamMm = p.seamAllowanceMm ?? 10
@@ -3339,11 +3409,16 @@ export function WorkspaceCanvas() {
         }
         const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
         if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) return
-        const curveIndexForRange = hasSeam ? nearest.curveIndex : nearestCut.curveIndex
+        const curveIndexForRange = hasSeam ? nearestContour.curveIndex : nearestCut.curveIndex
         const range = getCornerRange(p, curveIndexForRange)
         const resolved = resolvedSeamAssignmentCurveIndices(p, range)
         const currentLengthMm = edgeTotalLength(p, resolved)
-        setMassstabDialog({ pieceId: p.id, curveIndices: resolved, currentLengthMm })
+        setMassstabDialog({
+          pieceId: p.id,
+          curveIndices: resolved,
+          currentLengthMm,
+          source: 'edge',
+        })
         return
       }
       if (!layoutOnly && rulerMode) {
@@ -7707,12 +7782,14 @@ export function WorkspaceCanvas() {
               onClick={() => {
                 const piece = pieces.find((p) => p.id === grainContextMenu.pieceId)
                 if (!piece) return
-                if (isLinkedDerivedPiece(piece)) {
+                if (isLinkedDerivedPiece(piece) || isThicknessDerivedPiece(piece)) {
                   // Snapshot ohne Abhängigkeit – sonst entstünde nur eine zweite Sync-Tochter
                   const {
                     facingParentId: _fp,
                     mirrorParentId: _mp,
+                    thicknessParentId: _tp,
                     kind: _k,
+                    thicknessCorrection: _tc,
                     ...rest
                   } = piece
                   addPiece({
@@ -7723,6 +7800,8 @@ export function WorkspaceCanvas() {
                     kind: undefined,
                     facingParentId: undefined,
                     mirrorParentId: undefined,
+                    thicknessParentId: undefined,
+                    thicknessCorrection: undefined,
                   })
                 } else {
                   addPiece({
@@ -7768,6 +7847,39 @@ export function WorkspaceCanvas() {
                 }}
               >
                 Spiegelkopie erzeugen
+              </button>
+            )}
+            {!isLinkedPiece && !isThicknessDerivedPiece(menuPiece) && (
+              <button
+                type="button"
+                title="Neues Schnittteil mit Dickenkorrektur (Original bleibt erhalten)"
+                style={menuBtnStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                onClick={() => {
+                  setThicknessCorrectionDialogPieceId(grainContextMenu.pieceId)
+                  setGrainContextMenu(null)
+                  setGrainFlipHover(null)
+                }}
+              >
+                Dickenkorrektur…
+              </button>
+            )}
+            {isThicknessDerivedPiece(menuPiece) &&
+              menuPiece?.thicknessCorrection?.linked !== false && (
+              <button
+                type="button"
+                title="Verknüpfung lösen – Teil unabhängig bearbeiten"
+                style={menuBtnStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                onClick={() => {
+                  unlinkThicknessPiece(grainContextMenu.pieceId)
+                  setGrainContextMenu(null)
+                  setGrainFlipHover(null)
+                }}
+              >
+                Verknüpfung lösen
               </button>
             )}
             <button
@@ -8063,6 +8175,24 @@ export function WorkspaceCanvas() {
             patternTransform="rotate(-45)"
           >
             <path d="M0 0 H9" stroke="#d1d5db" strokeWidth="0.85" opacity="0.45" />
+          </pattern>
+          <pattern
+            id="thickness-hatch-light"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(0)"
+          >
+            <path d="M0 0 H10" stroke="#2563eb" strokeWidth="0.7" opacity="0.35" />
+          </pattern>
+          <pattern
+            id="thickness-hatch-dark"
+            width="10"
+            height="10"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(0)"
+          >
+            <path d="M0 0 H10" stroke="#93c5fd" strokeWidth="0.7" opacity="0.4" />
           </pattern>
         </defs>
         <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>

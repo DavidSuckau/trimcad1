@@ -23,13 +23,26 @@ export function MassstabModal() {
   if (!massstabDialog) return null
 
   const { currentLengthMm } = massstabDialog
+  const fromInternal = massstabDialog.source === 'internalLine'
 
   return (
-    <div className="nahtzugabe-dialog-overlay" onClick={() => setMassstabDialog(null)} role="dialog" aria-modal="true" aria-label="Maßstab">
+    <div
+      className="nahtzugabe-dialog-overlay"
+      onClick={() => setMassstabDialog(null)}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Maßstab"
+    >
       <div className="nahtzugabe-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 300 }}>
-        <h3 className="nahtzugabe-dialog-title">Maßstab (Referenzkante)</h3>
+        <h3 className="nahtzugabe-dialog-title">
+          {fromInternal ? 'Maßstab (interne Linie)' : 'Maßstab (Referenzkante)'}
+        </h3>
         <div style={{ fontSize: '0.8125rem', color: '#333', marginBottom: '0.75rem', lineHeight: 1.5 }}>
-          Aktuelle Kantenlänge: <strong>{currentLengthMm.toFixed(1)} mm</strong>
+          {fromInternal ? 'Aktuelle Linienlänge' : 'Aktuelle Kantenlänge'}:{' '}
+          <strong>{currentLengthMm.toFixed(1)} mm</strong>
+          <div style={{ marginTop: 6, color: '#666', fontSize: '0.75rem' }}>
+            Nach Eingabe der Ziel-Länge wird das gesamte Teil um den Faktor skaliert.
+          </div>
         </div>
         <label style={{ display: 'block', fontSize: '0.8125rem', color: '#333', marginBottom: 6 }}>
           Ziel-Länge (mm)

@@ -135,3 +135,14 @@ export function getReferenceEdgePivotLocal(piece: PatternPiece, curveIndices: nu
   if (ci < 0 || ci >= master.length) return null
   return { ...master[ci].start }
 }
+
+/** Startpunkt einer internen Referenzlinie (ein oder mehrere Segmente in `internalLines`). */
+export function getReferenceInternalLinePivotLocal(
+  piece: PatternPiece,
+  curveIndices: number[],
+): Point | null {
+  if (curveIndices.length === 0) return null
+  const ci = curveIndices[0]
+  if (ci < 0 || ci >= piece.internalLines.length) return null
+  return { ...piece.internalLines[ci].start }
+}

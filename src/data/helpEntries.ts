@@ -206,6 +206,22 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
+    name: 'Dickenkorrektur',
+    description:
+      'Aus dem Laufrichtungs-Menü: erzeugt ein neues Schnittteil mit Dickenkorrektur (z. B. Sitzwange_A_5mm). Das Original bleibt erhalten. Berechnung λ = 1 − κ·k·t mit mittlerem Radius (Variante 1); Segmentzahl und Kerben bleiben topologisch erhalten. Verknüpfung aktiv: folgt der Mutter. Verknüpfung lösen: unabhängig editierbar. Nicht von Kaschierung/Spiegelkopie aus erzeugen.',
+    access: 'Laufrichtungspfeil anfahren → Leertaste → Dickenkorrektur…',
+    shortcut: 'Leertaste',
+  },
+  {
+    category: 'Werkzeuge',
+    name: 'Maßstab',
+    description:
+      'Ein Teil auswählen, Werkzeug Maßstab: Klick auf eine Konturkante oder eine interne Linie. Dialog zeigt die aktuelle Länge; nach Eingabe der Ziel-Länge wird das gesamte Teil proportional skaliert (Kontur, Kerben, Internals, Bohrungen).',
+    access: 'Menü Bearbeiten → Maßstab · Klick auf Kante oder interne Linie',
+    shortcut: 'M',
+  },
+  {
+    category: 'Werkzeuge',
     name: '90° drehen',
     description: 'Ausgewählte Teile um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt).',
     access: 'Menü Bearbeiten → 90° drehen',
@@ -485,9 +501,10 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Sonstiges',
-    name: 'Material',
-    description: 'Material-Menü (aktuell ohne Einträge).',
-    access: 'Menü Material',
+    name: 'Materialdatenbank',
+    description:
+      'Lokale Materialliste (Nummer, Lieferant, EK, Laufrichtung, Lager). Als JSON speichern und laden, um die Einträge zu sichern oder auf einem anderen Rechner zu übernehmen.',
+    access: 'Menü Material → Materialdatenbank → Als JSON speichern / JSON laden',
     shortcut: undefined,
   },
   {

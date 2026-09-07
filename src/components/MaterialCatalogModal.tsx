@@ -2,9 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useStore } from '../store/useStore'
+import { downloadBlob } from '../dxf/dxfShared'
 import { formatDeDecimal, parseDeDecimal } from '../material/materialCatalogFormat'
-import { loadMaterialCatalog, saveMaterialCatalog } from '../material/materialCatalogStorage'
-import type { GrainDirection, MaterialCatalogRow, MaterialPriceBasis } from '../material/materialCatalogTypes'
+import {
+  loadMaterialCatalog,
+  parseMaterialCatalogJson,
+  saveMaterialCatalog,
+  stringifyMaterialCatalog,
+  suggestedMaterialCatalogFilename,
+} from '../material/materialCatalogStorage'
+import type { GrainDirection, MaterialCatalogFile, MaterialCatalogRow, MaterialPriceBasis } from '../material/materialCatalogTypes'
 import { collectMaterialCatalogProjectNames, createEmptyMaterialCatalogRow } from '../material/materialCatalogTypes'
 
 const DEBOUNCE_MS = 300
@@ -33,11 +40,12 @@ function mergeRowsWithNumericDrafts(
 }
 
 export function MaterialCatalogModal() {
-  const { showMaterialCatalogModal, setShowMaterialCatalogModal, workspace } = useStore(
+  const { showMaterialCatalogModal, setShowMaterialCatalogModal, workspace, setToastMessage } = useStore(
     useShallow((s) => ({
       showMaterialCatalogModal: s.showMaterialCatalogModal,
       setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
       workspace: s.workspace,
+      setToastMessage: s.setToastMessage,
     })),
   )
 
@@ -48,6 +56,7 @@ export function MaterialCatalogModal() {
   const [priceDraft, setPriceDraft] = useState<Record<string, string>>({})
   const [qtyDraft, setQtyDraft] = useState<Record<string, string>>({})
   const skipNextSaveRef = useRef(true)
+  const jsonImportInputRef = useRef<HTMLInputElement>(null)
   const trapRef = useFocusTrap<HTMLDivElement>(showMaterialCatalogModal)
 
   const currentWorkspaceProjectLabel = useMemo(() => {
@@ -94,6 +103,59 @@ export function MaterialCatalogModal() {
     saveMaterialCatalog(catalogPayload)
     setShowMaterialCatalogModal(false)
   }, [catalogPayload, setShowMaterialCatalogModal])
+
+  const applyCatalogFile = useCallback(
+    (file: MaterialCatalogFile) => {
+      skipNextSaveRef.current = true
+      setRows(file.rows)
+      setProjects(collectMaterialCatalogProjectNames(file.rows, file.projects))
+      setPriceDraft({})
+      setQtyDraft({})
+      saveMaterialCatalog(file)
+    },
+    [],
+  )
+
+  const handleSaveJson = useCallback(() => {
+    saveMaterialCatalog(catalogPayload)
+    downloadBlob(
+      stringifyMaterialCatalog(catalogPayload),
+      suggestedMaterialCatalogFilename(),
+      'application/json;charset=utf-8',
+    )
+    setToastMessage('success:Materialdatenbank als JSON gespeichert.')
+  }, [catalogPayload, setToastMessage])
+
+  const handleLoadJsonClick = useCallback(() => {
+    jsonImportInputRef.current?.click()
+  }, [])
+
+  const handleJsonFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file) return
+      const reader = new FileReader()
+      reader.onerror = () => setToastMessage('error:Datei konnte nicht gelesen werden.')
+      reader.onload = () => {
+        const text = typeof reader.result === 'string' ? reader.result : ''
+        const result = parseMaterialCatalogJson(text)
+        if (!result.ok) {
+          setToastMessage(`error:${result.error}`)
+          return
+        }
+        applyCatalogFile(result.data)
+        const n = result.data.rows.length
+        setToastMessage(
+          n === 1
+            ? 'success:Materialdatenbank geladen (1 Eintrag).'
+            : `success:Materialdatenbank geladen (${n} Einträge).`,
+        )
+      }
+      reader.readAsText(file, 'UTF-8')
+    },
+    [applyCatalogFile, setToastMessage],
+  )
 
   const projectOptions = useMemo(
     () => collectMaterialCatalogProjectNames(rows, projects),
@@ -217,8 +279,8 @@ export function MaterialCatalogModal() {
 
         <div className="settings-body" style={{ minHeight: 160 }}>
           <p className="settings-placeholder" style={{ marginTop: 0, marginBottom: 12 }}>
-            Einträge werden lokal im Browser gespeichert (localStorage). Materialien können einem Projekt zugeordnet
-            werden.
+            Einträge werden lokal im Browser gespeichert. Zum Sichern oder Übertragen auf einen anderen Rechner als JSON
+            speichern und wieder laden — es gibt derzeit keine zentrale Datenbank.
           </p>
           <div
             style={{
@@ -270,10 +332,25 @@ export function MaterialCatalogModal() {
               </button>
             ) : null}
           </div>
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             <button type="button" className="sidebar-btn primary" onClick={addRow}>
               Zeile hinzufügen
             </button>
+            <button type="button" className="sidebar-btn" onClick={handleSaveJson}>
+              Als JSON speichern
+            </button>
+            <button type="button" className="sidebar-btn" onClick={handleLoadJsonClick}>
+              JSON laden
+            </button>
+            <input
+              ref={jsonImportInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              aria-hidden
+              tabIndex={-1}
+              onChange={handleJsonFileChange}
+            />
           </div>
           <p
             className="stueckliste-doc-row"

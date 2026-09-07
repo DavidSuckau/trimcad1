@@ -113,6 +113,32 @@ export type PieceSymmetryConstraint = {
   keepSide: 'left' | 'right'
 }
 
+/** Berechnungsmodus für Dickenkorrektur der Abwicklung (Neutralfaser). */
+export type ThicknessCorrectionMode = 'outer' | 'mid' | 'inner' | 'custom'
+
+export type ThicknessCorrectionStats = {
+  /** Mittlere Längenänderung in Prozent (positiv = Vergrößerung). */
+  meanScalePercent: number
+  maxDeltaMm: number
+  minDeltaMm: number
+  /** Angewandter Längenfaktor λ. */
+  appliedScale: number
+  meanRadiusMm: number
+}
+
+/** Parameter einer Dickenkorrektur am abhängigen Teil. */
+export type ThicknessCorrectionParams = {
+  thicknessMm: number
+  mode: ThicknessCorrectionMode
+  /** Neutralfaktor 0…1 (Außen…Innen); bei mode mid/outer/inner aus dem Modus abgeleitet. */
+  neutralFactor: number
+  /** Mittlerer Krümmungsradius (mm) für Variante 1 ohne 3D-Mapping. */
+  meanRadiusMm: number
+  /** true = folgt der Mutter; false = gelöst, unabhängig editierbar. */
+  linked: boolean
+  stats?: ThicknessCorrectionStats
+}
+
 export type PatternPiece = {
   id: string
   number: string
@@ -190,8 +216,15 @@ export type PatternPiece = {
    * Geometrie = vertikal gespiegelte Kopie der Mutter; folgt allen Konturänderungen.
    */
   mirrorParentId?: string
-  /** Semantik des Teils; `facing` = Kaschierung / Beleg, `mirror` = abhängige Spiegelkopie. */
-  kind?: 'facing' | 'mirror'
+  /**
+   * Wenn gesetzt: dieses Teil ist eine **Dickenkorrektur** (Tochter) des Mutterteils mit dieser ID.
+   * Abwicklung angepasst an Materialdicke; bei `thicknessCorrection.linked` folgt sie der Mutter.
+   */
+  thicknessParentId?: string
+  /** Parameter der Dickenkorrektur (nur bei kind thickness / thicknessParentId). */
+  thicknessCorrection?: ThicknessCorrectionParams
+  /** Semantik des Teils; `facing` = Kaschierung, `mirror` = Spiegelkopie, `thickness` = Dickenkorrektur. */
+  kind?: 'facing' | 'mirror' | 'thickness'
 }
 
 export type ViewState = {

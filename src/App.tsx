@@ -6,6 +6,7 @@ import { DesignBar } from './components/DesignBar'
 import { HelpModal } from './components/HelpModal'
 import { ShortcutListModal } from './components/ShortcutListModal'
 import { PiecePropertiesModal } from './components/PiecePropertiesModal'
+import { ThicknessCorrectionModal } from './components/ThicknessCorrectionModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { SEAT_3D_PREVIEW_ENABLED } from './seat3d/featureFlags'
 import { DEV_FEEDBACK_ENABLED } from './devFeedback/featureFlags'
@@ -35,6 +36,7 @@ export default function App() {
         <HelpModal />
         <ShortcutListModal />
         <PiecePropertiesModal />
+        <ThicknessCorrectionModal />
         <Suspense fallback={null}>
           <Scan3dModal />
           {SEAT_3D_PREVIEW_ENABLED ? <Seat3dModal /> : null}

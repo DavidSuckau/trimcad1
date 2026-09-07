@@ -20,6 +20,7 @@ import type {
   InternalCircle,
   NotchRole,
   RoundedCorner,
+  ThicknessCorrectionMode,
 } from '../types/model'
 import {
   ROUND_CORNER_MIN_RADIUS_MM,
@@ -77,7 +78,7 @@ import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner, rematerializeNotchesAfterGeometricMirror } from '../geometry/notchResyncCutLine'
-import { applyUniformScaleToPiece, getReferenceEdgePivotLocal } from '../geometry/scalePieceLocal'
+import { applyUniformScaleToPiece, getReferenceEdgePivotLocal, getReferenceInternalLinePivotLocal } from '../geometry/scalePieceLocal'
 import { withDefaultGrainLine } from '../geometry/grainArrowLayout'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
 import {
@@ -122,6 +123,12 @@ import {
   mirrorOffsetBesideParent,
   syncLinkedPiecesFromParents,
 } from '../geometry/mirrorPiece'
+import {
+  buildThicknessGeometryFromParent,
+  isThicknessDerivedPiece,
+  suggestedThicknessPieceName,
+  thicknessOffsetBesideParent,
+} from '../geometry/thicknessCorrection'
 import {
   finalizePieceContourEdit,
   mapContourVertexEditForSymmetry,
@@ -261,7 +268,7 @@ function cloneCurvesArray(curves: Curve[]): Curve[] {
 }
 
 const FACING_GEOMETRY_LOCKED_TOAST =
-  'info:Abhängige Teile (Kaschierung/Spiegelkopie) werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
+  'info:Abhängige Teile (Kaschierung/Spiegelkopie/Dickenkorrektur) werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
 
 const LINKED_MATERIAL_LOCKED_TOAST =
   'info:Material folgt dem Mutterteil und kann bei abhängigen Teilen nicht geändert werden.'
@@ -504,6 +511,8 @@ type Store = {
   nahtzugabeDialogPieceId: string | null
   /** Dialog „Teil-Eigenschaften“ (Name, Flächenfüllung). */
   piecePropertiesDialogPieceId: string | null
+  /** Dialog Dickenkorrektur (Abwicklung an Materialdicke). */
+  thicknessCorrectionDialogPieceId: string | null
   /** Interaktiver Modus: Kante auf dem Canvas anklicken, um Nahtzugabe pro Kante festzulegen. */
   edgeSeamPickingActive: boolean
   /** Gerade Master-Kante wählen → Teil drehen, bis die Kante waagerecht ist. */
@@ -563,8 +572,16 @@ type Store = {
   seamAdjustmentAcknowledged: Record<string, string>
   /** Nahtzuordnung: Eigenschaften (Nummer, Nahtart), Leertaste bei Hover */
   seamAssignmentMetaDialogId: string | null
-  /** Maßstab: Referenzkante gewählt, Ziel-Länge eingeben. */
-  massstabDialog: { pieceId: string; curveIndices: number[]; currentLengthMm: number } | null
+  /**
+   * Maßstab: Referenz gewählt (Konturkante oder interne Linie), Ziel-Länge eingeben.
+   * `source: 'internalLine'` → `curveIndices` beziehen sich auf `piece.internalLines`.
+   */
+  massstabDialog: {
+    pieceId: string
+    curveIndices: number[]
+    currentLengthMm: number
+    source?: 'edge' | 'internalLine'
+  } | null
   digitizeState: DigitizeState | null
   imageDigitizeSession: ImageDigitizeSession | null
   /** 10×10-cm-Winkel auf dem Foto: Punkte setzen bis 3, dann Maßstab anwenden. */
@@ -585,6 +602,21 @@ type Store = {
   createFacingPiece: (parentId: string) => string | null
   /** Erzeugt eine abhängige Spiegelkopie (geflippt) aus dem Mutterteil. */
   createMirrorPiece: (parentId: string) => string | null
+  /**
+   * Erzeugt eine Dickenkorrektur als neues Schnittteil (Original bleibt).
+   * Variante 1: mittlerer Radius, Topologie bleibt erhalten.
+   */
+  createThicknessCorrectedPiece: (
+    parentId: string,
+    args: {
+      thicknessMm: number
+      mode: ThicknessCorrectionMode
+      neutralFactor?: number
+      meanRadiusMm?: number
+    },
+  ) => string | null
+  /** Verknüpfung der Dickenkorrektur lösen – Kind wird unabhängig editierbar. */
+  unlinkThicknessPiece: (pieceId: string) => void
   selectPiece: (id: string | null, addToSelection?: boolean) => void
   setTool: (t: Tool) => void
   setCanvasThemeMode: (m: 'light' | 'dark') => void
@@ -608,6 +640,7 @@ type Store = {
   setPendingNahtzugabeClick: (v: boolean) => void
   setNahtzugabeDialogPieceId: (v: string | null) => void
   setPiecePropertiesDialogPieceId: (v: string | null) => void
+  setThicknessCorrectionDialogPieceId: (v: string | null) => void
   setEdgeSeamPickingActive: (v: boolean) => void
   setHorizontalLevelPickingActive: (v: boolean) => void
   setPieceSymmetryState: (v: PieceSymmetryUiState) => void
@@ -1050,6 +1083,7 @@ export const useStore = create<Store>()(
   pendingNahtzugabeClick: false,
   nahtzugabeDialogPieceId: null,
   piecePropertiesDialogPieceId: null,
+  thicknessCorrectionDialogPieceId: null,
   edgeSeamPickingActive: false,
   horizontalLevelPickingActive: false,
   pieceSymmetryState: null,
@@ -1244,15 +1278,20 @@ export const useStore = create<Store>()(
           s.nahtzugabeDialogPieceId != null && removeIds.has(s.nahtzugabeDialogPieceId)
             ? null
             : s.nahtzugabeDialogPieceId,
+        thicknessCorrectionDialogPieceId:
+          s.thicknessCorrectionDialogPieceId != null && removeIds.has(s.thicknessCorrectionDialogPieceId)
+            ? null
+            : s.thicknessCorrectionDialogPieceId,
       }
     }),
 
   createFacingPiece: (parentId) => {
     const parent = get().workspace.pieces.find((p) => p.id === parentId)
     if (!parent) return null
-    if (isFacingDerivedPiece(parent)) {
+    if (isFacingDerivedPiece(parent) || isThicknessDerivedPiece(parent)) {
       set({
-        toastMessage: 'warn:Aus einer Kaschierung kann keine weitere abhängige Kopie erzeugt werden.',
+        toastMessage:
+          'warn:Aus einer Kaschierung oder Dickenkorrektur kann keine weitere abhängige Kopie erzeugt werden.',
       })
       return null
     }
@@ -1301,7 +1340,7 @@ export const useStore = create<Store>()(
     if (isLinkedDerivedPiece(parent)) {
       set({
         toastMessage:
-          'warn:Aus einer Kaschierung oder Spiegelkopie kann keine weitere abhängige Kopie erzeugt werden.',
+          'warn:Aus einer Kaschierung, Spiegelkopie oder Dickenkorrektur kann keine weitere abhängige Kopie erzeugt werden.',
       })
       return null
     }
@@ -1337,6 +1376,99 @@ export const useStore = create<Store>()(
       set({ selectedPieceIds: [id] })
     }
     return id
+  },
+
+  createThicknessCorrectedPiece: (parentId, args) => {
+    const parent = get().workspace.pieces.find((p) => p.id === parentId)
+    if (!parent) return null
+    if (isLinkedDerivedPiece(parent) || isThicknessDerivedPiece(parent)) {
+      set({
+        toastMessage:
+          'warn:Dickenkorrektur nur vom Originalteil – nicht von Kaschierung, Spiegelkopie oder Dickenkorrektur.',
+      })
+      return null
+    }
+    if (parent.cutLine.length < 3) {
+      set({ toastMessage: 'warn:Teil hat keine gültige Kontur für eine Dickenkorrektur.' })
+      return null
+    }
+    const thicknessMm = Number(args.thicknessMm)
+    if (!Number.isFinite(thicknessMm) || thicknessMm <= 0) {
+      set({ toastMessage: 'warn:Materialdicke muss größer als 0 mm sein.' })
+      return null
+    }
+    const geom = buildThicknessGeometryFromParent(parent, {
+      thicknessMm,
+      mode: args.mode,
+      neutralFactor: args.neutralFactor,
+      meanRadiusMm: args.meanRadiusMm,
+    })
+    const offset = thicknessOffsetBesideParent(parent)
+    const id = get().addPiece({
+      ...geom,
+      name: suggestedThicknessPieceName(parent, thicknessMm),
+      thicknessParentId: parent.id,
+      kind: 'thickness',
+      transform: {
+        x: parent.transform.x + offset.x,
+        y: parent.transform.y + offset.y,
+        rotation: parent.transform.rotation,
+        mirrored: parent.transform.mirrored,
+        ...(parent.transform.pivotLocal
+          ? { pivotLocal: { ...parent.transform.pivotLocal } }
+          : {}),
+      },
+      symmetryConstraint: undefined,
+      facingParentId: undefined,
+      mirrorParentId: undefined,
+    })
+    const stats = geom.thicknessCorrection.stats
+    const pct =
+      stats != null
+        ? `${stats.meanScalePercent >= 0 ? '+' : ''}${stats.meanScalePercent.toFixed(1)} %`
+        : ''
+    set({
+      selectedPieceIds: [id],
+      thicknessCorrectionDialogPieceId: null,
+      toastMessage: stats
+        ? `success:Dickenkorrektur angelegt (${pct}, max ${stats.maxDeltaMm.toFixed(1)} mm, min ${stats.minDeltaMm.toFixed(1)} mm).`
+        : 'success:Dickenkorrektur angelegt.',
+    })
+    return id
+  },
+
+  unlinkThicknessPiece: (pieceId) => {
+    const piece = get().workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece || !isThicknessDerivedPiece(piece)) {
+      set({ toastMessage: 'warn:Kein Dickenkorrektur-Teil ausgewählt.' })
+      return
+    }
+    if (piece.thicknessCorrection?.linked === false) {
+      set({ toastMessage: 'info:Verknüpfung ist bereits gelöst.' })
+      return
+    }
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) => {
+          if (p.id !== pieceId) return p
+          return {
+            ...p,
+            thicknessParentId: undefined,
+            kind: 'thickness',
+            thicknessCorrection: {
+              thicknessMm: p.thicknessCorrection?.thicknessMm ?? 0,
+              mode: p.thicknessCorrection?.mode ?? 'mid',
+              neutralFactor: p.thicknessCorrection?.neutralFactor ?? 0.5,
+              meanRadiusMm: p.thicknessCorrection?.meanRadiusMm ?? 120,
+              linked: false,
+              stats: p.thicknessCorrection?.stats,
+            },
+          }
+        }),
+      },
+      toastMessage: 'success:Verknüpfung gelöst – Teil ist unabhängig editierbar.',
+    }))
   },
 
   selectPiece: (id, addToSelection) =>
@@ -1524,6 +1656,10 @@ export const useStore = create<Store>()(
         prev.piecePropertiesDialogPieceId && idsToDelete.has(prev.piecePropertiesDialogPieceId) ? null : prev.piecePropertiesDialogPieceId,
       nahtzugabeDialogPieceId:
         prev.nahtzugabeDialogPieceId && idsToDelete.has(prev.nahtzugabeDialogPieceId) ? null : prev.nahtzugabeDialogPieceId,
+      thicknessCorrectionDialogPieceId:
+        prev.thicknessCorrectionDialogPieceId && idsToDelete.has(prev.thicknessCorrectionDialogPieceId)
+          ? null
+          : prev.thicknessCorrectionDialogPieceId,
       batchSelectionTargets: [],
       batchUiHighlightByTargetId: {},
       batchSelectionFilter: 'all' as const,
@@ -1552,6 +1688,7 @@ export const useStore = create<Store>()(
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
   setNahtzugabeDialogPieceId: (v) => set({ nahtzugabeDialogPieceId: v }),
   setPiecePropertiesDialogPieceId: (v) => set({ piecePropertiesDialogPieceId: v }),
+  setThicknessCorrectionDialogPieceId: (v) => set({ thicknessCorrectionDialogPieceId: v }),
   setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
   setHorizontalLevelPickingActive: (v) => set({ horizontalLevelPickingActive: v }),
   setPieceSymmetryState: (v) => set({ pieceSymmetryState: v }),
@@ -1938,14 +2075,31 @@ export const useStore = create<Store>()(
       set({ massstabDialog: null, toastMessage: 'error:Teil nicht gefunden.' })
       return
     }
-    const len = edgeTotalLength(piece, d.curveIndices)
-    if (len < 1e-9) {
-      set({ toastMessage: 'error:Kantenlänge ist zu klein.' })
+    if (isLinkedDerivedPiece(piece)) {
+      set({ toastMessage: FACING_GEOMETRY_LOCKED_TOAST })
       return
     }
-    const pivot = getReferenceEdgePivotLocal(piece, d.curveIndices)
+    const fromInternal = d.source === 'internalLine'
+    const len = fromInternal
+      ? edgeTotalLength(piece, d.curveIndices, piece.internalLines)
+      : edgeTotalLength(piece, d.curveIndices)
+    if (len < 1e-9) {
+      set({
+        toastMessage: fromInternal
+          ? 'error:Länge der internen Linie ist zu klein.'
+          : 'error:Kantenlänge ist zu klein.',
+      })
+      return
+    }
+    const pivot = fromInternal
+      ? getReferenceInternalLinePivotLocal(piece, d.curveIndices)
+      : getReferenceEdgePivotLocal(piece, d.curveIndices)
     if (!pivot) {
-      set({ toastMessage: 'error:Ungültige Referenzkante.' })
+      set({
+        toastMessage: fromInternal
+          ? 'error:Ungültige interne Referenzlinie.'
+          : 'error:Ungültige Referenzkante.',
+      })
       return
     }
     const scale = targetLengthMm / len
@@ -1957,10 +2111,13 @@ export const useStore = create<Store>()(
     set((st) => ({
       workspace: {
         ...st.workspace,
-        pieces: st.workspace.pieces.map((p) => (p.id === d.pieceId ? result.piece : p)),
+        pieces: syncLinkedPiecesFromParents(
+          st.workspace.pieces.map((p) => (p.id === d.pieceId ? result.piece : p)),
+        ),
       },
       massstabDialog: null,
       tool: 'select',
+      toastMessage: `success:Maßstab angewendet (Faktor ${(scale).toFixed(4)}).`,
     }))
   },
 
@@ -4409,6 +4566,7 @@ export const useStore = create<Store>()(
       pendingNahtzugabeClick: false,
       nahtzugabeDialogPieceId: null,
       piecePropertiesDialogPieceId: null,
+      thicknessCorrectionDialogPieceId: null,
       edgeSeamPickingActive: false,
       horizontalLevelPickingActive: false,
       pieceSymmetryState: null,
@@ -4708,6 +4866,7 @@ export const useStore = create<Store>()(
       pendingNahtzugabeClick: false,
       nahtzugabeDialogPieceId: null,
       piecePropertiesDialogPieceId: null,
+      thicknessCorrectionDialogPieceId: null,
       edgeSeamPickingActive: false,
       horizontalLevelPickingActive: false,
       pieceSymmetryState: null,

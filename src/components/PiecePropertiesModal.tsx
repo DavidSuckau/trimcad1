@@ -6,6 +6,7 @@ import { edgeTotalLength } from '../geometry/seamUtils'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { loadMaterialCatalog } from '../material/materialCatalogStorage'
 import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
+import { isThicknessDerivedPiece } from '../geometry/thicknessCorrection'
 
 export function PiecePropertiesModal() {
   const {
@@ -17,6 +18,7 @@ export function PiecePropertiesModal() {
     setEdgeSeamAllowance,
     setShowMaterialCatalogModal,
     showMaterialCatalogModal,
+    unlinkThicknessPiece,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -27,6 +29,7 @@ export function PiecePropertiesModal() {
       setEdgeSeamAllowance: s.setEdgeSeamAllowance,
       setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
       showMaterialCatalogModal: s.showMaterialCatalogModal,
+      unlinkThicknessPiece: s.unlinkThicknessPiece,
     })),
   )
 
@@ -62,6 +65,9 @@ export function PiecePropertiesModal() {
 
   const fillOn = piece.fillInterior !== false
   const materialLocked = isLinkedDerivedPiece(piece)
+  const thicknessLinked =
+    isThicknessDerivedPiece(piece) && piece.thicknessCorrection?.linked !== false
+  const thicknessStats = piece.thicknessCorrection?.stats
 
   return (
     <div
@@ -73,6 +79,43 @@ export function PiecePropertiesModal() {
     >
       <div className="nahtzugabe-dialog" style={{ minWidth: 320 }} onClick={(e) => e.stopPropagation()} ref={trapRef}>
         <h3 className="nahtzugabe-dialog-title">Teil-Eigenschaften</h3>
+
+        {isThicknessDerivedPiece(piece) ? (
+          <div
+            style={{
+              marginBottom: 12,
+              padding: '8px 10px',
+              fontSize: 12,
+              background: 'var(--muted-bg, #f5f5f5)',
+              borderRadius: 6,
+            }}
+          >
+            <strong>Dickenkorrektur</strong>
+            {piece.thicknessCorrection ? (
+              <span>
+                {' '}
+                · {piece.thicknessCorrection.thicknessMm} mm ·{' '}
+                {piece.thicknessCorrection.linked !== false ? 'Verknüpft' : 'Gelöst'}
+              </span>
+            ) : null}
+            {thicknessStats ? (
+              <div style={{ marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
+                Mittel {(thicknessStats.meanScalePercent >= 0 ? '+' : '') + thicknessStats.meanScalePercent.toFixed(1)} %
+                · max {thicknessStats.maxDeltaMm.toFixed(1)} mm · min {thicknessStats.minDeltaMm.toFixed(1)} mm
+              </div>
+            ) : null}
+            {thicknessLinked ? (
+              <button
+                type="button"
+                className="sidebar-btn"
+                style={{ marginTop: 8, padding: '4px 10px', fontSize: 12 }}
+                onClick={() => unlinkThicknessPiece(piece.id)}
+              >
+                Verknüpfung lösen
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <label className="nahtzugabe-dialog-label">
           <span>Teilnummer</span>

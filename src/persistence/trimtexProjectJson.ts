@@ -286,13 +286,60 @@ function normalizePiece(raw: PatternPiece): PatternPiece {
       }
     })(),
     ...(() => {
+      const out: {
+        facingParentId?: string
+        mirrorParentId?: string
+        thicknessParentId?: string
+        kind?: 'facing' | 'mirror' | 'thickness'
+        thicknessCorrection?: PatternPiece['thicknessCorrection']
+      } = {}
       const parentId = (raw as { facingParentId?: unknown }).facingParentId
       const mirrorParentId = (raw as { mirrorParentId?: unknown }).mirrorParentId
+      const thicknessParentId = (raw as { thicknessParentId?: unknown }).thicknessParentId
       const kind = (raw as { kind?: unknown }).kind
-      const out: { facingParentId?: string; mirrorParentId?: string; kind?: 'facing' | 'mirror' } = {}
       if (typeof parentId === 'string' && parentId.length > 0) out.facingParentId = parentId
       if (typeof mirrorParentId === 'string' && mirrorParentId.length > 0) out.mirrorParentId = mirrorParentId
-      if (kind === 'facing' || kind === 'mirror') out.kind = kind
+      if (typeof thicknessParentId === 'string' && thicknessParentId.length > 0) {
+        out.thicknessParentId = thicknessParentId
+      }
+      if (kind === 'facing' || kind === 'mirror' || kind === 'thickness') out.kind = kind
+      const tc = (raw as { thicknessCorrection?: unknown }).thicknessCorrection
+      if (typeof tc === 'object' && tc !== null) {
+        const o = tc as Record<string, unknown>
+        const thicknessMm = typeof o.thicknessMm === 'number' && Number.isFinite(o.thicknessMm) ? o.thicknessMm : null
+        const mode =
+          o.mode === 'outer' || o.mode === 'mid' || o.mode === 'inner' || o.mode === 'custom' ? o.mode : null
+        if (thicknessMm != null && mode) {
+          const nf =
+            typeof o.neutralFactor === 'number' && Number.isFinite(o.neutralFactor)
+              ? Math.min(1, Math.max(0, o.neutralFactor))
+              : 0.5
+          const meanRadiusMm =
+            typeof o.meanRadiusMm === 'number' && Number.isFinite(o.meanRadiusMm) && o.meanRadiusMm > 0
+              ? o.meanRadiusMm
+              : 120
+          const statsRaw = o.stats
+          let stats: NonNullable<PatternPiece['thicknessCorrection']>['stats']
+          if (typeof statsRaw === 'object' && statsRaw !== null) {
+            const s = statsRaw as Record<string, unknown>
+            stats = {
+              meanScalePercent: typeof s.meanScalePercent === 'number' ? s.meanScalePercent : 0,
+              maxDeltaMm: typeof s.maxDeltaMm === 'number' ? s.maxDeltaMm : 0,
+              minDeltaMm: typeof s.minDeltaMm === 'number' ? s.minDeltaMm : 0,
+              appliedScale: typeof s.appliedScale === 'number' ? s.appliedScale : 1,
+              meanRadiusMm,
+            }
+          }
+          out.thicknessCorrection = {
+            thicknessMm,
+            mode,
+            neutralFactor: nf,
+            meanRadiusMm,
+            linked: o.linked !== false,
+            ...(stats ? { stats } : {}),
+          }
+        }
+      }
       return out
     })(),
   }

@@ -8,6 +8,7 @@ describe('exitAllModes', () => {
       pendingNahtzugabeClick: true,
       nahtzugabeDialogPieceId: 'p1',
       piecePropertiesDialogPieceId: 'p2',
+      thicknessCorrectionDialogPieceId: 'p3',
       edgeSeamPickingActive: true,
       horizontalLevelPickingActive: true,
       pieceSymmetryState: { pieceId: 'p1', phase: 'chooseMethod' },
@@ -42,6 +43,7 @@ describe('exitAllModes', () => {
     const s = useStore.getState()
     expect(s.nahtzugabeDialogPieceId).toBeNull()
     expect(s.piecePropertiesDialogPieceId).toBeNull()
+    expect(s.thicknessCorrectionDialogPieceId).toBeNull()
     expect(s.profileDialogAssignmentId).toBeNull()
     expect(s.seamAdjustmentDialog).toBeNull()
     expect(s.seamAssignmentMetaDialogId).toBeNull()

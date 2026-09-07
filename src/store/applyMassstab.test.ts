@@ -72,4 +72,37 @@ describe('applyMassstab', () => {
     useStore.getState().applyMassstab(200)
     expect(useStore.getState().tool).toBe('select')
   })
+
+  it('skaliert das gesamte Teil anhand einer internen Linie', () => {
+    const withInternal = {
+      ...makePiece(),
+      internalLines: [
+        { type: 'line' as const, start: { x: 20, y: 50 }, end: { x: 80, y: 50 } },
+      ],
+    }
+    useStore.setState({
+      workspace: {
+        id: 'ws1',
+        name: 'Test',
+        pieces: [withInternal],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [],
+        notes: [],
+        profileAssignments: [],
+      },
+      massstabDialog: {
+        pieceId: 'p1',
+        curveIndices: [0],
+        currentLengthMm: 60,
+        source: 'internalLine',
+      },
+    })
+    useStore.getState().applyMassstab(120)
+    const updated = useStore.getState().workspace.pieces.find((p) => p.id === 'p1')!
+    const il = updated.internalLines[0]
+    const len = Math.hypot(il.end.x - il.start.x, il.end.y - il.start.y)
+    expect(len).toBeCloseTo(120, 0)
+    // Kontur mitfaktor 2 (Pivot = Start der internen Linie)
+    expect(updated.cutLine[0].end.x - updated.cutLine[0].start.x).toBeCloseTo(200, 0)
+  })
 })

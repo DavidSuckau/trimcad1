@@ -76,6 +76,45 @@ function parseFile(raw: unknown): MaterialCatalogFile {
   return { version: 1, rows, ...(projects.length > 0 ? { projects } : {}) }
 }
 
+export type ParseMaterialCatalogResult =
+  | { ok: true; data: MaterialCatalogFile }
+  | { ok: false; error: string }
+
+/** Strenges Parsen für JSON-Import (kein stilles Leeren bei kaputter Datei). */
+export function parseMaterialCatalogJson(json: string): ParseMaterialCatalogResult {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(json)
+  } catch {
+    return { ok: false, error: 'Die Datei ist kein gültiges JSON.' }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'Ungültiges Dateiformat der Materialdatenbank.' }
+  }
+  const o = parsed as Record<string, unknown>
+  if (o.version !== 1) {
+    return {
+      ok: false,
+      error: `Materialdatenbank-Version ${String(o.version ?? 'unbekannt')} wird nicht unterstützt.`,
+    }
+  }
+  if (!Array.isArray(o.rows)) {
+    return { ok: false, error: 'Die Datei enthält keine Materialzeilen (Feld „rows“ fehlt).' }
+  }
+  return { ok: true, data: parseFile(parsed) }
+}
+
+export function stringifyMaterialCatalog(data: MaterialCatalogFile): string {
+  return `${JSON.stringify(data, null, 2)}\n`
+}
+
+export function suggestedMaterialCatalogFilename(now = new Date()): string {
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `trimtex-materialdatenbank-${y}-${m}-${d}.json`
+}
+
 export function loadMaterialCatalog(storage: Pick<Storage, 'getItem'> = localStorage): MaterialCatalogFile {
   try {
     const s = storage.getItem(MATERIAL_CATALOG_STORAGE_KEY)
