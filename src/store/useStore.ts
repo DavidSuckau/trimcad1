@@ -33,6 +33,7 @@ import {
   offsetSegmentPoints,
   validateContourAfterVertexMove,
   closedPointsToLineCurves,
+  BEZIER_SAMPLES_DRAG,
 } from '../geometry/offset'
 import { remapEdgeSeamAllowances, remapProfileAssignmentsForPiece, enumerateEdges } from '../geometry/edgeEnumeration'
 import { deriveInternalSeamNotchRangeAtClick, isInternalSeamAssignment } from '../geometry/internalSeamAssignment'
@@ -510,6 +511,8 @@ type Store = {
    * Nahtzuordnungen auf der Arbeitsfläche: Verbinder, Längen-Δ, Kerben-Warnung, grüne ✓ bei Übereinstimmung.
    */
   showSeamPruefanzeigen: boolean
+  /** Weniger Hover-Hits, vereinfachte Kerben, keine Live-Prüfanzeigen/Konturmaße. */
+  performanceMode: boolean
   /**
    * Geister-Vorschau für Entspannungsnotches (nicht undo-fähig, bis „Übernehmen“).
    */
@@ -652,6 +655,7 @@ type Store = {
   setShowContourChangePreview: (v: boolean) => void
   setShowLiveBomCost: (v: boolean) => void
   setShowSeamPruefanzeigen: (v: boolean) => void
+  setPerformanceMode: (v: boolean) => void
   setSidebarCollapsed: (v: boolean) => void
   setContourEditEnabled: (v: boolean) => void
   setRulerMode: (v: boolean) => void
@@ -833,10 +837,14 @@ type Store = {
     point: Point,
     skipSeamRecalc?: boolean,
     /** Seam-Master-Drag: Kerben immer von dieser CutLine/Notch-Startlage auf die neue Cut projizieren (keine Ketten-Resyncs). */
-    notchOpts?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }
+    notchOpts?: {
+      notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] }
+      /** Günstigere Offset-Tessellation (weniger Bézier-Samples) beim Cut-Rebuild. */
+      coarseOffset?: boolean
+    }
   ) => void
   replaceSegmentWithBezier: (pieceId: string, curveIndex: number, cp1: Point, cp2?: Point) => void
-  movePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point, skipSeamRecalc?: boolean, notchOpts?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }) => void
+  movePointOnCurve: (pieceId: string, curveIndex: number, t: number, newPoint: Point, skipSeamRecalc?: boolean, notchOpts?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] }; coarseOffset?: boolean }) => void
   removeVertex: (pieceId: string, vertexIndex: number) => void
   /**
    * Rundet einen roten Eckpunkt der Master-Kontur (seamLine bei Naht, sonst cutLine) mit dem
@@ -1117,6 +1125,7 @@ export const useStore = create<Store>()(
   showContourChangePreview: false,
   showLiveBomCost: false,
   showSeamPruefanzeigen: true,
+  performanceMode: false,
   easePreview: null,
   sidebarCollapsed: false,
   contourEditEnabled: true,
@@ -1733,6 +1742,7 @@ export const useStore = create<Store>()(
   setShowContourChangePreview: (v) => set({ showContourChangePreview: v }),
   setShowLiveBomCost: (v) => set({ showLiveBomCost: v }),
   setShowSeamPruefanzeigen: (v) => set({ showSeamPruefanzeigen: v }),
+  setPerformanceMode: (v) => set({ performanceMode: v }),
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   setContourEditEnabled: (v) => set({ contourEditEnabled: v }),
   setRulerMode: (v) => set({ rulerMode: v }),
@@ -3676,7 +3686,8 @@ export const useStore = create<Store>()(
               const derived = deriveCutLineForPiece(
                 { ...p, cutLineDeviatesFromSeamAllowanceOffset: false },
                 newSeam,
-                seamAllowance
+                seamAllowance,
+                notchOpts?.coarseOffset ? { bezierSamples: BEZIER_SAMPLES_DRAG } : undefined
               )
               if (!derived.ok) {
                 toastMessage = `warn:${derived.message}`
@@ -3684,6 +3695,9 @@ export const useStore = create<Store>()(
               }
               seamLine = newSeam
               cutLine = derived.cutLine
+            } else if (useSeamMaster && skipSeamRecalc) {
+              // Drag-Preview: Master (Naht) bewegen, alte cutLine behalten bis pointerUp.
+              seamLine = nextCurves
             } else if (!useSeamMaster) {
               cutLine = nextCurves
               if (skipSeamRecalc) {
@@ -3710,7 +3724,9 @@ export const useStore = create<Store>()(
             const oldSForResync = baseline ? baseline.seamLine ?? p.seamLine : p.seamLine
             const notches = cutRebuiltFromSeam
               ? resyncNotchesViaSeamAnchor(oldNForResync, oldCForResync, cutLine, oldSForResync, seamLine)
-              : resyncNotchesAfterCutLineRebuilt(oldNForResync, oldCForResync, cutLine)
+              : skipSeamRecalc && useSeamMaster
+                ? oldNForResync
+                : resyncNotchesAfterCutLineRebuilt(oldNForResync, oldCForResync, cutLine)
             if (p.notches.length > 0 && notchPushedToCorner(oldNForResync, oldCForResync, notches, cutLine)) {
               toastMessage = 'warn:Verschiebung würde Kerbe an Ecke schieben – bitte zuerst Kerbe löschen.'
               return p
@@ -3888,13 +3904,30 @@ export const useStore = create<Store>()(
         const baseline = notchOpts?.notchResyncBaseline
         if (seamPc && p.seamAllowanceMm != null) {
           const seamLine = next
+          if (skipSeamRecalc) {
+            // Während Drag: nur Naht anpassen, Cut/Kerben erst am Ende neu ableiten.
+            const promotedSeamOnly = applySharpCornerPromotion({
+              ...p,
+              seamLine,
+            })
+            if (p.symmetryConstraint) {
+              const reconciled = finalizePieceContourEdit(promotedSeamOnly)
+              if (!reconciled.ok) {
+                toastMessage = reconciled.toastMessage
+                return p
+              }
+              return reconciled.piece
+            }
+            return promotedSeamOnly
+          }
           if (p.cutLineDeviatesFromSeamAllowanceOffset === true) {
             manualSeamTrimReset = true
           }
           const derived = deriveCutLineForPiece(
             { ...p, cutLineDeviatesFromSeamAllowanceOffset: false },
             seamLine,
-            p.seamAllowanceMm
+            p.seamAllowanceMm,
+            notchOpts?.coarseOffset ? { bezierSamples: BEZIER_SAMPLES_DRAG } : undefined,
           )
           if (!derived.ok) {
             toastMessage = `warn:${derived.message}`

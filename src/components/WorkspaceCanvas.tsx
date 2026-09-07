@@ -138,6 +138,15 @@ import { sortPiecesFacingBehind } from '../geometry/facingPiece'
 import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 import { isThicknessDerivedPiece } from '../geometry/thicknessCorrection'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
+import { perfMark, perfMeasure } from '../perf/perfMarks'
+import {
+  shouldShowSeamPruefLive,
+  shouldShowContourMeasurementsLive,
+  shouldSimplifyNotchRender,
+  nearestCurveQualityFor,
+  type InteractionQuality,
+} from '../perf/interactionQuality'
+import { hoverHitKindsAllowed, hoverHitAllowed } from '../perf/hoverHitGate'
 
 let T: CanvasTheme = canvasTheme
 /** Rasterabstand in mm (Arbeitsfläche maßstabsgetreu in mm) */
@@ -250,9 +259,12 @@ function distanceToNotchCutoutGeom(
 function distanceToNotchHoverMm(local: Point, notch: Notch, piece: PatternPiece): number {
   const depth = notch.depth
   const width = notch.width ?? 6
+  const farReject = (depth + width) * 1.5 + 8
   if (isNotchOnInternalLine(notch) && piece.internalLines.length > 0) {
     const intPos = getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)
     if (!intPos) return 1e15
+    const dAnchor = Math.hypot(local.x - intPos.position.x, local.y - intPos.position.y)
+    if (dAnchor > farReject) return dAnchor
     const intParam = resolveNotchInternalLineAnchor(notch, piece.internalLines)
     const intPts = notchCutoutPoints(
       intPos.position,
@@ -264,9 +276,11 @@ function distanceToNotchHoverMm(local: Point, notch: Notch, piece: PatternPiece)
       notch.type
     )
     if (intPts) return distanceToNotchCutoutGeom(local, intPts, intPos.position)
-    return Math.hypot(local.x - intPos.position.x, local.y - intPos.position.y)
+    return dAnchor
   }
   const cutPos = getNotchPositionAndAngleOnCutLine(notch, piece.cutLine, piece.seamLine)
+  const dCutAnchor = Math.hypot(local.x - cutPos.position.x, local.y - cutPos.position.y)
+  if (dCutAnchor > farReject) return dCutAnchor
   const cutParam = getNotchCurveIndexAndT(notch, piece.cutLine, piece.seamLine)
   const cutPts = notchCutoutPoints(cutPos.position, cutPos.angle, depth, width, piece.cutLine, cutParam, notch.type)
   let d = 1e15
@@ -279,17 +293,41 @@ function distanceToNotchHoverMm(local: Point, notch: Notch, piece: PatternPiece)
   if (piece.seamLine.length >= 3) {
     const seamPos = getNotchPositionAndAngleOnSeamLine(notch, piece.cutLine, piece.seamLine)
     if (seamPos) {
-      const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, piece.seamLine, undefined, notch.type)
-      if (seamPts) {
-        const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
-        if (dSeam < d) d = dSeam
-      } else {
-        const dSeam = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
-        if (dSeam < d) d = dSeam
+      const dSeamAnchor = Math.hypot(local.x - seamPos.position.x, local.y - seamPos.position.y)
+      if (dSeamAnchor <= farReject) {
+        const seamPts = notchCutoutPoints(seamPos.position, seamPos.angle, depth, width, piece.seamLine, undefined, notch.type)
+        if (seamPts) {
+          const dSeam = distanceToNotchCutoutGeom(local, seamPts, seamPos.position)
+          if (dSeam < d) d = dSeam
+        } else if (dSeamAnchor < d) {
+          d = dSeamAnchor
+        }
+      } else if (dSeamAnchor < d) {
+        d = dSeamAnchor
       }
     }
   }
   return d
+}
+
+/** Grobe Sichtbarkeit im Viewport (Welt-mm); für Culling vieler PieceGroups. */
+function pieceLikelyVisible(
+  piece: PatternPiece,
+  view: { zoom: number; panX: number; panY: number },
+  padMm = 80,
+): boolean {
+  const b = boundsForPieceCutLineWorld(piece)
+  if (!b) return true
+  const worldLeft = -view.panX / view.zoom
+  const worldTop = -view.panY / view.zoom
+  const worldRight = (VIEWBOX_WIDTH - view.panX) / view.zoom
+  const worldBottom = (VIEWBOX_HEIGHT - view.panY) / view.zoom
+  return !(
+    b.maxX < worldLeft - padMm ||
+    b.minX > worldRight + padMm ||
+    b.maxY < worldTop - padMm ||
+    b.minY > worldBottom + padMm
+  )
 }
 
 function workspaceImageLayout(session: {
@@ -1368,6 +1406,7 @@ const PieceGroup = memo(function PieceGroup({
   rotationUiScale,
   textUiScale,
   themeMode: _themeMode,
+  simplifyNotches = false,
 }: {
   piece: PatternPiece
   isSelected: boolean
@@ -1410,6 +1449,8 @@ const PieceGroup = memo(function PieceGroup({
   textUiScale: number
   /** Theme-Modus: nur für memo-Invalidierung, T wird modulweit gesetzt. */
   themeMode: string
+  /** Drag/Performance: Kerben-Cutouts weglassen, nur kleine Marker. */
+  simplifyNotches?: boolean
 }) {
   void _themeMode
   const ct = (base: number) => canvasTextSize(base, textUiScale)
@@ -1421,6 +1462,7 @@ const PieceGroup = memo(function PieceGroup({
     piece,
     !!cutSeamSwapped,
     notchIdBeingDragged ?? undefined,
+    simplifyNotches,
   )
   const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
   const isDialogHighlightActive = isDialogHovered
@@ -1723,7 +1765,32 @@ const PieceGroup = memo(function PieceGroup({
           />
         )
       })()}
-      {notches.map((n) => {
+      {simplifyNotches
+        ? notches.map((n) => {
+            const ease = isEaseNotch(n)
+            if (ease ? showEaseNotches === false : showNotches === false) return null
+            if (notchIdBeingDragged === n.id) return null
+            let pos: Point | null = null
+            if (isNotchOnInternalLine(n) && internalLines.length > 0) {
+              pos = getNotchPositionAndAngleOnInternalLine(n, internalLines)?.position ?? null
+            } else {
+              pos = getNotchPositionAndAngleOnCutLine(n, cutLine, seamLine).position
+            }
+            if (!pos) return null
+            return (
+              <circle
+                key={n.id}
+                cx={pos.x}
+                cy={pos.y}
+                r={1.2 * ptPs}
+                fill={ease ? T.notch.easeStroke : NOTCH_STROKE}
+                stroke="none"
+                pointerEvents="none"
+                opacity={0.85}
+              />
+            )
+          })
+        : notches.map((n) => {
         const ease = isEaseNotch(n)
         if (ease ? showEaseNotches === false : showNotches === false) return null
         if (notchIdBeingDragged === n.id) return null
@@ -2246,6 +2313,7 @@ export function WorkspaceCanvas() {
     showWorkspaceNotes,
     showContourChangePreview,
     showSeamPruefanzeigen,
+    performanceMode,
     easePreview,
     contourEditEnabled,
     rulerMode,
@@ -2394,6 +2462,7 @@ export function WorkspaceCanvas() {
       showWorkspaceNotes: s.showWorkspaceNotes,
       showContourChangePreview: s.showContourChangePreview,
       showSeamPruefanzeigen: s.showSeamPruefanzeigen,
+      performanceMode: s.performanceMode,
       contourEditEnabled: s.contourEditEnabled,
       rulerMode: s.rulerMode,
       setRulerMode: s.setRulerMode,
@@ -2673,6 +2742,8 @@ export function WorkspaceCanvas() {
       }
     | null
   >(null)
+  const draggingRef = useRef(dragging)
+  draggingRef.current = dragging
   const [workspaceNoteEditor, setWorkspaceNoteEditor] = useState<{
     noteId: string
     clientX: number
@@ -2911,6 +2982,8 @@ export function WorkspaceCanvas() {
   const cornerRoundInputRef = useRef<HTMLInputElement | null>(null)
   const notchMoveDistanceInputRef = useRef<HTMLInputElement | null>(null)
   const lastPointerClientRef = useRef({ x: 0, y: 0 })
+  const hoverRafRef = useRef<number | null>(null)
+  const processHoverPointerMoveRef = useRef<(clientX: number, clientY: number) => void>(() => {})
   /** Piece-Drag: Store-Updates max. 1× pro Frame. */
   const pieceDragRafRef = useRef<number | null>(null)
   const pieceDragLatestWorldRef = useRef<Point | null>(null)
@@ -3212,15 +3285,41 @@ export function WorkspaceCanvas() {
     return m
   }, [pieces])
 
+  const interactionQuality: InteractionQuality =
+    dragging &&
+    [
+      'piece',
+      'vertex',
+      'pointOnCurve',
+      'notchMove',
+      'rotate',
+      'pivot',
+      'grainPoint',
+      'grainLine',
+      'internalLineVertex',
+      'internalPointOnCurve',
+    ].includes(dragging.kind)
+      ? 'dragging'
+      : 'normal'
+
+  const liveSeamPruef = shouldShowSeamPruefLive(interactionQuality, showSeamPruefanzeigen, performanceMode)
+  const liveContourMeasurements = shouldShowContourMeasurementsLive(
+    interactionQuality,
+    showContourMeasurements,
+    performanceMode,
+  )
+  const simplifyNotchesLive = shouldSimplifyNotchRender(interactionQuality, performanceMode)
+  const nearestCurveQuality = nearestCurveQualityFor(interactionQuality, performanceMode)
+
   /** Naht-Prüfanzeige: teure Metriken cachen (Transform-only Moves invalidieren nicht). */
   const seamPruefCacheRef = useRef<Parameters<typeof buildSeamPruefOverlayEntries>[2]>(new Map())
   const seamPruefEntries = useMemo(() => {
-    if (!showSeamPruefanzeigen || seamAssignments.length === 0) {
+    if (!liveSeamPruef || seamAssignments.length === 0) {
       seamPruefCacheRef.current.clear()
       return [] as ReturnType<typeof buildSeamPruefOverlayEntries>
     }
     return buildSeamPruefOverlayEntries(seamAssignments, pieces, seamPruefCacheRef.current)
-  }, [showSeamPruefanzeigen, seamAssignments, pieces])
+  }, [liveSeamPruef, seamAssignments, pieces])
   const seamPruefById = useMemo(() => {
     const map = new Map<string, (typeof seamPruefEntries)[number]>()
     for (const e of seamPruefEntries) map.set(e.assignmentId, e)
@@ -5018,9 +5117,851 @@ export function WorkspaceCanvas() {
     ]
   )
 
+  const onPiecePointerDownRef = useRef(handlePointerDown)
+  onPiecePointerDownRef.current = handlePointerDown
+  const stablePiecePointerDown = useCallback((e: React.PointerEvent) => {
+    onPiecePointerDownRef.current?.(e)
+  }, [])
+
   /** Hover/Klick auf Notch – bei Überlappung mit Eckpunkt gewinnt der nähere. */
   const NOTCH_HOVER_HIT = 6
   const NOTCH_CLICK_HIT = 6
+
+  const processHoverPointerMove = (clientX: number, clientY: number) => {
+    const hitKinds = hoverHitKindsAllowed({
+      tool,
+      contourEditEnabled,
+      nahtzuordnungMode,
+      edgeSeamPickingActive,
+      horizontalLevelPickingActive,
+      pieceSymmetryState,
+      showPivotRotationUi,
+      performanceMode,
+    })
+    perfMark('hover-hit-start')
+    lastPointerClientRef.current = { x: clientX, y: clientY }
+      const ctnM = containerRef.current
+      const svgM = svgRef.current
+      const hoverVertexHitMm = ctnM
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+          )
+        : 5
+      const hoverVertexSeamHitMm = ctnM
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+          )
+        : 8
+      const hoverCurveMidHitMm = ctnM
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+          )
+        : 10
+      const pointInsertHitMmMove = ctnM
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+          )
+        : POINT_INSERT_HIT_FALLBACK_MM
+      const worldImg = toWorld(clientX, clientY)
+      if (hoverHitAllowed(hitKinds, 'pivotRotation') && tool === 'select' && showPivotRotationUi) {
+        const rotationHoverHitMm = ctnM
+          ? clampPointHitWorldMm(
+              worldHitRadiusFromScreenPx(
+                ROTATION_RING_HOVER_RADIUS_PX * canvasRotationUiScale,
+                view,
+                svgM,
+                ctnM,
+              ),
+            )
+          : 10
+        let pivotHit: { pieceId: string; dist: number } | null = null
+        let ringHit: { pieceId: string; dist: number } | null = null
+        let handleHit: { pieceId: string; dist: number } | null = null
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
+          const layout = getRotationUiLayout(p)
+          if (!layout) continue
+          const { pivot, rotationRadius: radius, handleLocal } = layout
+          if (radius <= 0) continue
+          const worldPivot = pieceLocalToWorld(pivot, p)
+          const dPivot = Math.hypot(worldImg.x - worldPivot.x, worldImg.y - worldPivot.y)
+          if (dPivot <= rotationHoverHitMm && (!pivotHit || dPivot < pivotHit.dist)) {
+            pivotHit = { pieceId: p.id, dist: dPivot }
+          }
+          const dRing = Math.abs(dPivot - radius)
+          if (dRing <= rotationHoverHitMm && (!ringHit || dRing < ringHit.dist)) {
+            ringHit = { pieceId: p.id, dist: dRing }
+          }
+          const handleWorld = pieceLocalToWorld(handleLocal, p)
+          const dHandle = Math.hypot(worldImg.x - handleWorld.x, worldImg.y - handleWorld.y)
+          if (dHandle <= rotationHoverHitMm && (!handleHit || dHandle < handleHit.dist)) {
+            handleHit = { pieceId: p.id, dist: dHandle }
+          }
+        }
+        setHoveredPivotForRotationPieceId(pivotHit?.pieceId ?? null)
+        setHoveredRotationRingPieceId(ringHit?.pieceId ?? null)
+        setHoveredRotationHandlePieceId(handleHit?.pieceId ?? null)
+      } else {
+        setHoveredPivotForRotationPieceId(null)
+        setHoveredRotationRingPieceId(null)
+        setHoveredRotationHandlePieceId(null)
+      }
+      let imgHover = false
+      if (hoverHitAllowed(hitKinds, 'image') && imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
+        if (isWorldInsideWorkspaceImage(worldImg, imageDigitizeSession)) {
+          imgHover = true
+          for (const p of pieces) {
+            if (p.cutLine.length >= 3 && isPointInsidePiece(worldToPieceLocal(worldImg, p), p)) {
+              imgHover = false
+              break
+            }
+          }
+        }
+      }
+      setHoveredWorkspaceImage(imgHover)
+      if (hoverHitAllowed(hitKinds, 'seamAssignment') && nahtzuordnungMode === 'internal') {
+        const world = worldImg
+        let bestHover: {
+          pieceId: string
+          curveIndices: number[]
+          startNotchId?: string
+          endNotchId?: string
+          distance: number
+        } | null = null
+        for (const p of pieces) {
+          const local = worldToPieceLocal(world, p)
+          if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
+          const hit = hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
+          if (hit && (!bestHover || hit.distance < bestHover.distance)) {
+            const range = deriveInternalSeamNotchRangeAtClick(p, hit.curveIndex, hit.t)
+            bestHover = {
+              pieceId: p.id,
+              curveIndices: hit.curveIndices,
+              distance: hit.distance,
+              ...(range ? { startNotchId: range.startNotchId, endNotchId: range.endNotchId } : {}),
+            }
+          }
+        }
+        setHoveredInternalSeamForNahtzuordnung(
+          bestHover
+            ? {
+                pieceId: bestHover.pieceId,
+                curveIndices: bestHover.curveIndices,
+                startNotchId: bestHover.startNotchId,
+                endNotchId: bestHover.endNotchId,
+              }
+            : null
+        )
+        setHoveredSeamForNahtzuordnung(null)
+      } else if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
+        const world = worldImg
+        let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
+        for (const p of pieces) {
+          if (!p.cutLine?.length) continue
+          const local = worldToPieceLocal(world, p)
+          if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
+          const hasSeam = p.seamLine.length >= 3
+          const curvesForHit = hasSeam ? p.seamLine : p.cutLine
+          const nearest = nearestCurveIndexAndPoint(local, curvesForHit, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+          if (hasSeam) {
+            const distToCut = nearestCurveIndexAndPoint(local, p.cutLine, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })?.distance ?? Infinity
+            if (nearest.distance >= distToCut) continue
+          }
+          const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
+          let cutCurveIndex: number
+          if (hasSeam) {
+            // Bei Nahtzugabe: curveIndex direkt von seamLine (Master-Kontur) – getCornerRange nutzt diese ebenfalls
+            cutCurveIndex = nearest.curveIndex
+          } else {
+            cutCurveIndex = nearestCut.curveIndex
+          }
+          if (!best || nearest.distance < best.distance) {
+            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
+          }
+        }
+        if (best) {
+          const range = getCornerRange(best.piece, best.curveIndex)
+          setHoveredSeamForNahtzuordnung({ pieceId: best.pieceId, curveIndices: range })
+        } else {
+          setHoveredSeamForNahtzuordnung(null)
+        }
+        setHoveredInternalSeamForNahtzuordnung(null)
+      } else {
+        setHoveredSeamForNahtzuordnung(null)
+        setHoveredInternalSeamForNahtzuordnung(null)
+      }
+      if (hoverHitAllowed(hitKinds, 'seamAssignment') && edgeSeamPickingActive && !edgeAllowancePopover) {
+        const world = worldImg
+        let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+        for (const p of pieces) {
+          if (p.seamAllowanceMm == null || p.seamLine.length < 3) continue
+          const local = worldToPieceLocal(world, p)
+          if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
+          const nearest = nearestCurveIndexAndPoint(local, p.seamLine, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+          const edges = enumerateEdges(p)
+          for (const edge of edges) {
+            if (edge.curveIndices.includes(nearest.curveIndex)) {
+              if (!bestEdge || nearest.distance < bestEdge.distance) {
+                bestEdge = { pieceId: p.id, edgeIndex: edge.edgeIndex, curveIndices: edge.curveIndices, distance: nearest.distance }
+              }
+              break
+            }
+          }
+        }
+        setHoveredEdgePicking(bestEdge)
+      } else if (!edgeSeamPickingActive) {
+        setHoveredEdgePicking(null)
+      }
+      if (tool === 'profil') {
+        const world = worldImg
+        let bestEdge: {
+          pieceId: string
+          edgeIndex: number
+          curveIndices: number[]
+          distance: number
+          startNotchId?: string
+          endNotchId?: string
+          onInternalLine?: boolean
+        } | null = null
+        for (const p of pieces) {
+          const local = worldToPieceLocal(world, p)
+          if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
+          if (p.internalLines.length > 0) {
+            const nearestInt = nearestCurveIndexAndPoint(local, p.internalLines, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+            if (nearestInt && nearestInt.distance < SEAM_HIT_MM) {
+              const curveIndices = [nearestInt.curveIndex]
+              const seg = p.internalLines[nearestInt.curveIndex]
+              const arcOnPath = seg
+                ? curveSegmentArcLength(seg, 0, nearestInt.t ?? 0)
+                : 0
+              const rangeAtClick =
+                deriveInternalProfileBoundaryRangeAtArcLength(p, curveIndices, arcOnPath) ??
+                deriveInternalProfileBoundaryRangeOnPath(p, curveIndices)
+              if (internalPathHasProfileBoundaryNotches(p, curveIndices) && !rangeAtClick) {
+                continue
+              }
+              const startNotchId = rangeAtClick?.startNotchId
+              const endNotchId = rangeAtClick?.endNotchId
+              if (!bestEdge || nearestInt.distance < bestEdge.distance) {
+                bestEdge = {
+                  pieceId: p.id,
+                  edgeIndex: nearestInt.curveIndex,
+                  curveIndices,
+                  distance: nearestInt.distance,
+                  startNotchId,
+                  endNotchId,
+                  onInternalLine: true,
+                }
+              }
+            }
+          }
+          const masterK = getCurvesForSeamEdge(p)
+          if (masterK.length < 3) continue
+          const nearest = nearestCurveIndexAndPoint(local, masterK, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
+          const edges = enumerateEdges(p)
+          for (const edge of edges) {
+            if (edge.curveIndices.includes(nearest.curveIndex)) {
+              if (!bestEdge || nearest.distance < bestEdge.distance) {
+                let startNotchId: string | undefined
+                let endNotchId: string | undefined
+                const idxInEdge = edge.curveIndices.indexOf(nearest.curveIndex)
+                if (idxInEdge >= 0) {
+                  const lengths = edge.curveIndices.map((ci) => {
+                    const seg = masterK[ci]
+                    return seg ? curveSegmentArcLength(seg, 0, 1) : 0
+                  })
+                  const prefix = lengths.slice(0, idxInEdge).reduce((a, b) => a + b, 0)
+                  const segArc = curveSegmentArcLength(masterK[nearest.curveIndex], 0, nearest.t ?? 0)
+                  const arcOnEdge = prefix + segArc
+                  const rangeAtClick =
+                    deriveContourProfileBoundaryRangeAtArcLength(p, edge.curveIndices, arcOnEdge, masterK) ??
+                    deriveContourProfileBoundaryRangeOnEdge(p, edge.curveIndices, masterK)
+                  if (edgeHasProfileBoundaryNotches(p, edge.curveIndices, masterK) && !rangeAtClick) {
+                    continue
+                  }
+                  startNotchId = rangeAtClick?.startNotchId
+                  endNotchId = rangeAtClick?.endNotchId
+                }
+                bestEdge = {
+                  pieceId: p.id,
+                  edgeIndex: edge.edgeIndex,
+                  curveIndices: edge.curveIndices,
+                  distance: nearest.distance,
+                  startNotchId,
+                  endNotchId,
+                  onInternalLine: false,
+                }
+              }
+              break
+            }
+          }
+        }
+        setHoveredProfileEdge(bestEdge)
+      } else {
+        setHoveredProfileEdge(null)
+      }
+      if (horizontalLevelPickingActive && selectedPieceIds.length === 1) {
+        const world = worldImg
+        const selId = selectedPieceIds[0]
+        const p = piecesById.get(selId)
+        let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
+        if (p) {
+          const masterK = getCurvesForSeamEdge(p)
+          if (masterK.length >= 3) {
+            const local = worldToPieceLocal(world, p)
+            const nearest = nearestCurveIndexAndPoint(local, masterK, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+            if (nearest && nearest.distance < SEAM_HIT_MM) {
+              const edges = enumerateEdges(p)
+              for (const edge of edges) {
+                if (edge.curveIndices.includes(nearest.curveIndex)) {
+                  if (masterEdgeIsStraightLine(masterK, edge)) {
+                    bestEdge = {
+                      pieceId: p.id,
+                      edgeIndex: edge.edgeIndex,
+                      curveIndices: edge.curveIndices,
+                      distance: nearest.distance,
+                    }
+                  }
+                  break
+                }
+              }
+            }
+          }
+        }
+        setHoveredHorizontalLevelEdge(bestEdge)
+      } else {
+        setHoveredHorizontalLevelEdge(null)
+      }
+      if (pieceSymmetryState?.phase === 'pickEdge' && selectedPieceIds.length === 1) {
+        const world = worldImg
+        const selId = selectedPieceIds[0]
+        const p = piecesById.get(selId)
+        let bestEdge: {
+          pieceId: string
+          edgeIndex: number
+          curveIndices: number[]
+          distance: number
+          curveHitIndex: number
+          curveHitT: number
+          snapPointLocal: Point
+        } | null = null
+        if (p && pieceSymmetryState.pieceId === p.id) {
+          const masterK = getCurvesForSeamEdge(p)
+          if (masterK.length >= 3) {
+            const local = worldToPieceLocal(world, p)
+            const nearest = nearestCurveIndexAndPoint(local, masterK, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+            if (nearest && nearest.distance < SEAM_HIT_MM) {
+              const edges = enumerateEdges(p)
+              for (const edge of edges) {
+                if (edge.curveIndices.includes(nearest.curveIndex)) {
+                  bestEdge = {
+                    pieceId: p.id,
+                    edgeIndex: edge.edgeIndex,
+                    curveIndices: edge.curveIndices,
+                    distance: nearest.distance,
+                    curveHitIndex: nearest.curveIndex,
+                    curveHitT: nearest.t ?? 0.5,
+                    snapPointLocal: { ...nearest.point },
+                  }
+                  break
+                }
+              }
+            }
+          }
+        }
+        setHoveredSymmetryEdge(bestEdge)
+      } else {
+        setHoveredSymmetryEdge(null)
+      }
+      if (pieceSymmetryState?.phase === 'pickInternalLine' && selectedPieceIds.length === 1) {
+        const p = piecesById.get(selectedPieceIds[0])
+        if (p && pieceSymmetryState.pieceId === p.id && p.internalLines.length > 0) {
+          const world = worldImg
+          const local = worldToPieceLocal(world, p)
+          const r = nearestCurveIndexAndPoint(local, p.internalLines, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (r && r.distance < SYMMETRY_INTERNAL_HOVER_MM) setHoveredSymmetryInternalIdx(r.curveIndex)
+          else setHoveredSymmetryInternalIdx(null)
+        } else {
+          setHoveredSymmetryInternalIdx(null)
+        }
+      } else {
+        setHoveredSymmetryInternalIdx(null)
+      }
+      // Bestehende Spiegelachse (Teil-Symmetrie) anfahren → Leertaste-Menü
+      if (!pieceSymmetryState && !symmetryAxisSpaceMenu) {
+        const SYMMETRY_AXIS_HIT_MM = 7
+        let bestAxis: { pieceId: string; dist: number } | null = null
+        for (const p of pieces) {
+          const sc = p.symmetryConstraint
+          if (!sc || p.cutLine.length < 3) continue
+          const local = worldToPieceLocal(worldImg, p)
+          const clipped = symmetryAxisClippedToPieceBounds(sc.axisA, sc.axisB, p.cutLine)
+          if (!clipped) continue
+          const d = distPointToSegmentMm(local, clipped.p1, clipped.p2).d
+          if (d <= SYMMETRY_AXIS_HIT_MM && (!bestAxis || d < bestAxis.dist)) {
+            bestAxis = { pieceId: p.id, dist: d }
+          }
+        }
+        setHoveredSymmetryAxis(
+          bestAxis ? { pieceId: bestAxis.pieceId, clientX, clientY } : null,
+        )
+      } else if (!symmetryAxisSpaceMenu) {
+        setHoveredSymmetryAxis(null)
+      }
+      if (
+        (hoverHitAllowed(hitKinds, 'vertex') ||
+          hoverHitAllowed(hitKinds, 'curveMid') ||
+          hoverHitAllowed(hitKinds, 'notch') ||
+          hoverHitAllowed(hitKinds, 'internalLine') ||
+          hoverHitAllowed(hitKinds, 'internalCircle')) &&
+        contourEditEnabled &&
+        showPoints &&
+        (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
+        selectedPieceIds.length > 0
+      ) {
+        const world = toWorld(clientX, clientY)
+        const piecesForHover = pieces.filter((p) => selectedPieceIds.includes(p.id))
+        const piecesForNotchHover =
+          piecesForHover.some((p) => p.notches.length > 0) ? piecesForHover : pieces
+        let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
+          dist: 1e15,
+          value: null,
+        }
+        let bestCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
+          dist: 1e15,
+          value: null,
+        }
+        for (const p of piecesForHover) {
+          if (!p || p.cutLine.length === 0) continue
+          const local = worldToPieceLocal(world, p)
+          const useSeamMaster = useSeamLineForVertexEditing(p)
+          const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
+          for (let vi = 0; vi < curvesForHover.length; vi++) {
+            if (curvesForHover.length <= 3) continue
+            const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
+            const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
+            if (d < bestVertexOnly.dist)
+              bestVertexOnly = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
+          }
+          const curvesPcHover = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          for (let ci = 0; ci < curvesPcHover.length; ci++) {
+            const c = curvesPcHover[ci]
+            if (c.type !== 'bezier') continue
+            const pt = bezierAt(c, 0.5)
+            const d = Math.hypot(local.x - pt.x, local.y - pt.y)
+            if (d < bestCurveOnly.dist)
+              bestCurveOnly = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
+          }
+        }
+        const contourHoverMerged = mergeDeletableHoverVertexVsCurve(bestVertexOnly, bestCurveOnly)
+        let bestInternalVertexOnlyH: { dist: number; value: DeletableHoverTarget | null } = {
+          dist: 1e15,
+          value: null,
+        }
+        let bestInternalCurveOnlyH: { dist: number; value: DeletableHoverTarget | null } = {
+          dist: 1e15,
+          value: null,
+        }
+        for (const p of piecesForHover) {
+          if (!p.internalLines.length) continue
+          const localIl = worldToPieceLocal(world, p)
+          for (let ci = 0; ci < p.internalLines.length; ci++) {
+            const c = p.internalLines[ci]
+            if (c.type !== 'bezier') continue
+            const pt = bezierAt(c, 0.5)
+            const d = Math.hypot(localIl.x - pt.x, localIl.y - pt.y)
+            if (d < hoverCurveMidHitMm && (!bestInternalCurveOnlyH.value || d < bestInternalCurveOnlyH.dist)) {
+              bestInternalCurveOnlyH = {
+                dist: d,
+                value: { pieceId: p.id, kind: 'internalPointOnCurve', curveIndex: ci },
+              }
+            }
+          }
+          for (const { dist, target } of collectInternalLineVertexHoverCandidates(p, localIl, hoverVertexHitMm)) {
+            if (dist < bestInternalVertexOnlyH.dist) bestInternalVertexOnlyH = { dist, value: target }
+          }
+        }
+        const internalHoverMerged = mergeInternalLineVertexVsCurve(bestInternalVertexOnlyH, bestInternalCurveOnlyH)
+        const internalCloserHover =
+          internalHoverMerged.value != null &&
+          (contourHoverMerged.value == null || internalHoverMerged.dist < contourHoverMerged.dist - 1e-9)
+        const hoverPick = internalCloserHover ? internalHoverMerged.value : contourHoverMerged.value
+        const hoverPickDist = internalCloserHover ? internalHoverMerged.dist : contourHoverMerged.dist
+        const hpPiece = hoverPick ? piecesById.get(hoverPick.pieceId) : null
+        const hoverDelMaxDist = hoverPick
+          ? hoverPick.kind === 'vertex'
+            ? hpPiece && useSeamLineForVertexEditing(hpPiece)
+              ? hoverVertexSeamHitMm
+              : hoverVertexHitMm
+            : hoverPick.kind === 'pointOnCurve' || hoverPick.kind === 'internalPointOnCurve'
+              ? hoverCurveMidHitMm
+              : hoverVertexHitMm
+          : 0
+        let bestNotch: { dist: number; pieceId: string; notchId: string } = {
+          dist: NOTCH_HOVER_HIT + 1,
+          pieceId: '',
+          notchId: '',
+        }
+        for (const p of piecesForNotchHover) {
+          const local = worldToPieceLocal(world, p)
+          for (const notch of p.notches) {
+            const d = distanceToNotchHoverMm(local, notch, p)
+            if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
+          }
+        }
+        const vertexInRange = hoverPick != null && hoverPickDist <= hoverDelMaxDist
+        const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
+        if (vertexInRange && notchInRange) {
+          setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
+          setHoveredDeletablePoint(hoverPick)
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+          setNotchPreview(null)
+          setHoveredPieceId(null)
+          return
+        } else if (notchInRange) {
+          setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
+          setHoveredDeletablePoint(null)
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+          setNotchPreview(null)
+          setHoveredPieceId(null)
+          return
+        }
+        if (vertexInRange) {
+          setHoveredDeletablePoint(hoverPick)
+          setHoveredDeletableNotch(null)
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+          setHoveredPieceId(null)
+          return
+        }
+        const INTERNAL_LINE_HOVER_HIT = 10
+        let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
+        let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
+        for (const p of piecesForHover) {
+          const local = worldToPieceLocal(world, p)
+          for (const ic of p.internalCircles) {
+            const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
+            const ringD = Math.abs(distCenter - ic.radius)
+            const diskHit = distCenter <= ic.radius + INTERNAL_LINE_HOVER_HIT
+            const hitD = diskHit ? Math.min(ringD, distCenter * 0.25 + 0.01) : ringD
+            if (
+              (diskHit || ringD < INTERNAL_LINE_HOVER_HIT) &&
+              (!bestInternalCircle || hitD < bestInternalCircle.dist)
+            ) {
+              bestInternalCircle = { dist: hitD, pieceId: p.id, circleId: ic.id }
+            }
+          }
+          if (p.internalLines.length === 0) continue
+          const r = nearestCurveIndexAndPoint(local, p.internalLines, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (r && r.distance < INTERNAL_LINE_HOVER_HIT && (!bestInternalLine || r.distance < bestInternalLine.dist)) {
+            bestInternalLine = { dist: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
+          }
+        }
+        const circlePick =
+          bestInternalCircle && (!bestInternalLine || bestInternalCircle.dist < bestInternalLine.dist)
+            ? bestInternalCircle
+            : null
+        if (circlePick) {
+          setHoveredInternalCircle({
+            pieceId: circlePick.pieceId,
+            circleId: circlePick.circleId,
+          })
+          setHoveredInternalLine(null)
+        } else if (bestInternalLine) {
+          setHoveredInternalLine({ pieceId: bestInternalLine.pieceId, curveIndex: bestInternalLine.curveIndex })
+          setHoveredInternalCircle(null)
+        } else {
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+        }
+        setHoveredDeletablePoint(null)
+        setHoveredDeletableNotch(null)
+      } else {
+        setHoveredDeletablePoint(null)
+        const worldForNotch = toWorld(clientX, clientY)
+        const selectedPiecesForNotch = selectedPieceIds.length > 0
+          ? pieces.filter((p) => selectedPieceIds.includes(p.id))
+          : []
+        const piecesForNotchHover =
+          selectedPiecesForNotch.some((p) => p.notches.length > 0) ? selectedPiecesForNotch : pieces
+        let bestNotch: { dist: number; pieceId: string; notchId: string } = {
+          dist: NOTCH_HOVER_HIT + 1,
+          pieceId: '',
+          notchId: '',
+        }
+        for (const p of piecesForNotchHover) {
+          const local = worldToPieceLocal(worldForNotch, p)
+          for (const notch of p.notches) {
+            const d = distanceToNotchHoverMm(local, notch, p)
+            if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
+          }
+        }
+        if (bestNotch.dist <= NOTCH_HOVER_HIT) {
+          setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
+          setHoveredDeletablePoint(null)
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+          setNotchPreview(null)
+          setHoveredPieceId(null)
+        } else {
+          setHoveredDeletableNotch(null)
+          if (tool === 'select' || tool === 'point' || tool === 'curvepoint') {
+            const INTERNAL_LINE_HOVER_HIT_ELSE = 10
+            let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
+            let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
+            for (const p of piecesForNotchHover) {
+              const local = worldToPieceLocal(worldForNotch, p)
+              for (const ic of p.internalCircles) {
+                const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
+                const ringD = Math.abs(distCenter - ic.radius)
+                const diskHit = distCenter <= ic.radius + INTERNAL_LINE_HOVER_HIT_ELSE
+                const hitD = diskHit ? Math.min(ringD, distCenter * 0.25 + 0.01) : ringD
+                if (
+                  (diskHit || ringD < INTERNAL_LINE_HOVER_HIT_ELSE) &&
+                  (!bestInternalCircle || hitD < bestInternalCircle.dist)
+                ) {
+                  bestInternalCircle = { dist: hitD, pieceId: p.id, circleId: ic.id }
+                }
+              }
+              if (p.internalLines.length === 0) continue
+              const r = nearestCurveIndexAndPoint(local, p.internalLines, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+              if (r && r.distance < INTERNAL_LINE_HOVER_HIT_ELSE && (!bestInternalLine || r.distance < bestInternalLine.dist)) {
+                bestInternalLine = { dist: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
+              }
+            }
+            const circlePickElse =
+              bestInternalCircle && (!bestInternalLine || bestInternalCircle.dist < bestInternalLine.dist)
+                ? bestInternalCircle
+                : null
+            if (circlePickElse) {
+              setHoveredInternalCircle({
+                pieceId: circlePickElse.pieceId,
+                circleId: circlePickElse.circleId,
+              })
+              setHoveredInternalLine(null)
+            } else if (bestInternalLine) {
+              setHoveredInternalLine({ pieceId: bestInternalLine.pieceId, curveIndex: bestInternalLine.curveIndex })
+              setHoveredInternalCircle(null)
+            } else {
+              setHoveredInternalLine(null)
+              setHoveredInternalCircle(null)
+            }
+          } else {
+            setHoveredInternalLine(null)
+            setHoveredInternalCircle(null)
+          }
+        }
+      }
+      if (hoverHitAllowed(hitKinds, 'notch') && tool === 'notch') {
+        const world = toWorld(clientX, clientY)
+        const piecesToCheck =
+          selectedPieceIds.length === 1 ? pieces.filter((p) => p.id === selectedPieceIds[0]) : pieces
+        let best: {
+          distance: number
+          piece: PatternPiece
+          r: { curveIndex: number; point: Point; t: number }
+          curves: Curve[]
+          onInternalLine: boolean
+        } | null = null
+        for (const piece of piecesToCheck) {
+          const local = worldToPieceLocal(world, piece)
+          if (piece.internalLines.length > 0) {
+            const ri = nearestCurveIndexAndPoint(local, piece.internalLines, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+            if (ri && ri.distance <= 20 && (!best || ri.distance < best.distance)) {
+              const t = ri.t ?? 0
+              best = {
+                distance: ri.distance,
+                piece,
+                r: { curveIndex: ri.curveIndex, point: ri.point, t },
+                curves: piece.internalLines,
+                onInternalLine: true,
+              }
+            }
+          }
+          const hasSeam = piece.seamLine.length >= 3
+          const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
+          const curves = hasSeam && !solidIsCut ? piece.seamLine : piece.cutLine
+          if (curves.length === 0) continue
+          const snap = findNotchContourSnapOnPiece(
+            piece,
+            local,
+            curves,
+            hoverVertexHitMm,
+            hoverVertexSeamHitMm,
+            hoverCurveMidHitMm,
+          )
+          const r = snap
+            ? {
+                curveIndex: snap.curveIndex,
+                point: snap.point,
+                t: snap.t,
+                distance: 0,
+              }
+            : nearestCurveIndexAndPoint(local, curves, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          if (!r || r.distance > 20) continue
+          const t = r.t ?? 0
+          if (!best || r.distance < best.distance) {
+            best = {
+              distance: r.distance,
+              piece,
+              r: { curveIndex: r.curveIndex, point: r.point, t },
+              curves,
+              onInternalLine: false,
+            }
+          }
+        }
+        if (best) {
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+          const { piece, r, curves, onInternalLine } = best
+          const outwardAngle = outwardNormalAngleAt(curves, r.curveIndex, r.t)
+          const angle = outwardAngle + 180
+          const dist = getNotchMeasurementDistancesOnContour(piece, curves, r.curveIndex, r.t, {
+            onInternalLine,
+          })
+          setNotchPreview({
+            pieceId: piece.id,
+            position: r.point,
+            angle,
+            curveIndex: r.curveIndex,
+            t: r.t,
+            distanceMmLeft: dist.distanceMmLeft,
+            distanceMmRight: dist.distanceMmRight,
+            storePos: r.point,
+            storeAngle: angle,
+            onInternalLine,
+          })
+        } else {
+          setNotchPreview(null)
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+        }
+        setHoveredPieceId(null)
+        return
+      }
+      setNotchPreview(null)
+      if (tool === 'kante') {
+        const world = toWorld(clientX, clientY)
+        const HOVER_SEGMENT_HIT = 12
+        let bestSeg: { distance: number; pieceId: string; curveIndex: number } | null = null
+        const piecesToCheck =
+          selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
+        for (const p of piecesToCheck) {
+          const masterK = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          if (masterK.length === 0) continue
+          const local = worldToPieceLocal(world, p)
+          const r = nearestCurveIndexAndPoint(local, masterK, { quality: nearestCurveQuality, maxDistMm: hoverCurveMidHitMm * 2 })
+          const curve = r ? masterK[r.curveIndex] : null
+          if (
+            r &&
+            curve?.type === 'line' &&
+            r.distance < HOVER_SEGMENT_HIT &&
+            (!bestSeg || r.distance < bestSeg.distance)
+          ) {
+            bestSeg = { distance: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
+          }
+        }
+        if (bestSeg) {
+          const seg = { pieceId: bestSeg.pieceId, curveIndex: bestSeg.curveIndex }
+          const pos = { clientX, clientY }
+          lastSegmentRef.current = seg
+          lastSegmentPosRef.current = pos
+          setHoveredSegment(seg)
+          setHoveredSegmentPos(pos)
+          setHoveredInternalLine(null)
+          setHoveredInternalCircle(null)
+          setHoveredPieceId(null)
+          return
+        }
+        setHoveredSegment(null)
+        setHoveredSegmentPos(null)
+        setHoveredInternalLine(null)
+        setHoveredInternalCircle(null)
+      }
+      if (tool === 'point' && selectedPieceIds.length === 1) {
+        const world = toWorld(clientX, clientY)
+        const pieceId = selectedPieceIds[0]
+        const p = piecesById.get(pieceId)
+        if (!p) {
+          setPointPreview(null)
+        } else {
+          const local = worldToPieceLocal(world, p)
+          const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          const nm = masterPv.length > 0 ? nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove) : null
+          const ni =
+            p.internalLines.length > 0
+              ? nearestInternalLineForPointInsert(p, local, pointInsertHitMmMove)
+              : null
+          const pick = ni && (!nm || ni.distance < nm.distance - 1e-9) ? ni : nm
+          if (pick) setPointPreview({ pieceId: p.id, point: pick.point })
+          else setPointPreview(null)
+        }
+      } else {
+        setPointPreview(null)
+      }
+      if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
+        const world = toWorld(clientX, clientY)
+        const pieceId = selectedPieceIds[0]
+        const p = piecesById.get(pieceId)
+        if (!p) {
+          setHoveredCurvepointSegment(null)
+          setHoveredInternalLine(null)
+        } else {
+          const local = worldToPieceLocal(world, p)
+          const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
+          const nm = masterCv.length > 0 ? nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove) : null
+          const ni =
+            p.internalLines.length > 0
+              ? nearestInternalLineForPointInsert(p, local, pointInsertHitMmMove)
+              : null
+          const pickIl = ni && (!nm || ni.distance < nm.distance - 1e-9)
+          if (pickIl && ni && p.internalLines[ni.curveIndex]?.type === 'line') {
+            setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: ni.curveIndex, internal: true })
+            setHoveredInternalLine({ pieceId: p.id, curveIndex: ni.curveIndex })
+          } else if (nm && masterCv[nm.curveIndex]?.type === 'line') {
+            setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: nm.curveIndex })
+            setHoveredInternalLine(null)
+          } else {
+            setHoveredCurvepointSegment(null)
+            setHoveredInternalLine(null)
+          }
+        }
+      } else {
+        setHoveredCurvepointSegment(null)
+      }
+      if (
+        tool === 'select' &&
+        nahtzuordnungMode !== 'first' &&
+        nahtzuordnungMode !== 'second' &&
+        nahtzuordnungMode !== 'internal'
+      ) {
+        const world = toWorld(clientX, clientY)
+        for (let i = pieces.length - 1; i >= 0; i--) {
+          const p = pieces[i]
+          const local = worldToPieceLocal(world, p)
+          if (isPointInsidePiece(local, p)) {
+            setHoveredPieceId(p.id)
+            return
+          }
+        }
+      }
+      if (tool !== 'kante') {
+        setHoveredSegment(null)
+        setHoveredSegmentPos(null)
+      }
+      setHoveredPieceId(null)
+      return
+
+    perfMeasure('hover-hit', 'hover-hit-start')
+  }
+  processHoverPointerMoveRef.current = processHoverPointerMove
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -5135,821 +6076,14 @@ export function WorkspaceCanvas() {
         return
       }
       if (!dragging) {
-        const clientX = e.clientX
-        const clientY = e.clientY
-        lastPointerClientRef.current = { x: clientX, y: clientY }
-        const ctnM = containerRef.current
-        const svgM = svgRef.current
-        const hoverVertexHitMm = ctnM
-          ? clampPointHitWorldMm(
-              worldHitRadiusFromScreenPx(VERTEX_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
-            )
-          : 5
-        const hoverVertexSeamHitMm = ctnM
-          ? clampPointHitWorldMm(
-              worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
-            )
-          : 8
-        const hoverCurveMidHitMm = ctnM
-          ? clampPointHitWorldMm(
-              worldHitRadiusFromScreenPx(POINT_ON_CURVE_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
-            )
-          : 10
-        const pointInsertHitMmMove = ctnM
-          ? clampPointHitWorldMm(
-              worldHitRadiusFromScreenPx(POINT_INSERT_HIT_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
-            )
-          : POINT_INSERT_HIT_FALLBACK_MM
-        const worldImg = toWorld(clientX, clientY)
-        if (tool === 'select' && showPivotRotationUi) {
-          const rotationHoverHitMm = ctnM
-            ? clampPointHitWorldMm(
-                worldHitRadiusFromScreenPx(
-                  ROTATION_RING_HOVER_RADIUS_PX * canvasRotationUiScale,
-                  view,
-                  svgM,
-                  ctnM,
-                ),
-              )
-            : 10
-          let pivotHit: { pieceId: string; dist: number } | null = null
-          let ringHit: { pieceId: string; dist: number } | null = null
-          let handleHit: { pieceId: string; dist: number } | null = null
-          for (let i = pieces.length - 1; i >= 0; i--) {
-            const p = pieces[i]
-            if (!selectedPieceIds.includes(p.id) || p.cutLine.length < 3) continue
-            const layout = getRotationUiLayout(p)
-            if (!layout) continue
-            const { pivot, rotationRadius: radius, handleLocal } = layout
-            if (radius <= 0) continue
-            const worldPivot = pieceLocalToWorld(pivot, p)
-            const dPivot = Math.hypot(worldImg.x - worldPivot.x, worldImg.y - worldPivot.y)
-            if (dPivot <= rotationHoverHitMm && (!pivotHit || dPivot < pivotHit.dist)) {
-              pivotHit = { pieceId: p.id, dist: dPivot }
-            }
-            const dRing = Math.abs(dPivot - radius)
-            if (dRing <= rotationHoverHitMm && (!ringHit || dRing < ringHit.dist)) {
-              ringHit = { pieceId: p.id, dist: dRing }
-            }
-            const handleWorld = pieceLocalToWorld(handleLocal, p)
-            const dHandle = Math.hypot(worldImg.x - handleWorld.x, worldImg.y - handleWorld.y)
-            if (dHandle <= rotationHoverHitMm && (!handleHit || dHandle < handleHit.dist)) {
-              handleHit = { pieceId: p.id, dist: dHandle }
-            }
-          }
-          setHoveredPivotForRotationPieceId(pivotHit?.pieceId ?? null)
-          setHoveredRotationRingPieceId(ringHit?.pieceId ?? null)
-          setHoveredRotationHandlePieceId(handleHit?.pieceId ?? null)
-        } else {
-          setHoveredPivotForRotationPieceId(null)
-          setHoveredRotationRingPieceId(null)
-          setHoveredRotationHandlePieceId(null)
-        }
-        let imgHover = false
-        if (imageDigitizeSession?.imageDataUrl && imageDigitizeSession.imageSizePx) {
-          if (isWorldInsideWorkspaceImage(worldImg, imageDigitizeSession)) {
-            imgHover = true
-            for (const p of pieces) {
-              if (p.cutLine.length >= 3 && isPointInsidePiece(worldToPieceLocal(worldImg, p), p)) {
-                imgHover = false
-                break
-              }
-            }
-          }
-        }
-        setHoveredWorkspaceImage(imgHover)
-        if (nahtzuordnungMode === 'internal') {
-          const world = worldImg
-          let bestHover: {
-            pieceId: string
-            curveIndices: number[]
-            startNotchId?: string
-            endNotchId?: string
-            distance: number
-          } | null = null
-          for (const p of pieces) {
-            const local = worldToPieceLocal(world, p)
-            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
-            const hit = hitInternalLineForSeamAssignment(local, p, SEAM_HIT_MM)
-            if (hit && (!bestHover || hit.distance < bestHover.distance)) {
-              const range = deriveInternalSeamNotchRangeAtClick(p, hit.curveIndex, hit.t)
-              bestHover = {
-                pieceId: p.id,
-                curveIndices: hit.curveIndices,
-                distance: hit.distance,
-                ...(range ? { startNotchId: range.startNotchId, endNotchId: range.endNotchId } : {}),
-              }
-            }
-          }
-          setHoveredInternalSeamForNahtzuordnung(
-            bestHover
-              ? {
-                  pieceId: bestHover.pieceId,
-                  curveIndices: bestHover.curveIndices,
-                  startNotchId: bestHover.startNotchId,
-                  endNotchId: bestHover.endNotchId,
-                }
-              : null
-          )
-          setHoveredSeamForNahtzuordnung(null)
-        } else if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
-          const world = worldImg
-          let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
-          for (const p of pieces) {
-            if (!p.cutLine?.length) continue
-            const local = worldToPieceLocal(world, p)
-            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
-            const hasSeam = p.seamLine.length >= 3
-            const curvesForHit = hasSeam ? p.seamLine : p.cutLine
-            const nearest = nearestCurveIndexAndPoint(local, curvesForHit)
-            if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
-            if (hasSeam) {
-              const distToCut = nearestCurveIndexAndPoint(local, p.cutLine)?.distance ?? Infinity
-              if (nearest.distance >= distToCut) continue
-            }
-            const nearestCut = nearestCurveIndexAndPoint(local, p.cutLine)
-            if (!nearestCut || !isClickOnInnerSideOfEdge(local, nearestCut, p.cutLine)) continue
-            let cutCurveIndex: number
-            if (hasSeam) {
-              // Bei Nahtzugabe: curveIndex direkt von seamLine (Master-Kontur) – getCornerRange nutzt diese ebenfalls
-              cutCurveIndex = nearest.curveIndex
-            } else {
-              cutCurveIndex = nearestCut.curveIndex
-            }
-            if (!best || nearest.distance < best.distance) {
-              best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
-            }
-          }
-          if (best) {
-            const range = getCornerRange(best.piece, best.curveIndex)
-            setHoveredSeamForNahtzuordnung({ pieceId: best.pieceId, curveIndices: range })
-          } else {
-            setHoveredSeamForNahtzuordnung(null)
-          }
-          setHoveredInternalSeamForNahtzuordnung(null)
-        } else {
-          setHoveredSeamForNahtzuordnung(null)
-          setHoveredInternalSeamForNahtzuordnung(null)
-        }
-        if (edgeSeamPickingActive && !edgeAllowancePopover) {
-          const world = worldImg
-          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
-          for (const p of pieces) {
-            if (p.seamAllowanceMm == null || p.seamLine.length < 3) continue
-            const local = worldToPieceLocal(world, p)
-            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
-            const nearest = nearestCurveIndexAndPoint(local, p.seamLine)
-            if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
-            const edges = enumerateEdges(p)
-            for (const edge of edges) {
-              if (edge.curveIndices.includes(nearest.curveIndex)) {
-                if (!bestEdge || nearest.distance < bestEdge.distance) {
-                  bestEdge = { pieceId: p.id, edgeIndex: edge.edgeIndex, curveIndices: edge.curveIndices, distance: nearest.distance }
-                }
-                break
-              }
-            }
-          }
-          setHoveredEdgePicking(bestEdge)
-        } else if (!edgeSeamPickingActive) {
-          setHoveredEdgePicking(null)
-        }
-        if (tool === 'profil') {
-          const world = worldImg
-          let bestEdge: {
-            pieceId: string
-            edgeIndex: number
-            curveIndices: number[]
-            distance: number
-            startNotchId?: string
-            endNotchId?: string
-            onInternalLine?: boolean
-          } | null = null
-          for (const p of pieces) {
-            const local = worldToPieceLocal(world, p)
-            if (!localPointInPieceBoundsPad(local, p, SEAM_HIT_MM)) continue
-            if (p.internalLines.length > 0) {
-              const nearestInt = nearestCurveIndexAndPoint(local, p.internalLines)
-              if (nearestInt && nearestInt.distance < SEAM_HIT_MM) {
-                const curveIndices = [nearestInt.curveIndex]
-                const seg = p.internalLines[nearestInt.curveIndex]
-                const arcOnPath = seg
-                  ? curveSegmentArcLength(seg, 0, nearestInt.t ?? 0)
-                  : 0
-                const rangeAtClick =
-                  deriveInternalProfileBoundaryRangeAtArcLength(p, curveIndices, arcOnPath) ??
-                  deriveInternalProfileBoundaryRangeOnPath(p, curveIndices)
-                if (internalPathHasProfileBoundaryNotches(p, curveIndices) && !rangeAtClick) {
-                  continue
-                }
-                const startNotchId = rangeAtClick?.startNotchId
-                const endNotchId = rangeAtClick?.endNotchId
-                if (!bestEdge || nearestInt.distance < bestEdge.distance) {
-                  bestEdge = {
-                    pieceId: p.id,
-                    edgeIndex: nearestInt.curveIndex,
-                    curveIndices,
-                    distance: nearestInt.distance,
-                    startNotchId,
-                    endNotchId,
-                    onInternalLine: true,
-                  }
-                }
-              }
-            }
-            const masterK = getCurvesForSeamEdge(p)
-            if (masterK.length < 3) continue
-            const nearest = nearestCurveIndexAndPoint(local, masterK)
-            if (!nearest || nearest.distance >= SEAM_HIT_MM) continue
-            const edges = enumerateEdges(p)
-            for (const edge of edges) {
-              if (edge.curveIndices.includes(nearest.curveIndex)) {
-                if (!bestEdge || nearest.distance < bestEdge.distance) {
-                  let startNotchId: string | undefined
-                  let endNotchId: string | undefined
-                  const idxInEdge = edge.curveIndices.indexOf(nearest.curveIndex)
-                  if (idxInEdge >= 0) {
-                    const lengths = edge.curveIndices.map((ci) => {
-                      const seg = masterK[ci]
-                      return seg ? curveSegmentArcLength(seg, 0, 1) : 0
-                    })
-                    const prefix = lengths.slice(0, idxInEdge).reduce((a, b) => a + b, 0)
-                    const segArc = curveSegmentArcLength(masterK[nearest.curveIndex], 0, nearest.t ?? 0)
-                    const arcOnEdge = prefix + segArc
-                    const rangeAtClick =
-                      deriveContourProfileBoundaryRangeAtArcLength(p, edge.curveIndices, arcOnEdge, masterK) ??
-                      deriveContourProfileBoundaryRangeOnEdge(p, edge.curveIndices, masterK)
-                    if (edgeHasProfileBoundaryNotches(p, edge.curveIndices, masterK) && !rangeAtClick) {
-                      continue
-                    }
-                    startNotchId = rangeAtClick?.startNotchId
-                    endNotchId = rangeAtClick?.endNotchId
-                  }
-                  bestEdge = {
-                    pieceId: p.id,
-                    edgeIndex: edge.edgeIndex,
-                    curveIndices: edge.curveIndices,
-                    distance: nearest.distance,
-                    startNotchId,
-                    endNotchId,
-                    onInternalLine: false,
-                  }
-                }
-                break
-              }
-            }
-          }
-          setHoveredProfileEdge(bestEdge)
-        } else {
-          setHoveredProfileEdge(null)
-        }
-        if (horizontalLevelPickingActive && selectedPieceIds.length === 1) {
-          const world = worldImg
-          const selId = selectedPieceIds[0]
-          const p = pieces.find((x) => x.id === selId)
-          let bestEdge: { pieceId: string; edgeIndex: number; curveIndices: number[]; distance: number } | null = null
-          if (p) {
-            const masterK = getCurvesForSeamEdge(p)
-            if (masterK.length >= 3) {
-              const local = worldToPieceLocal(world, p)
-              const nearest = nearestCurveIndexAndPoint(local, masterK)
-              if (nearest && nearest.distance < SEAM_HIT_MM) {
-                const edges = enumerateEdges(p)
-                for (const edge of edges) {
-                  if (edge.curveIndices.includes(nearest.curveIndex)) {
-                    if (masterEdgeIsStraightLine(masterK, edge)) {
-                      bestEdge = {
-                        pieceId: p.id,
-                        edgeIndex: edge.edgeIndex,
-                        curveIndices: edge.curveIndices,
-                        distance: nearest.distance,
-                      }
-                    }
-                    break
-                  }
-                }
-              }
-            }
-          }
-          setHoveredHorizontalLevelEdge(bestEdge)
-        } else {
-          setHoveredHorizontalLevelEdge(null)
-        }
-        if (pieceSymmetryState?.phase === 'pickEdge' && selectedPieceIds.length === 1) {
-          const world = worldImg
-          const selId = selectedPieceIds[0]
-          const p = pieces.find((x) => x.id === selId)
-          let bestEdge: {
-            pieceId: string
-            edgeIndex: number
-            curveIndices: number[]
-            distance: number
-            curveHitIndex: number
-            curveHitT: number
-            snapPointLocal: Point
-          } | null = null
-          if (p && pieceSymmetryState.pieceId === p.id) {
-            const masterK = getCurvesForSeamEdge(p)
-            if (masterK.length >= 3) {
-              const local = worldToPieceLocal(world, p)
-              const nearest = nearestCurveIndexAndPoint(local, masterK)
-              if (nearest && nearest.distance < SEAM_HIT_MM) {
-                const edges = enumerateEdges(p)
-                for (const edge of edges) {
-                  if (edge.curveIndices.includes(nearest.curveIndex)) {
-                    bestEdge = {
-                      pieceId: p.id,
-                      edgeIndex: edge.edgeIndex,
-                      curveIndices: edge.curveIndices,
-                      distance: nearest.distance,
-                      curveHitIndex: nearest.curveIndex,
-                      curveHitT: nearest.t ?? 0.5,
-                      snapPointLocal: { ...nearest.point },
-                    }
-                    break
-                  }
-                }
-              }
-            }
-          }
-          setHoveredSymmetryEdge(bestEdge)
-        } else {
-          setHoveredSymmetryEdge(null)
-        }
-        if (pieceSymmetryState?.phase === 'pickInternalLine' && selectedPieceIds.length === 1) {
-          const p = pieces.find((x) => x.id === selectedPieceIds[0])
-          if (p && pieceSymmetryState.pieceId === p.id && p.internalLines.length > 0) {
-            const world = worldImg
-            const local = worldToPieceLocal(world, p)
-            const r = nearestCurveIndexAndPoint(local, p.internalLines)
-            if (r && r.distance < SYMMETRY_INTERNAL_HOVER_MM) setHoveredSymmetryInternalIdx(r.curveIndex)
-            else setHoveredSymmetryInternalIdx(null)
-          } else {
-            setHoveredSymmetryInternalIdx(null)
-          }
-        } else {
-          setHoveredSymmetryInternalIdx(null)
-        }
-        // Bestehende Spiegelachse (Teil-Symmetrie) anfahren → Leertaste-Menü
-        if (!pieceSymmetryState && !symmetryAxisSpaceMenu) {
-          const SYMMETRY_AXIS_HIT_MM = 7
-          let bestAxis: { pieceId: string; dist: number } | null = null
-          for (const p of pieces) {
-            const sc = p.symmetryConstraint
-            if (!sc || p.cutLine.length < 3) continue
-            const local = worldToPieceLocal(worldImg, p)
-            const clipped = symmetryAxisClippedToPieceBounds(sc.axisA, sc.axisB, p.cutLine)
-            if (!clipped) continue
-            const d = distPointToSegmentMm(local, clipped.p1, clipped.p2).d
-            if (d <= SYMMETRY_AXIS_HIT_MM && (!bestAxis || d < bestAxis.dist)) {
-              bestAxis = { pieceId: p.id, dist: d }
-            }
-          }
-          setHoveredSymmetryAxis(
-            bestAxis ? { pieceId: bestAxis.pieceId, clientX, clientY } : null,
-          )
-        } else if (!symmetryAxisSpaceMenu) {
-          setHoveredSymmetryAxis(null)
-        }
-        if (
-          contourEditEnabled &&
-          showPoints &&
-          (tool === 'select' || tool === 'point' || tool === 'curvepoint') &&
-          selectedPieceIds.length > 0
-        ) {
-          const world = toWorld(clientX, clientY)
-          const piecesForHover = pieces.filter((p) => selectedPieceIds.includes(p.id))
-          const piecesForNotchHover =
-            piecesForHover.some((p) => p.notches.length > 0) ? piecesForHover : pieces
-          let bestVertexOnly: { dist: number; value: DeletableHoverTarget | null } = {
-            dist: 1e15,
-            value: null,
-          }
-          let bestCurveOnly: { dist: number; value: DeletableHoverTarget | null } = {
-            dist: 1e15,
-            value: null,
-          }
-          for (const p of piecesForHover) {
-            if (!p || p.cutLine.length === 0) continue
-            const local = worldToPieceLocal(world, p)
-            const useSeamMaster = useSeamLineForVertexEditing(p)
-            const curvesForHover = useSeamMaster ? p.seamLine : p.cutLine
-            for (let vi = 0; vi < curvesForHover.length; vi++) {
-              if (curvesForHover.length <= 3) continue
-              const vertexPos = vi === 0 ? curvesForHover[0].start : curvesForHover[vi - 1].end
-              const d = Math.hypot(local.x - vertexPos.x, local.y - vertexPos.y)
-              if (d < bestVertexOnly.dist)
-                bestVertexOnly = { dist: d, value: { pieceId: p.id, kind: 'vertex', vertexIndex: vi } }
-            }
-            const curvesPcHover = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-            for (let ci = 0; ci < curvesPcHover.length; ci++) {
-              const c = curvesPcHover[ci]
-              if (c.type !== 'bezier') continue
-              const pt = bezierAt(c, 0.5)
-              const d = Math.hypot(local.x - pt.x, local.y - pt.y)
-              if (d < bestCurveOnly.dist)
-                bestCurveOnly = { dist: d, value: { pieceId: p.id, kind: 'pointOnCurve', curveIndex: ci } }
-            }
-          }
-          const contourHoverMerged = mergeDeletableHoverVertexVsCurve(bestVertexOnly, bestCurveOnly)
-          let bestInternalVertexOnlyH: { dist: number; value: DeletableHoverTarget | null } = {
-            dist: 1e15,
-            value: null,
-          }
-          let bestInternalCurveOnlyH: { dist: number; value: DeletableHoverTarget | null } = {
-            dist: 1e15,
-            value: null,
-          }
-          for (const p of piecesForHover) {
-            if (!p.internalLines.length) continue
-            const localIl = worldToPieceLocal(world, p)
-            for (let ci = 0; ci < p.internalLines.length; ci++) {
-              const c = p.internalLines[ci]
-              if (c.type !== 'bezier') continue
-              const pt = bezierAt(c, 0.5)
-              const d = Math.hypot(localIl.x - pt.x, localIl.y - pt.y)
-              if (d < hoverCurveMidHitMm && (!bestInternalCurveOnlyH.value || d < bestInternalCurveOnlyH.dist)) {
-                bestInternalCurveOnlyH = {
-                  dist: d,
-                  value: { pieceId: p.id, kind: 'internalPointOnCurve', curveIndex: ci },
-                }
-              }
-            }
-            for (const { dist, target } of collectInternalLineVertexHoverCandidates(p, localIl, hoverVertexHitMm)) {
-              if (dist < bestInternalVertexOnlyH.dist) bestInternalVertexOnlyH = { dist, value: target }
-            }
-          }
-          const internalHoverMerged = mergeInternalLineVertexVsCurve(bestInternalVertexOnlyH, bestInternalCurveOnlyH)
-          const internalCloserHover =
-            internalHoverMerged.value != null &&
-            (contourHoverMerged.value == null || internalHoverMerged.dist < contourHoverMerged.dist - 1e-9)
-          const hoverPick = internalCloserHover ? internalHoverMerged.value : contourHoverMerged.value
-          const hoverPickDist = internalCloserHover ? internalHoverMerged.dist : contourHoverMerged.dist
-          const hpPiece = hoverPick ? pieces.find((x) => x.id === hoverPick.pieceId) : null
-          const hoverDelMaxDist = hoverPick
-            ? hoverPick.kind === 'vertex'
-              ? hpPiece && useSeamLineForVertexEditing(hpPiece)
-                ? hoverVertexSeamHitMm
-                : hoverVertexHitMm
-              : hoverPick.kind === 'pointOnCurve' || hoverPick.kind === 'internalPointOnCurve'
-                ? hoverCurveMidHitMm
-                : hoverVertexHitMm
-            : 0
-          let bestNotch: { dist: number; pieceId: string; notchId: string } = {
-            dist: NOTCH_HOVER_HIT + 1,
-            pieceId: '',
-            notchId: '',
-          }
-          for (const p of piecesForNotchHover) {
-            const local = worldToPieceLocal(world, p)
-            for (const notch of p.notches) {
-              const d = distanceToNotchHoverMm(local, notch, p)
-              if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
-            }
-          }
-          const vertexInRange = hoverPick != null && hoverPickDist <= hoverDelMaxDist
-          const notchInRange = bestNotch.dist <= NOTCH_HOVER_HIT
-          if (vertexInRange && notchInRange) {
-            setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
-            setHoveredDeletablePoint(hoverPick)
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-            setNotchPreview(null)
-            setHoveredPieceId(null)
-            return
-          } else if (notchInRange) {
-            setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
-            setHoveredDeletablePoint(null)
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-            setNotchPreview(null)
-            setHoveredPieceId(null)
-            return
-          }
-          if (vertexInRange) {
-            setHoveredDeletablePoint(hoverPick)
-            setHoveredDeletableNotch(null)
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-            setHoveredPieceId(null)
-            return
-          }
-          const INTERNAL_LINE_HOVER_HIT = 10
-          let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
-          let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
-          for (const p of piecesForHover) {
-            const local = worldToPieceLocal(world, p)
-            for (const ic of p.internalCircles) {
-              const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
-              const ringD = Math.abs(distCenter - ic.radius)
-              const diskHit = distCenter <= ic.radius + INTERNAL_LINE_HOVER_HIT
-              const hitD = diskHit ? Math.min(ringD, distCenter * 0.25 + 0.01) : ringD
-              if (
-                (diskHit || ringD < INTERNAL_LINE_HOVER_HIT) &&
-                (!bestInternalCircle || hitD < bestInternalCircle.dist)
-              ) {
-                bestInternalCircle = { dist: hitD, pieceId: p.id, circleId: ic.id }
-              }
-            }
-            if (p.internalLines.length === 0) continue
-            const r = nearestCurveIndexAndPoint(local, p.internalLines)
-            if (r && r.distance < INTERNAL_LINE_HOVER_HIT && (!bestInternalLine || r.distance < bestInternalLine.dist)) {
-              bestInternalLine = { dist: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
-            }
-          }
-          const circlePick =
-            bestInternalCircle && (!bestInternalLine || bestInternalCircle.dist < bestInternalLine.dist)
-              ? bestInternalCircle
-              : null
-          if (circlePick) {
-            setHoveredInternalCircle({
-              pieceId: circlePick.pieceId,
-              circleId: circlePick.circleId,
-            })
-            setHoveredInternalLine(null)
-          } else if (bestInternalLine) {
-            setHoveredInternalLine({ pieceId: bestInternalLine.pieceId, curveIndex: bestInternalLine.curveIndex })
-            setHoveredInternalCircle(null)
-          } else {
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-          }
-          setHoveredDeletablePoint(null)
-          setHoveredDeletableNotch(null)
-        } else {
-          setHoveredDeletablePoint(null)
-          const worldForNotch = toWorld(clientX, clientY)
-          const selectedPiecesForNotch = selectedPieceIds.length > 0
-            ? pieces.filter((p) => selectedPieceIds.includes(p.id))
-            : []
-          const piecesForNotchHover =
-            selectedPiecesForNotch.some((p) => p.notches.length > 0) ? selectedPiecesForNotch : pieces
-          let bestNotch: { dist: number; pieceId: string; notchId: string } = {
-            dist: NOTCH_HOVER_HIT + 1,
-            pieceId: '',
-            notchId: '',
-          }
-          for (const p of piecesForNotchHover) {
-            const local = worldToPieceLocal(worldForNotch, p)
-            for (const notch of p.notches) {
-              const d = distanceToNotchHoverMm(local, notch, p)
-              if (d < bestNotch.dist) bestNotch = { dist: d, pieceId: p.id, notchId: notch.id }
-            }
-          }
-          if (bestNotch.dist <= NOTCH_HOVER_HIT) {
-            setHoveredDeletableNotch({ pieceId: bestNotch.pieceId, notchId: bestNotch.notchId })
-            setHoveredDeletablePoint(null)
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-            setNotchPreview(null)
-            setHoveredPieceId(null)
-          } else {
-            setHoveredDeletableNotch(null)
-            if (tool === 'select' || tool === 'point' || tool === 'curvepoint') {
-              const INTERNAL_LINE_HOVER_HIT_ELSE = 10
-              let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
-              let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
-              for (const p of piecesForNotchHover) {
-                const local = worldToPieceLocal(worldForNotch, p)
-                for (const ic of p.internalCircles) {
-                  const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
-                  const ringD = Math.abs(distCenter - ic.radius)
-                  const diskHit = distCenter <= ic.radius + INTERNAL_LINE_HOVER_HIT_ELSE
-                  const hitD = diskHit ? Math.min(ringD, distCenter * 0.25 + 0.01) : ringD
-                  if (
-                    (diskHit || ringD < INTERNAL_LINE_HOVER_HIT_ELSE) &&
-                    (!bestInternalCircle || hitD < bestInternalCircle.dist)
-                  ) {
-                    bestInternalCircle = { dist: hitD, pieceId: p.id, circleId: ic.id }
-                  }
-                }
-                if (p.internalLines.length === 0) continue
-                const r = nearestCurveIndexAndPoint(local, p.internalLines)
-                if (r && r.distance < INTERNAL_LINE_HOVER_HIT_ELSE && (!bestInternalLine || r.distance < bestInternalLine.dist)) {
-                  bestInternalLine = { dist: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
-                }
-              }
-              const circlePickElse =
-                bestInternalCircle && (!bestInternalLine || bestInternalCircle.dist < bestInternalLine.dist)
-                  ? bestInternalCircle
-                  : null
-              if (circlePickElse) {
-                setHoveredInternalCircle({
-                  pieceId: circlePickElse.pieceId,
-                  circleId: circlePickElse.circleId,
-                })
-                setHoveredInternalLine(null)
-              } else if (bestInternalLine) {
-                setHoveredInternalLine({ pieceId: bestInternalLine.pieceId, curveIndex: bestInternalLine.curveIndex })
-                setHoveredInternalCircle(null)
-              } else {
-                setHoveredInternalLine(null)
-                setHoveredInternalCircle(null)
-              }
-            } else {
-              setHoveredInternalLine(null)
-              setHoveredInternalCircle(null)
-            }
-          }
-        }
-        if (tool === 'notch') {
-          const world = toWorld(clientX, clientY)
-          const piecesToCheck =
-            selectedPieceIds.length === 1 ? pieces.filter((p) => p.id === selectedPieceIds[0]) : pieces
-          let best: {
-            distance: number
-            piece: PatternPiece
-            r: { curveIndex: number; point: Point; t: number }
-            curves: Curve[]
-            onInternalLine: boolean
-          } | null = null
-          for (const piece of piecesToCheck) {
-            const local = worldToPieceLocal(world, piece)
-            if (piece.internalLines.length > 0) {
-              const ri = nearestCurveIndexAndPoint(local, piece.internalLines)
-              if (ri && ri.distance <= 20 && (!best || ri.distance < best.distance)) {
-                const t = ri.t ?? 0
-                best = {
-                  distance: ri.distance,
-                  piece,
-                  r: { curveIndex: ri.curveIndex, point: ri.point, t },
-                  curves: piece.internalLines,
-                  onInternalLine: true,
-                }
-              }
-            }
-            const hasSeam = piece.seamLine.length >= 3
-            const solidIsCut = !hasSeam || cutSeamSwappedSet.has(piece.id)
-            const curves = hasSeam && !solidIsCut ? piece.seamLine : piece.cutLine
-            if (curves.length === 0) continue
-            const snap = findNotchContourSnapOnPiece(
-              piece,
-              local,
-              curves,
-              hoverVertexHitMm,
-              hoverVertexSeamHitMm,
-              hoverCurveMidHitMm,
-            )
-            const r = snap
-              ? {
-                  curveIndex: snap.curveIndex,
-                  point: snap.point,
-                  t: snap.t,
-                  distance: 0,
-                }
-              : nearestCurveIndexAndPoint(local, curves)
-            if (!r || r.distance > 20) continue
-            const t = r.t ?? 0
-            if (!best || r.distance < best.distance) {
-              best = {
-                distance: r.distance,
-                piece,
-                r: { curveIndex: r.curveIndex, point: r.point, t },
-                curves,
-                onInternalLine: false,
-              }
-            }
-          }
-          if (best) {
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-            const { piece, r, curves, onInternalLine } = best
-            const outwardAngle = outwardNormalAngleAt(curves, r.curveIndex, r.t)
-            const angle = outwardAngle + 180
-            const dist = getNotchMeasurementDistancesOnContour(piece, curves, r.curveIndex, r.t, {
-              onInternalLine,
-            })
-            setNotchPreview({
-              pieceId: piece.id,
-              position: r.point,
-              angle,
-              curveIndex: r.curveIndex,
-              t: r.t,
-              distanceMmLeft: dist.distanceMmLeft,
-              distanceMmRight: dist.distanceMmRight,
-              storePos: r.point,
-              storeAngle: angle,
-              onInternalLine,
-            })
-          } else {
-            setNotchPreview(null)
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-          }
-          setHoveredPieceId(null)
-          return
-        }
-        setNotchPreview(null)
-        if (tool === 'kante') {
-          const world = toWorld(clientX, clientY)
-          const HOVER_SEGMENT_HIT = 12
-          let bestSeg: { distance: number; pieceId: string; curveIndex: number } | null = null
-          const piecesToCheck =
-            selectedPieceIds.length > 0 ? pieces.filter((p) => selectedPieceIds.includes(p.id)) : pieces
-          for (const p of piecesToCheck) {
-            const masterK = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-            if (masterK.length === 0) continue
-            const local = worldToPieceLocal(world, p)
-            const r = nearestCurveIndexAndPoint(local, masterK)
-            const curve = r ? masterK[r.curveIndex] : null
-            if (
-              r &&
-              curve?.type === 'line' &&
-              r.distance < HOVER_SEGMENT_HIT &&
-              (!bestSeg || r.distance < bestSeg.distance)
-            ) {
-              bestSeg = { distance: r.distance, pieceId: p.id, curveIndex: r.curveIndex }
-            }
-          }
-          if (bestSeg) {
-            const seg = { pieceId: bestSeg.pieceId, curveIndex: bestSeg.curveIndex }
-            const pos = { clientX, clientY }
-            lastSegmentRef.current = seg
-            lastSegmentPosRef.current = pos
-            setHoveredSegment(seg)
-            setHoveredSegmentPos(pos)
-            setHoveredInternalLine(null)
-            setHoveredInternalCircle(null)
-            setHoveredPieceId(null)
-            return
-          }
-          setHoveredSegment(null)
-          setHoveredSegmentPos(null)
-          setHoveredInternalLine(null)
-          setHoveredInternalCircle(null)
-        }
-        if (tool === 'point' && selectedPieceIds.length === 1) {
-          const world = toWorld(clientX, clientY)
-          const pieceId = selectedPieceIds[0]
-          const p = pieces.find((x) => x.id === pieceId)
-          if (!p) {
-            setPointPreview(null)
-          } else {
-            const local = worldToPieceLocal(world, p)
-            const masterPv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-            const nm = masterPv.length > 0 ? nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove) : null
-            const ni =
-              p.internalLines.length > 0
-                ? nearestInternalLineForPointInsert(p, local, pointInsertHitMmMove)
-                : null
-            const pick = ni && (!nm || ni.distance < nm.distance - 1e-9) ? ni : nm
-            if (pick) setPointPreview({ pieceId: p.id, point: pick.point })
-            else setPointPreview(null)
-          }
-        } else {
-          setPointPreview(null)
-        }
-        if (tool === 'curvepoint' && selectedPieceIds.length === 1) {
-          const world = toWorld(clientX, clientY)
-          const pieceId = selectedPieceIds[0]
-          const p = pieces.find((x) => x.id === pieceId)
-          if (!p) {
-            setHoveredCurvepointSegment(null)
-            setHoveredInternalLine(null)
-          } else {
-            const local = worldToPieceLocal(world, p)
-            const masterCv = useSeamLineForPointCurveEditing(p) ? p.seamLine : p.cutLine
-            const nm = masterCv.length > 0 ? nearestPointForMasterPointEditing(p, local, pointInsertHitMmMove) : null
-            const ni =
-              p.internalLines.length > 0
-                ? nearestInternalLineForPointInsert(p, local, pointInsertHitMmMove)
-                : null
-            const pickIl = ni && (!nm || ni.distance < nm.distance - 1e-9)
-            if (pickIl && ni && p.internalLines[ni.curveIndex]?.type === 'line') {
-              setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: ni.curveIndex, internal: true })
-              setHoveredInternalLine({ pieceId: p.id, curveIndex: ni.curveIndex })
-            } else if (nm && masterCv[nm.curveIndex]?.type === 'line') {
-              setHoveredCurvepointSegment({ pieceId: p.id, curveIndex: nm.curveIndex })
-              setHoveredInternalLine(null)
-            } else {
-              setHoveredCurvepointSegment(null)
-              setHoveredInternalLine(null)
-            }
-          }
-        } else {
-          setHoveredCurvepointSegment(null)
-        }
-        if (
-          tool === 'select' &&
-          nahtzuordnungMode !== 'first' &&
-          nahtzuordnungMode !== 'second' &&
-          nahtzuordnungMode !== 'internal'
-        ) {
-          const world = toWorld(clientX, clientY)
-          for (let i = pieces.length - 1; i >= 0; i--) {
-            const p = pieces[i]
-            const local = worldToPieceLocal(world, p)
-            if (isPointInsidePiece(local, p)) {
-              setHoveredPieceId(p.id)
-              return
-            }
-          }
-        }
-        if (tool !== 'kante') {
-          setHoveredSegment(null)
-          setHoveredSegmentPos(null)
-        }
-        setHoveredPieceId(null)
+        lastPointerClientRef.current = { x: e.clientX, y: e.clientY }
+        if (hoverRafRef.current != null) return
+        hoverRafRef.current = requestAnimationFrame(() => {
+          hoverRafRef.current = null
+          const pos = lastPointerClientRef.current
+          if (!pos || draggingRef.current) return
+          processHoverPointerMoveRef.current(pos.x, pos.y)
+        })
         return
       }
       if (dragging.kind === 'pan') {
@@ -5981,7 +6115,7 @@ export function WorkspaceCanvas() {
           }
         })
       } else if (dragging.kind === 'rotate') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
         const pivot = getPiecePivotLocal(piece)
         const worldCenter = pieceLocalToWorld(pivot, piece)
@@ -5994,7 +6128,7 @@ export function WorkspaceCanvas() {
         }
         setPieceRotation(dragging.pieceId, dragging.startRotation + deltaAngle)
       } else if (dragging.kind === 'pivot') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
         const bounds = curvesBounds(piece.cutLine)
         if (!bounds) return
@@ -6006,14 +6140,14 @@ export function WorkspaceCanvas() {
         }
         setPiecePivot(dragging.pieceId, local)
       } else if (dragging.kind === 'grainPoint') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
         const currentLine = piece.grainLine ?? getPieceGrainLine(piece)
         setGrainLine(dragging.pieceId, grainLineWithMovedEndpoint(currentLine, dragging.which, local))
       } else if (dragging.kind === 'grainLine') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
@@ -6032,7 +6166,7 @@ export function WorkspaceCanvas() {
         const current = toWorld(e.clientX, e.clientY)
         setDragging((d) => (d && d.kind === 'selectionMarquee' ? { ...d, current } : d))
       } else if (dragging.kind === 'vertex') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         let local = worldToPieceLocal(world, piece)
@@ -6048,7 +6182,7 @@ export function WorkspaceCanvas() {
           dragging.pieceId,
           dragging.vertexIndex,
           local,
-          false,
+          true,
           dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
         )
         // Nahtzuordnung: bei Längendifferenz < 5 mm und Alt/⌘/Strg → exakt auf gleiche Kantenlänge wie Gegenstück (Store: snapSeamEdgeToMatch).
@@ -6066,7 +6200,7 @@ export function WorkspaceCanvas() {
           )
         }
       } else if (dragging.kind === 'pointOnCurve') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
@@ -6081,7 +6215,7 @@ export function WorkspaceCanvas() {
           const dy = piece.seamAllowanceMm * Math.sin(rad)
           target = { x: local.x + dx, y: local.y + dy }
         }
-        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target, false, dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined)
+        movePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, target, true, dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined)
         const nextPiecePc = useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId)
         if (nextPiecePc) {
           setProfileFitPreviews(
@@ -6089,7 +6223,7 @@ export function WorkspaceCanvas() {
           )
         }
       } else if (dragging.kind === 'internalPointOnCurve') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const local = worldToPieceLocal(toWorld(e.clientX, e.clientY), piece)
         moveInternalLinePointOnCurve(dragging.pieceId, dragging.curveIndex, dragging.t, local)
@@ -6100,7 +6234,7 @@ export function WorkspaceCanvas() {
           )
         }
       } else if (dragging.kind === 'internalLineVertex') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         let local = worldToPieceLocal(toWorld(e.clientX, e.clientY), piece)
         if (e.altKey) {
@@ -6127,7 +6261,7 @@ export function WorkspaceCanvas() {
         }
       } else if (dragging.kind === 'line') {
         if (lineLengthEditor?.mode === 'draw' && lineLengthEditor.pieceId === dragging.pieceId) return
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         let current = worldToPieceLocal(world, piece)
@@ -6136,21 +6270,21 @@ export function WorkspaceCanvas() {
         }
         setDragging((d) => (d && d.kind === 'line' ? { ...d, current } : d))
       } else if (dragging.kind === 'notch') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const current = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'notch' ? { ...d, current } : d))
       } else if (dragging.kind === 'roundCorner') {
         if (cornerRoundEditor) return
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'roundCorner' ? { ...d, currentLocal: local } : d))
       } else if (dragging.kind === 'notchMove') {
         if (notchMoveDistanceEditorRef.current) return
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         const moveNotch = piece?.notches.find((n) => n.id === dragging.notchId)
         if (!piece || !moveNotch) return
         const world = toWorld(e.clientX, e.clientY)
@@ -6187,20 +6321,20 @@ export function WorkspaceCanvas() {
           setNotchPreview(null)
         }
       } else if (dragging.kind === 'drill') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const current = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'drill' ? { ...d, current } : d))
       } else if (dragging.kind === 'internalCircle') {
         if (internalCircleRadiusEditor) return
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const current = worldToPieceLocal(world, piece)
         setDragging((d) => (d && d.kind === 'internalCircle' ? { ...d, current } : d))
       } else if (dragging.kind === 'internalCircleMove') {
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
+        const piece = piecesById.get(dragging.pieceId)
         if (!piece) return
         const world = toWorld(e.clientX, e.clientY)
         const local = worldToPieceLocal(world, piece)
@@ -7502,13 +7636,49 @@ export function WorkspaceCanvas() {
           dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
         )
       }
-      // Cut-as-Master: Nahtlinie aus Schnittkante nachziehen. Bei Seam-as-Master ist seamLine die
-      // bearbeitete Kontur (updateVertex leitet cutLine schon ab) – recomputeSeamLine würde seam überschreiben.
-      const draggedPiece = pieces.find((p) => p.id === dragging.pieceId)
-      // Gleiche Master-Logik wie in der Vertex-Bearbeitung nutzen (verhindert seltene Divergenzfälle).
+      // Nach Drag mit skipSeamRecalc: Cut einmal neu ableiten (Seam-Master) bzw. Naht nachziehen (Cut-Master).
+      const draggedPiece =
+        useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId) ??
+        piecesById.get(dragging.pieceId)
       const seamIsMaster = draggedPiece != null && useSeamLineForVertexEditing(draggedPiece)
+      if (draggedPiece) {
+        const curves = seamIsMaster ? draggedPiece.seamLine : draggedPiece.cutLine
+        const vi = dragging.vertexIndex
+        if (curves.length > 0 && vi >= 0 && vi < curves.length) {
+          const pt = vi === 0 ? curves[0].start : curves[vi].start
+          updateVertex(
+            dragging.pieceId,
+            dragging.vertexIndex,
+            pt,
+            false,
+            dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined
+          )
+        }
+      }
       if (!seamIsMaster) {
         recomputeSeamLine(dragging.pieceId)
+      }
+    } else if (dragging?.kind === 'pointOnCurve') {
+      const draggedPiece =
+        useStore.getState().workspace.pieces.find((p) => p.id === dragging.pieceId) ??
+        piecesById.get(dragging.pieceId)
+      if (draggedPiece) {
+        const seamIsMaster = useSeamLineForPointCurveEditing(draggedPiece)
+        const curves = seamIsMaster ? draggedPiece.seamLine : draggedPiece.cutLine
+        const c = curves[dragging.curveIndex]
+        if (c?.type === 'bezier') {
+          const pt = pointOnCurveAt(c, dragging.t)
+          movePointOnCurve(
+            dragging.pieceId,
+            dragging.curveIndex,
+            dragging.t,
+            pt,
+            false,
+            dragging.notchStabilize ? { notchResyncBaseline: dragging.notchStabilize } : undefined,
+          )
+        } else if (!seamIsMaster) {
+          recomputeSeamLine(dragging.pieceId)
+        }
       }
     }
     if (_e && dragging?.kind === 'grainLine' && !_e.shiftKey) {
@@ -8746,6 +8916,15 @@ export function WorkspaceCanvas() {
               </g>
             )}
           {pieces.map((piece) => {
+            if (pieces.length > 8 && !pieceLikelyVisible(piece, view) && !selectedPieceIds.includes(piece.id)) {
+              return (
+                <g
+                  key={piece.id}
+                  transform={pieceGroupTransformAttr(piece)}
+                  data-piece-culled="1"
+                />
+              )
+            }
             return (
             <PieceGroup
               key={piece.id}
@@ -8772,7 +8951,7 @@ export function WorkspaceCanvas() {
               hoveredInternalCircleId={
                 hoveredInternalCircle?.pieceId === piece.id ? hoveredInternalCircle.circleId : null
               }
-              onPointerDown={handlePointerDown}
+              onPointerDown={stablePiecePointerDown}
               cutSeamSwapped={cutSeamSwappedSet.has(piece.id)}
               showGrain={showGrain}
               showGrainDragHandles={
@@ -8784,8 +8963,9 @@ export function WorkspaceCanvas() {
               showDrills={showDrills}
               showInternalLines={showInternalLines}
               showPieceNames={showPieceNames}
-              showContourMeasurements={showContourMeasurements}
+              showContourMeasurements={liveContourMeasurements}
               showPivotRotationUi={showPivotRotationUi}
+              simplifyNotches={simplifyNotchesLive}
               showRotationRing={
                 selectedPieceIds.includes(piece.id) &&
                 (hoveredPivotForRotationPieceId === piece.id ||
@@ -10338,7 +10518,7 @@ export function WorkspaceCanvas() {
               </g>
             )
           })}
-          {showSeamPruefanzeigen &&
+          {liveSeamPruef &&
             seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
               if (isInternalSeamAssignment(a)) {

@@ -86,6 +86,8 @@ export function DesignBar() {
     setShowLiveBomCost,
     showSeamPruefanzeigen,
     setShowSeamPruefanzeigen,
+    performanceMode,
+    setPerformanceMode,
     showPivotRotationUi,
     setShowPivotRotationUi,
   } = useStore(
@@ -120,6 +122,8 @@ export function DesignBar() {
       setShowLiveBomCost: s.setShowLiveBomCost,
       showSeamPruefanzeigen: s.showSeamPruefanzeigen,
       setShowSeamPruefanzeigen: s.setShowSeamPruefanzeigen,
+      performanceMode: s.performanceMode,
+      setPerformanceMode: s.setPerformanceMode,
       showPivotRotationUi: s.showPivotRotationUi,
       setShowPivotRotationUi: s.setShowPivotRotationUi,
     })),
@@ -153,6 +157,7 @@ export function DesignBar() {
         { label: 'Naht-Prüfanzeigen', checked: showSeamPruefanzeigen, toggle: setShowSeamPruefanzeigen },
         { label: 'Kontur: Vorher', checked: showContourChangePreview, toggle: setShowContourChangePreview },
         { label: 'Kosten live', checked: showLiveBomCost, toggle: setShowLiveBomCost },
+        { label: 'Performance-Modus', checked: performanceMode, toggle: setPerformanceMode },
       ],
     },
   ]

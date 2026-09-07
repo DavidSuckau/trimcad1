@@ -24,6 +24,7 @@ export function deriveCutLineForPiece(
   /** Standard: Clipper-Miter (scharfe Ecken). Tangentialer Fillet nur bei `cutCornerFillet: true` (opt-in). */
   const filletOpts: DeriveCutLineFromSeamOptions = {
     cutCornerFillet: options?.cutCornerFillet === true,
+    ...(options?.bezierSamples != null ? { bezierSamples: options.bezierSamples } : {}),
   }
   const rounded = piece.roundedCorners ?? []
   const variable = hasVariableAllowance(piece)

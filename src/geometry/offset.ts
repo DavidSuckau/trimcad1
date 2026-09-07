@@ -33,6 +33,8 @@ function fromIntPoint(ip: IntPoint): Point {
 const BEZIER_SAMPLES = 64
 /** Höhere Abtastung nur für Selbstüberschneidungs-Checks (Bézier kann sonst „durchrutschen“). */
 const BEZIER_SAMPLES_VALIDATION = 128
+/** Grobe Bézier-Abtastung während Drag-Preview (Phase C / Interaction Quality). */
+export const BEZIER_SAMPLES_DRAG = 24
 
 export type OffsetOptions = {
   joinType?: 'miter' | 'round' | 'square'
@@ -47,6 +49,8 @@ export type OffsetOptions = {
   cutCornerFillet?: boolean
   /** Offset-Backend; Default Clipper2. Optional `offsetEngine: 'clipper1'` als Fallback. */
   offsetEngine?: OffsetEngine
+  /** Bézier-Stichproben für Tessellation; Default 64. Drag-Preview: {@link BEZIER_SAMPLES_DRAG}. */
+  bezierSamples?: number
 }
 
 /** Kurven in Punktliste umwandeln; Bézier wird fein abgetastet, damit die Naht oben der Kurve folgt. */
@@ -228,7 +232,7 @@ export function clipperOffsetClosedPolygon(
     input = reverseCurves(curves)
     inputReversed = true
   }
-  const pts = curvesToPoints(input)
+  const pts = curvesToPoints(input, options?.bezierSamples ?? BEZIER_SAMPLES)
   if (pts.length < 3) {
     return { lineCurves: [], solutionPathCount: 0 }
   }
@@ -542,6 +546,8 @@ export type DeriveCutLineFromSeamResult =
 export type DeriveCutLineFromSeamOptions = {
   /** Nur bei `true`: tangentialer Fillet an Naht-Ecken. Standard: Clipper-Miter (scharf). */
   cutCornerFillet?: boolean
+  /** Bézier-Stichproben für Offset-Tessellation; Default 64. Drag: {@link BEZIER_SAMPLES_DRAG}. */
+  bezierSamples?: number
 }
 
 /**
@@ -573,7 +579,8 @@ export function deriveCutLineFromSeamWithValidation(
     }
   }
 
-  const seamFlat = curvesToPoints(seamLine)
+  const bezierSamples = deriveOptions?.bezierSamples
+  const seamFlat = curvesToPoints(seamLine, bezierSamples ?? BEZIER_SAMPLES)
   if (seamFlat.length >= 4) {
     const ring = [...seamFlat]
     if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
@@ -595,6 +602,7 @@ export function deriveCutLineFromSeamWithValidation(
       miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
       simplifyTolerance: 0.06,
       cutCornerFillet: true,
+      ...(bezierSamples != null ? { bezierSamples } : {}),
     })
     if (!poly.success || poly.lineCurves.length < 3) {
       return {
@@ -609,6 +617,7 @@ export function deriveCutLineFromSeamWithValidation(
       miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
       /** 0: keine DP-Vereinfachung — scharfe Miter-Ecken bleiben erhalten (reine Nahtzugabe). */
       simplifyTolerance: 0,
+      ...(bezierSamples != null ? { bezierSamples } : {}),
     })
     if (clip.solutionPathCount !== 1) {
       return {
@@ -643,7 +652,7 @@ export function deriveCutLineFromSeamWithValidation(
     }
   }
 
-  const cutPts = curvesToPoints(cutLine)
+  const cutPts = curvesToPoints(cutLine, bezierSamples ?? BEZIER_SAMPLES)
   if (cutPts.length >= 4) {
     const ring = [...cutPts]
     if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
@@ -691,7 +700,8 @@ export function deriveCutLineFromSeamWithVariableAllowance(
     }
   }
 
-  const seamFlat = curvesToPoints(seamLine)
+  const bezierSamples = deriveOptions?.bezierSamples
+  const seamFlat = curvesToPoints(seamLine, bezierSamples ?? BEZIER_SAMPLES)
   if (seamFlat.length >= 4) {
     const ring = [...seamFlat]
     if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
@@ -709,6 +719,7 @@ export function deriveCutLineFromSeamWithVariableAllowance(
     miterLimit: CLIPPER_MITER_LIMIT_NAHTZUGABE_OFFSET,
     simplifyTolerance: useFilletVar ? 0.06 : 0,
     cutCornerFillet: useFilletVar,
+    ...(bezierSamples != null ? { bezierSamples } : {}),
   })
 
   if (!success || raw.length < 3) {
@@ -735,7 +746,7 @@ export function deriveCutLineFromSeamWithVariableAllowance(
     }
   }
 
-  const cutPts = curvesToPoints(cutLine)
+  const cutPts = curvesToPoints(cutLine, bezierSamples ?? BEZIER_SAMPLES)
   if (cutPts.length >= 4) {
     const ring = [...cutPts]
     if (ring.length > 1 && samePoint(ring[0], ring[ring.length - 1])) ring.pop()
@@ -983,7 +994,7 @@ export function offsetClosedPolygonVariable(
   // Flatten to polyline, tracking which curveIndex each segment belongs to
   const polyPts: Point[] = []
   const polySegCurveIdx: number[] = [] // polySegCurveIdx[i] = curveIndex for segment polyPts[i]→polyPts[i+1]
-  const BS = 64
+  const BS = Math.max(8, options?.bezierSamples ?? BEZIER_SAMPLES)
 
   for (let ci = 0; ci < curves.length; ci++) {
     const c = curves[ci]

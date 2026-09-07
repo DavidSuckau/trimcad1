@@ -467,6 +467,14 @@ export const HELP_ENTRIES: HelpEntry[] = [
     access: 'Unten → Anzeige → Naht-Prüfanzeigen',
     shortcut: undefined,
   },
+  {
+    category: 'Ansicht',
+    name: 'Performance-Modus',
+    description:
+      'Reduziert Hover-Hit-Tests, vereinfacht Kerben-Darstellung und blendet Live-Prüfanzeigen sowie Konturmaße aus — nützlich bei vielen Teilen oder schwächerer Hardware.',
+    access: 'Unten → Anzeige → Erweitert → Performance-Modus',
+    shortcut: undefined,
+  },
 
   // —— Sidebar & Teile ——
   {

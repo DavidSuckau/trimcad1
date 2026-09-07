@@ -1,0 +1,395 @@
+================================================================================
+TrimTex / trim-cad.de — IDEEN ZUR PERFORMANCE-VERBESSERUNG
+================================================================================
+Stand: 2026-09-07 (aktualisiert nach Review)
+Fokus: Client-seitige Arbeitsfläche (SVG/React/Geometrie), nicht Hosting.
+
+Leitprinzip (wichtigster Satz):
+  Nicht „Wie machen wir das SVG schneller?“
+  sondern „Wie schaffen wir es, dass bei einer Mausbewegung möglichst
+  wenig Arbeit passiert?“
+
+Nicht alles umsetzen. Erst Phase 0 (messen) + A + B, dann erneut messen.
+WebGL vorerst vergessen.
+
+
+--------------------------------------------------------------------------------
+LEITBILD: WAS EIN MAUSMOVE HEUTE OFT TUT vs. ZIEL
+--------------------------------------------------------------------------------
+
+Heute (typisches Anti-Pattern — je nach Pfad unterschiedlich stark):
+
+  mousemove
+     ↓
+  React / Zustand
+     ↓
+  Workspace neu berechnen / referenzieren
+     ↓
+  alle Pieces durchlaufen
+     ↓
+  Hit-Tests (Piece, Segment, Seam, Notch, Pivot, …)
+     ↓
+  Bézier nearestOnCurve
+     ↓
+  Notches / Seam-Prüfung
+     ↓
+  SVG aktualisieren
+
+Ziel:
+
+  mousemove
+     ↓
+  letzte Position merken
+     ↓
+  requestAnimationFrame (max. ~1× pro Frame)
+     ↓
+  nur relevante Hit-Tests (Mode-Gate)
+     ↓
+  nur betroffene UI aktualisieren (Render-Isolation)
+
+
+--------------------------------------------------------------------------------
+BEWERTUNGSTABELLE (Review)
+--------------------------------------------------------------------------------
+Maßnahme                         Wirkung   Aufwand        Empfehlung
+---------------------------------------------------------------------------
+5.4 / Phase 0 Profiling          🔥🔥🔥    gering         ZUERST (30–60 min)
+1.1 Pointer rAF-Throttle         🔥🔥🔥    gering         sofort
+1.2 Mode-Gate Hit-Tests          🔥🔥🔥    gering–mittel  sofort
+1.3 nearestOnCurve staffeln      🔥🔥🔥    mittel         sehr wichtig
+1.4 Notch-Hover vereinfachen     🔥🔥      gering         machen
+1.5 piecesById flächendeckend    🔥        gering         machen
+2.1 Granulare Store-Selektoren   🔥🔥🔥    mittel         sehr wichtig
+2.2 PieceGroup stabilisieren     🔥🔥🔥    mittel         sehr wichtig
+2.3 Revision / Fingerprint       🔥🔥      mittel         danach
+2.4 Canvas splitten              🔥        hoch           noch nicht
+3.1 Path-Cache                   🔥🔥🔥    mittel         machen
+3.3 Viewport-Culling             🔥🔥🔥*   mittel         machen (*große Projekte)
+4.1 Offset während Drag grob     🔥🔥🔥    mittel         sehr wichtig
+4.3 Notch-Resync entkoppeln      🔥🔥      mittel         wenn Spikes
+4.4 Worker                       🔥🔥      mittel–hoch    nur schwere Jobs
+5.2 Bundle                       🔥        gering         später
+5.5 Performance-Modus            🔥🔥      gering         sehr sinnvoll
++ Interaction Quality Levels     🔥🔥🔥    mittel         ergänzen (s.u.)
+WebGL / Hybrid-Canvas            ?         sehr hoch      vorerst vergessen
+
+* Culling lohnt vor allem ab vielen Teilen / großem Zoom-Out.
+
+
+--------------------------------------------------------------------------------
+0) BEREITS GEMACHT (Kurz — nicht doppelt planen)
+--------------------------------------------------------------------------------
+- stableSetState / Hover ohne unnötige setState
+- AABB-Vorfilter bei Piece-Hit-Tests (teilweise)
+- seamPruefOverlayModel mit Cache
+- Sub-Diff-Labels nur bei Hover / Abweichung
+- Piece-Drag bereits per requestAnimationFrame gebündelt
+- piecesById-Map (teilweise genutzt)
+- PieceGroup = React.memo + useShallow (Memo oft durch Inline-Handler geschwächt)
+- Undo (zundo) während Drag pausieren
+- Nesting im Web Worker
+- Schwere UI (Scan3D / Seat3D / PDF) per Lazy-Import
+
+Hinweis: Weitere Caching-Schichten allein lösen das Kernproblem nicht.
+Hebel = weniger Arbeit pro Pointer-Event und pro React-Render.
+
+
+--------------------------------------------------------------------------------
+PHASE 0 — PROFILING ZUERST (30–60 Minuten)
+--------------------------------------------------------------------------------
+Ohne Messung raten wir. Vor jeder größeren Code-Änderung einmal Baseline.
+
+Szenarien:
+  A) 5 Teile, wenig Kerben
+  B) 20 Teile + viele Zuordnungen + Prüfanzeigen an
+  C) 1 komplexes Teil + 50+ Kerben (inkl. Ease)
+
+Je Szenario Aktionen:
+  - Hover (leer über Fläche / über Kontur)
+  - Piece verschieben
+  - Vertex verschieben
+  - Naht-Hover / Prüfanzeige
+  - Zoom / Pan
+
+Metriken (Chrome Performance + React Profiler; optional performance.mark):
+  - Frame time (ms)
+  - JS execution time
+  - React render time
+  - Hit-test time
+  - Path generation time
+
+Beispiel-Erkenntnis (Ziel der Messung):
+  Hover = 22 ms
+    davon Hit-Test = 15 ms
+    React         =  4 ms
+    SVG           =  3 ms
+  → Dann klar: zuerst Hit-Test, nicht SVG.
+
+Ergebnisse kurz hier oder in einem Anhang notieren (Datum, Browser, Gerät).
+
+
+--------------------------------------------------------------------------------
+1) POINTER / HIT-TESTS (Phase A — nach Profiling)
+--------------------------------------------------------------------------------
+
+1.1 Pointer rAF-Throttle (bester erster Code-Schritt)
+    Problem: 150–300 mousemove/s → jede Bewegung triggert teure Hits.
+    Lösung:
+      Pointer-Events → letzte Position speichern → ein rAF → Hit-Test
+    → praktisch max. ~60–120 Berechnungen/s statt jede Bewegung.
+    Wichtig: Drag nicht unnötig ausbremsen (Piece-Drag ist schon rAF).
+    Neuer Throttle betrifft vor allem Hover / Hit-Test, nicht Commit-Logik.
+    Datei: WorkspaceCanvas.tsx
+
+1.2 Mode-Gate Hit-Tests (extrem günstiger Gewinn)
+    Beim Piece-Verschieben nicht alles prüfen:
+      Piece + Segment + Seam + Notch + Pivot + Profile + Measurement …
+    Sondern je Tool/Modus nur das Nötige, z. B.:
+      SELECT      → Piece-Hit (ggf. Notch wenn Kontur-Edit)
+      SEAM TOOL   → Seam-Hit
+      NOTCH TOOL  → Notch-Hit
+      VERTEX TOOL → Vertex-Hit
+    Frühabbruch + klare Mode-Tabelle.
+
+1.3 nearestOnCurve entschärfen (Architektur)
+    Pointer → AABB → Kandidaten → grobes Bézier-Sampling
+         → nur bei echtem Treffer feines Sampling / Refine
+    Hover: grob; Drag-Snap / Commit: fein.
+    Segment-AABB: Kurve skippen wenn weit weg.
+
+1.4 Notch-Hover vereinfachen
+    Nicht sofort volle Cutout-Geometrie bauen.
+    Zuerst Distanz zum Anker / Strich; Cutout nur wenn nah genug.
+
+1.5 piecesById flächendeckend
+    Alle pieces.find im Canvas ersetzen — geringer Aufwand, sauber.
+
+
+--------------------------------------------------------------------------------
+2) REACT RENDER-ISOLATION (Phase B — oft der größte Hebel)
+--------------------------------------------------------------------------------
+
+Kernproblem heute (sinngemäß):
+
+  Piece 17 ändert Transform
+       ↓
+  workspace ändert sich
+       ↓
+  Canvas rendert
+       ↓
+  viele/alle Pieces bekommen neue Props
+
+Ziel:
+
+  Piece 17 ändert sich → nur Piece 17 (+ ggf. Overlay 17) neu
+  Piece 1…16, 18…n    → bleiben (memo hält)
+
+2.1 Granulare Store-Selektoren / Drag-Preview
+    - Nicht das ganze `workspace` an den Canvas hängen.
+    - Beim Verschieben: lokale Preview-Transform oder nur bewegtes Teil
+      invalidieren; unbewegte PieceGroups unberührt lassen.
+
+2.2 PieceGroup stabilisieren (Memo wirklich wirksam)
+    - Inline-Handler im pieces.map → neue Funktions-Props → memo wirkungslos.
+    - Stabile Handler (Ref + pieceId) oder Context.
+    - Props möglichst Primives / stabile Referenzen.
+
+2.3 Revision / Fingerprint (danach)
+    - geomEpoch / transformEpoch / notchEpoch
+    - memo vergleicht Epochs statt tiefer Objektgleichheit.
+
+2.4 Canvas-Monolith splitten
+    - Hoher Aufwand, Wirkung erst nach A/B — noch nicht priorisieren.
+    - Später Wartbarkeit (LOP-043), nicht als erster Perf-Hebel.
+
+
+--------------------------------------------------------------------------------
+3) PATH-CACHE, CULLING, LOD (nach A/B bzw. wenn Messung es zeigt)
+--------------------------------------------------------------------------------
+
+3.1 Path-Cache (sehr sinnvoll)
+    Geometrie ≠ Transform ≠ View.
+    Cache-Key ungefähr:
+      pieceId + geomEpoch + notchEpoch + displayMode
+    NICHT an: zoom, pan, pointerPosition.
+    Verschieben/Zoomen darf Konturpfade nicht neu erzeugen
+    (Transform bleibt SVG-group-Attribut).
+
+3.2 LOD Kerben (später)
+    Zoom-out / DRAGGING: einfache Striche statt voller Cutouts.
+
+3.3 Viewport-Culling
+    Teile außerhalb der ViewBox nicht voll mounten (oder AABB-Platzhalter).
+    Besonders bei großen Projekten.
+
+3.4 SVG-Node-Budget
+    Ease/Maße/Prüfanzeigen: Cluster, Hover-only, oder während Drag aus.
+
+3.5 WebGL / Hybrid
+    VORERST VERGESSEN.
+    Erst: Throttle → Hit-Test → React → Cache → Culling → LOD.
+    Nur wenn danach noch nicht reicht: Hybrid diskutieren.
+
+
+--------------------------------------------------------------------------------
+4) GEOMETRIE WÄHREND DRAG (Phase C — Spikes)
+--------------------------------------------------------------------------------
+
+4.1 Offset während Drag vereinfachen
+    Vertex-Drag: grobe Preview / Seam-only; voller Clipper am Ende.
+
+4.2 Tessellation staffeln
+    Drag grob (16–24), Final/Export fein (64+).
+
+4.3 Notch-Resync entkoppeln
+    Nicht jedes Pointer-Event; Drag-Ende oder gedrosselt — wenn Profiler Spikes zeigt.
+
+4.4 Worker
+    Nur wirklich schwere Jobs (großes Offset, Massen-Resync, …).
+    Nesting ist schon Worker. Serialisierung beachten.
+
+4.5 Batch-Store-Updates (LOP-055 Rest)
+    Eine Aktion = ein set().
+
+
+--------------------------------------------------------------------------------
+5) INTERACTION QUALITY LEVELS (Ergänzung — sehr CAD-typisch)
+--------------------------------------------------------------------------------
+Nicht nur ein manueller „Performance-Schalter“, sondern automatisch
+während aktiver Interaktion herunterregeln:
+
+  NORMAL (Idle / Hover ruhig)
+    ├─ volle Konturen
+    ├─ Kerben (voll)
+    ├─ Prüfanzeigen (wenn eingeschaltet)
+    ├─ Maße (wenn eingeschaltet)
+    └─ Hover-Hits (bereits rAF + Mode-Gate)
+
+  DRAGGING (Piece / Vertex / Notch-Move aktiv)
+    ├─ Konturen
+    ├─ vereinfachte Kerben (LOD)
+    ├─ keine teuren Prüfanzeigen / Seam-Metriken live
+    ├─ vereinfachtes Bézier (grobes Sampling)
+    └─ Ziel: „Wo ist mein Teil gerade?“ — nicht jede Nebenrechnung
+
+  IDLE (nach Loslassen)
+    └─ alles wieder vollständig (ein Commit-Pass)
+
+Begründung: Während des Ziehens braucht der Nutzer Lage-Feedback,
+nicht gleichzeitige Nahtprüfung + alle Maße + volle Kerbengeometrie.
+
+Dazu optional manueller Performance-Modus (5.5):
+  Prüfanzeigen aus, Maße aus, aggressiverer Throttle, LOD dauerhaft —
+  für Demos / große Lederprojekte.
+
+
+--------------------------------------------------------------------------------
+6) SONSTIGES (niedrigere Priorität)
+--------------------------------------------------------------------------------
+5.1 Unbenutzte Dependencies (z. B. bezier-js) entfernen
+5.2 Bundle visualisieren — später
+5.3 WASM/3D lazy belassen
+2.5 Anzeige-Flags als Quick Win kommunizieren (UI-Hinweis)
+
+
+--------------------------------------------------------------------------------
+7) VERBINDLICHE REIHENFOLGE (nach Review)
+--------------------------------------------------------------------------------
+
+  0. PROFILING (Baseline, 30–60 min)
+        ↓
+  1. Pointer rAF (Hover/Hit)
+        ↓
+  2. Mode-Gate Hit-Tests
+        ↓
+  3. nearestOnCurve optimieren (+ Notch-Hover grob)
+        ↓
+  4. React Render-Isolation (2.1 + 2.2; piecesById mitnehmen)
+        ↓
+  5. Path-Cache (3.1)
+        ↓
+  6. Viewport-Culling (3.3)
+        ↓
+  7. Drag-Geometrie vereinfachen (4.1 / 4.3) + Interaction Quality Levels
+        ↓
+  8. LOD
+        ↓
+  9. erst dann Canvas-Split / WebGL (wenn nötig)
+
+Nach Phase 1–4 und erneut nach 5–7: messen und entscheiden, was noch fehlt.
+Nicht „noch mehr Caching“ blind stapeln.
+
+
+--------------------------------------------------------------------------------
+8) WAS WIR BEWUSST NICHT ALS ERSTE LÖSUNG SEHEN
+--------------------------------------------------------------------------------
+- SVG allein „schneller machen“, während mousemove die ganze Pipeline triggert
+- Server-seitiges Rendering der Arbeitsfläche
+- Alles auf WebGL umschreiben, bevor Throttle/Hit/React/Cache/Culling/LOD ausgereizt
+- Canvas-Monolith splitten nur wegen Perf (zu teuer zuerst)
+- Aggressive Memoization ohne Profiler (falsche Props → null Effekt)
+- Mehr Caching als Ersatz für weniger Arbeit pro Event
+
+
+--------------------------------------------------------------------------------
+9) QUICK WINS AUS NUTZERSICHT (ohne Code)
+--------------------------------------------------------------------------------
+- Anzeige → Naht-Prüfanzeigen aus, wenn nicht gebraucht
+- Konturmaße nur bei Bedarf
+- Entspannung-/Kerben-Layer toggeln beim Aufräumen
+- Weniger gleichzeitige Overlay-Modi
+
+
+--------------------------------------------------------------------------------
+10) MESS-PROTOKOLL (Vorlage)
+--------------------------------------------------------------------------------
+Datum:
+Browser / Gerät:
+Build / Commit:
+
+Szenario A/B/C | Aktion        | Frame ms | Hit ms | React ms | Path ms | Notiz
+---------------|---------------|----------|--------|----------|---------|------
+A              | Hover         |          |        |          |         |
+A              | Piece-Drag    |          |        |          |         |
+B              | Naht-Hover    |          |        |          |         |
+C              | Vertex-Drag   |          |        |          |         |
+…              |               |          |        |          |         |
+
+
+--------------------------------------------------------------------------------
+UMSETZUNGSSTATUS (Code, 2026-09-07)
+--------------------------------------------------------------------------------
+Erledigt im Code:
+  [x] 1.1 Pointer rAF-Throttle (Hover)
+  [x] 1.2 Mode-Gate (hoverHitGate)
+  [x] 1.3 nearestOnCurve coarse/fine + AABB-Skip
+  [x] 1.4 Notch-Hover Far-Reject
+  [x] 1.5 piecesById in Hot-Paths (Move/Hover; Rest schrittweise)
+  [x] 2.1/2.2 teilweise: Live-Flags, stabile PieceGroup onPointerDown,
+      Interaction Quality während Drag
+  [x] 3.1 Path-Cache (pieceSolidContourPath LRU)
+  [x] 3.3 Viewport-Culling (ab >8 Teilen)
+  [x] 4.1/4.3 Vertex/PointOnCurve: skipSeamRecalc während Drag, Rebuild am Ende;
+      BEZIER_SAMPLES_DRAG / coarseOffset
+  [x] 5.1 bezier-js entfernt
+  [x] 5.4 perfMarks (DEV / __TRIMTEX_PERF__)
+  [x] 5.5 Performance-Modus (Store + DesignBar + Hilfe)
+  [x] Interaction Quality Levels (NORMAL/DRAGGING)
+
+Bewusst nicht / später:
+  [ ] Phase 0 manuelles Profiling-Protokoll (Vorlage in §10 — Messung durch Menschen)
+  [ ] 2.3 voller geomEpoch-Fingerprint an allen Memos
+  [ ] 2.4 Canvas-Monolith splitten
+  [ ] 3.5 / 9 WebGL
+  [ ] 4.4 weitere Worker
+  [ ] 5.2 Bundle-Visualizer
+
+Module:
+  src/perf/perfMarks.ts
+  src/perf/interactionQuality.ts
+  src/perf/hoverHitGate.ts
+  + Anbindung WorkspaceCanvas / useStore / DesignBar / pieceSolidContourPath / nearestOnCurve / offset
+
+================================================================================
+Ende — Umsetzung als Issues/LOPs; nach jedem Block erneut Phase-0-Messung.
+================================================================================
