@@ -210,7 +210,8 @@ export function mirrorOffsetBesideParent(parent: PatternPiece): Point {
 
 /**
  * Synchronisiert alle Spiegelkopien aus ihren Mutterteilen.
- * Behält Transform, id, number, name, material, grainLine und mirrorParentId der Kinder.
+ * Behält Transform, id, number, name, grainLine und mirrorParentId der Kinder.
+ * Material folgt immer der Mutter.
  */
 export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
@@ -227,7 +228,7 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       id: p.id,
       number: p.number,
       name: p.name,
-      material: p.material ?? '',
+      material: parent.material ?? '',
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,
@@ -245,19 +246,32 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
 
 /** Kaschierungen + Spiegelkopien nach Mutter-Änderung aktualisieren. */
 export function syncLinkedPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
-  return syncMirrorPiecesFromParents(syncFacingPiecesFromParents(pieces))
+  // Spiegel zuerst, danach Kaschierungen — damit Kaschierungen von Spiegelkopien
+  // die bereits aktualisierte Spiegel-Geometrie (und das Mutter-Material) übernehmen.
+  return syncFacingPiecesFromParents(syncMirrorPiecesFromParents(pieces))
 }
 
 export function mirrorChildIds(pieces: PatternPiece[], parentId: string): string[] {
   return pieces.filter((p) => p.mirrorParentId === parentId).map((p) => p.id)
 }
 
-/** Alle abhängigen Töchter (Kaschierung + Spiegelkopie) einer Mutter. */
+/** Alle abhängigen Töchter (Kaschierung + Spiegelkopie) einer Mutter, rekursiv. */
 export function linkedChildIds(pieces: PatternPiece[], parentId: string): string[] {
-  return [
-    ...pieces.filter((p) => p.facingParentId === parentId).map((p) => p.id),
-    ...pieces.filter((p) => p.mirrorParentId === parentId).map((p) => p.id),
-  ]
+  const out: string[] = []
+  const seen = new Set<string>()
+  const stack = [parentId]
+  while (stack.length > 0) {
+    const id = stack.pop()!
+    for (const p of pieces) {
+      if (seen.has(p.id)) continue
+      if (p.facingParentId === id || p.mirrorParentId === id) {
+        seen.add(p.id)
+        out.push(p.id)
+        stack.push(p.id)
+      }
+    }
+  }
+  return out
 }
 
 export function isMirrorDerivedPiece(piece: PatternPiece | null | undefined): boolean {

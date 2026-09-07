@@ -127,16 +127,47 @@ describe('createMirrorPiece', () => {
     expect(useStore.getState().toastMessage).toMatch(/abhängige/)
   })
 
-  it('erlaubt Material an der Spiegelkopie und behält es beim Sync', () => {
+  it('übernimmt Material von der Mutter und sperrt es am Kind', () => {
+    useStore.getState().updatePiece('parent', { material: 'Leder' })
     const childId = useStore.getState().createMirrorPiece('parent')!
-    useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
-    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe(
-      'Futterstoff'
-    )
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Leder')
 
-    useStore.getState().updateVertex('parent', 0, { x: -20, y: -10 })
-    const childAfter = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
-    expect(childAfter.material).toBe('Futterstoff')
-    expect(childAfter.mirrorParentId).toBe('parent')
+    useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Leder')
+    expect(useStore.getState().toastMessage).toMatch(/Material/)
+
+    useStore.getState().updatePiece('parent', { material: 'Canvas' })
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Canvas')
+  })
+
+  it('legt bei vorhandener Kaschierung automatisch eine Kaschierung der Spiegelkopie an', () => {
+    const facingId = useStore.getState().createFacingPiece('parent')!
+    const mirrorId = useStore.getState().createMirrorPiece('parent')!
+    const pieces = useStore.getState().workspace.pieces
+    expect(pieces).toHaveLength(4)
+    const mirrorFacing = pieces.find((p) => p.facingParentId === mirrorId)
+    expect(mirrorFacing).toBeTruthy()
+    expect(mirrorFacing!.kind).toBe('facing')
+    expect(pieces.find((p) => p.id === facingId)!.facingParentId).toBe('parent')
+  })
+
+  it('legt nachträglich Kaschierungen für bestehende Spiegelkopien an', () => {
+    const mirrorId = useStore.getState().createMirrorPiece('parent')!
+    expect(useStore.getState().workspace.pieces.filter((p) => p.facingParentId === mirrorId)).toHaveLength(0)
+
+    useStore.getState().createFacingPiece('parent')
+    const mirrorFacing = useStore.getState().workspace.pieces.find((p) => p.facingParentId === mirrorId)
+    expect(mirrorFacing).toBeTruthy()
+    expect(mirrorFacing!.kind).toBe('facing')
+  })
+
+  it('löscht Kaschierung der Spiegelkopie mit der Mutter', () => {
+    useStore.getState().createFacingPiece('parent')
+    const mirrorId = useStore.getState().createMirrorPiece('parent')!
+    const nestedFacingId = useStore.getState().workspace.pieces.find((p) => p.facingParentId === mirrorId)!.id
+    useStore.getState().deletePiece('parent')
+    const ids = useStore.getState().workspace.pieces.map((p) => p.id)
+    expect(ids).toEqual([])
+    expect(ids).not.toContain(nestedFacingId)
   })
 })

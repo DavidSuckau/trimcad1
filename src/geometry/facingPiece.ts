@@ -230,7 +230,8 @@ export function facingOffsetBesideParent(parent: PatternPiece): Point {
 
 /**
  * Synchronisiert alle Kaschierungen in der Piece-Liste aus ihren Mutterteilen.
- * Behält Transform, id, number, name, material, grainLine und facingParentId der Kinder.
+ * Behält Transform, id, number, name, grainLine und facingParentId der Kinder.
+ * Material folgt immer der Mutter (auch wenn die Mutter selbst eine Spiegelkopie ist).
  */
 export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
@@ -239,8 +240,7 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
     const parentId = p.facingParentId
     if (!parentId) return p
     const parent = byId.get(parentId)
-    if (!parent || parent.facingParentId || parent.kind === 'facing' || parent.mirrorParentId || parent.kind === 'mirror')
-      return p
+    if (!parent || parent.facingParentId || parent.kind === 'facing') return p
     const geom = buildFacingGeometryFromParent(parent)
     const synced: PatternPiece = {
       ...p,
@@ -248,7 +248,7 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       id: p.id,
       number: p.number,
       name: p.name,
-      material: p.material ?? '',
+      material: parent.material ?? '',
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,

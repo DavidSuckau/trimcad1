@@ -109,12 +109,16 @@ import { profileAssignmentLengthMm } from '../geometry/internalLineProfile'
 import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece'
 import {
   buildFacingGeometryFromParent,
+  facingChildIds,
   facingOffsetBesideParent,
+  isFacingDerivedPiece,
 } from '../geometry/facingPiece'
 import {
   buildMirrorGeometryFromParent,
   isLinkedDerivedPiece,
+  isMirrorDerivedPiece,
   linkedChildIds,
+  mirrorChildIds,
   mirrorOffsetBesideParent,
   syncLinkedPiecesFromParents,
 } from '../geometry/mirrorPiece'
@@ -258,6 +262,9 @@ function cloneCurvesArray(curves: Curve[]): Curve[] {
 
 const FACING_GEOMETRY_LOCKED_TOAST =
   'info:Abhängige Teile (Kaschierung/Spiegelkopie) werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
+
+const LINKED_MATERIAL_LOCKED_TOAST =
+  'info:Material folgt dem Mutterteil und kann bei abhängigen Teilen nicht geändert werden.'
 
 const FACING_GEOMETRY_UPDATE_KEYS: (keyof PatternPiece)[] = [
   'cutLine',
@@ -1122,14 +1129,24 @@ export const useStore = create<Store>()(
 
   updatePiece: (id, upd) =>
     set((s) => {
-      if (isLinkedDerivedPiece(s.workspace.pieces.find((p) => p.id === id)) && updateTouchesFacingGeometry(upd)) {
+      const target = s.workspace.pieces.find((p) => p.id === id)
+      if (isLinkedDerivedPiece(target) && updateTouchesFacingGeometry(upd)) {
         return { toastMessage: FACING_GEOMETRY_LOCKED_TOAST }
       }
+      let patch: Partial<PatternPiece> = upd
       let toastMessage: string | null = null
+      if (isLinkedDerivedPiece(target) && Object.prototype.hasOwnProperty.call(upd, 'material')) {
+        const { material: _lockedMaterial, ...rest } = upd
+        if (Object.keys(rest).length === 0) {
+          return { toastMessage: LINKED_MATERIAL_LOCKED_TOAST }
+        }
+        patch = rest
+        toastMessage = LINKED_MATERIAL_LOCKED_TOAST
+      }
       let didDeriveCutLineFromSeam = false
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== id) return p
-        const next = { ...p, ...upd }
+        const next = { ...p, ...patch }
         if (next.seamAllowanceMm != null) {
           if (next.seamLine.length >= 3) {
             const derived = deriveCutLineForPiece(next, next.seamLine, next.seamAllowanceMm)
@@ -1233,10 +1250,9 @@ export const useStore = create<Store>()(
   createFacingPiece: (parentId) => {
     const parent = get().workspace.pieces.find((p) => p.id === parentId)
     if (!parent) return null
-    if (isLinkedDerivedPiece(parent)) {
+    if (isFacingDerivedPiece(parent)) {
       set({
-        toastMessage:
-          'warn:Aus einer Kaschierung oder Spiegelkopie kann keine weitere abhängige Kopie erzeugt werden.',
+        toastMessage: 'warn:Aus einer Kaschierung kann keine weitere abhängige Kopie erzeugt werden.',
       })
       return null
     }
@@ -1244,26 +1260,38 @@ export const useStore = create<Store>()(
       set({ toastMessage: 'warn:Teil hat keine gültige Kontur für eine Kaschierung.' })
       return null
     }
-    const geom = buildFacingGeometryFromParent(parent)
-    const offset = facingOffsetBesideParent(parent)
-    const nameBase = parent.name?.trim() || `Teil ${parent.number}`
-    const id = get().addPiece({
-      ...geom,
-      name: `${nameBase} Kaschierung`,
-      facingParentId: parent.id,
-      kind: 'facing',
-      fillInterior: false,
-      transform: {
-        x: parent.transform.x + offset.x,
-        y: parent.transform.y + offset.y,
-        rotation: parent.transform.rotation,
-        mirrored: parent.transform.mirrored,
-        ...(parent.transform.pivotLocal
-          ? { pivotLocal: { ...parent.transform.pivotLocal } }
-          : {}),
-      },
-      symmetryConstraint: undefined,
-    })
+    const addFacing = (src: PatternPiece) => {
+      const geom = buildFacingGeometryFromParent(src)
+      const offset = facingOffsetBesideParent(src)
+      const nameBase = src.name?.trim() || `Teil ${src.number}`
+      return get().addPiece({
+        ...geom,
+        name: `${nameBase} Kaschierung`,
+        facingParentId: src.id,
+        kind: 'facing',
+        fillInterior: false,
+        transform: {
+          x: src.transform.x + offset.x,
+          y: src.transform.y + offset.y,
+          rotation: src.transform.rotation,
+          mirrored: src.transform.mirrored,
+          ...(src.transform.pivotLocal ? { pivotLocal: { ...src.transform.pivotLocal } } : {}),
+        },
+        symmetryConstraint: undefined,
+      })
+    }
+    const id = addFacing(parent)
+    if (!isMirrorDerivedPiece(parent)) {
+      const wanted = facingChildIds(get().workspace.pieces, parent.id).length
+      for (const mid of mirrorChildIds(get().workspace.pieces, parent.id)) {
+        while (facingChildIds(get().workspace.pieces, mid).length < wanted) {
+          const mirror = get().workspace.pieces.find((p) => p.id === mid)
+          if (!mirror) break
+          addFacing(mirror)
+        }
+      }
+      set({ selectedPieceIds: [id] })
+    }
     return id
   },
 
@@ -1301,6 +1329,13 @@ export const useStore = create<Store>()(
       symmetryConstraint: undefined,
       facingParentId: undefined,
     })
+    const wanted = facingChildIds(get().workspace.pieces, parent.id).length
+    if (wanted > 0) {
+      for (let i = 0; i < wanted; i++) {
+        get().createFacingPiece(id)
+      }
+      set({ selectedPieceIds: [id] })
+    }
     return id
   },
 

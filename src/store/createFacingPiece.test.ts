@@ -170,15 +170,17 @@ describe('createFacingPiece', () => {
     expect(useStore.getState().toastMessage).toMatch(/synchronisiert/)
   })
 
-  it('erlaubt Material an der Kaschierung und behält es beim Sync', () => {
+  it('übernimmt Material von der Mutter und sperrt es am Kind', () => {
+    useStore.getState().updatePiece('parent', { material: 'Leder' })
     const childId = useStore.getState().createFacingPiece('parent')!
-    useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
-    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Futterstoff')
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Leder')
 
-    useStore.getState().updateVertex('parent', 0, { x: -20, y: -10 })
-    const childAfter = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
-    expect(childAfter.material).toBe('Futterstoff')
-    expect(childAfter.facingParentId).toBe('parent')
+    useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Leder')
+    expect(useStore.getState().toastMessage).toMatch(/Material/)
+
+    useStore.getState().updatePiece('parent', { material: 'Canvas' })
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Canvas')
   })
 
   it('erlaubt Laufrichtung an der Kaschierung und behält sie beim Sync', () => {

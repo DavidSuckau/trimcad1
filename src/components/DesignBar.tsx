@@ -84,6 +84,8 @@ export function DesignBar() {
     setShowLiveBomCost,
     showSeamPruefanzeigen,
     setShowSeamPruefanzeigen,
+    showPivotRotationUi,
+    setShowPivotRotationUi,
   } = useStore(
     useShallow((s) => ({
       contourEditEnabled: s.contourEditEnabled,
@@ -114,6 +116,8 @@ export function DesignBar() {
       setShowLiveBomCost: s.setShowLiveBomCost,
       showSeamPruefanzeigen: s.showSeamPruefanzeigen,
       setShowSeamPruefanzeigen: s.setShowSeamPruefanzeigen,
+      showPivotRotationUi: s.showPivotRotationUi,
+      setShowPivotRotationUi: s.setShowPivotRotationUi,
     })),
   )
 
@@ -128,6 +132,7 @@ export function DesignBar() {
         { label: 'Raster', checked: showGrid, toggle: setShowGrid },
         { label: 'Punkte', checked: showPoints, toggle: setShowPoints },
         { label: 'Laufrichtung', checked: showGrain, toggle: setShowGrain },
+        { label: 'Drehgriff', checked: showPivotRotationUi, toggle: setShowPivotRotationUi },
         { label: 'Kerben', checked: showNotches, toggle: setShowNotches },
         { label: 'Bohrungen', checked: showDrills, toggle: setShowDrills },
         { label: 'Interne Linien', checked: showInternalLines, toggle: setShowInternalLines },

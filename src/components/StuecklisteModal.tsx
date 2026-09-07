@@ -28,6 +28,7 @@ import { computeMaterialAreaShares } from '../bom/materialAreaShare'
 import { aggregateProfileBom } from '../bom/profileBomStats'
 import { StuecklisteMaterialPie } from './StuecklisteMaterialPie'
 import { WorkspaceOverviewPreview } from './WorkspaceOverviewPreview'
+import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 
 function fmtAreaM2(mm2: number): string {
   return (mm2 / 1_000_000).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
@@ -214,6 +215,7 @@ export function StuecklisteModal() {
                   const rowCatalog = findCatalogRowByMaterialKey(catalogRows, matKey)
                   const lineEuro = pieceMaterialCostEuro(p, rowCatalog)
                   const matDesc = catalogMaterialDescription(catalogRows, matKey)
+                  const materialLocked = isLinkedDerivedPiece(p)
                   return (
                     <tr key={p.id}>
                       <td className="notch-nr">{i + 1}</td>
@@ -255,6 +257,12 @@ export function StuecklisteModal() {
                           onChange={(e) => updatePiece(p.id, { material: e.target.value })}
                           placeholder="—"
                           autoComplete="off"
+                          disabled={materialLocked}
+                          title={
+                            materialLocked
+                              ? 'Material folgt dem Mutterteil und kann hier nicht geändert werden'
+                              : undefined
+                          }
                           aria-label={`Materialnummer ${p.name}`}
                         />
                       </td>

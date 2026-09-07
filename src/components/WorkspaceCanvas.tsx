@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useStore as useZustandStore } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import { useStore, undoAction, redoAction } from '../store/useStore'
+import { APP_VERSION } from '../branding'
 import { canvasTextSize } from '../ui/uiTextScale'
 import { VIEWBOX_WIDTH, VIEWBOX_HEIGHT } from '../workspaceConstants'
 import { effectiveMmPerPixelXY } from '../utils/imageCalibration'
@@ -7267,7 +7268,7 @@ export function WorkspaceCanvas() {
                 : 'default',
       } as React.CSSProperties}
     >
-      <div className="workspace-version">V. 1.0.0</div>
+      <div className="workspace-version">V. {APP_VERSION}</div>
       <CanvasToolbar />
       {notchEditTarget &&
         tool === 'select' &&
