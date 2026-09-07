@@ -2874,6 +2874,11 @@ export function WorkspaceCanvas() {
   const cornerRoundInputRef = useRef<HTMLInputElement | null>(null)
   const notchMoveDistanceInputRef = useRef<HTMLInputElement | null>(null)
   const lastPointerClientRef = useRef({ x: 0, y: 0 })
+  /** Piece-Drag: Store-Updates max. 1× pro Frame. */
+  const pieceDragRafRef = useRef<number | null>(null)
+  const pieceDragLatestWorldRef = useRef<Point | null>(null)
+  const pieceDragStartRef = useRef<Point | null>(null)
+  const pieceDragPieceIdRef = useRef<string | null>(null)
   const [hoveredWorkspaceImage, setHoveredWorkspaceImageRaw] = useState(false)
   const setHoveredWorkspaceImage = useMemo(() => withStableSetState(setHoveredWorkspaceImageRaw), [])
   const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
@@ -3163,6 +3168,13 @@ export function WorkspaceCanvas() {
   const effectiveSegmentForHighlight =
     segmentMenuPinned && pinnedSegment ? pinnedSegment : (hoveredSegment ?? frozenSegment ?? hoveredCurvepointSegment)
 
+  /** Schneller Lookup statt pieces.find in Overlays/Hit-Tests. */
+  const piecesById = useMemo(() => {
+    const m = new Map<string, PatternPiece>()
+    for (const p of pieces) m.set(p.id, p)
+    return m
+  }, [pieces])
+
   /** Naht-Prüfanzeige: teure Metriken cachen (Transform-only Moves invalidieren nicht). */
   const seamPruefCacheRef = useRef<Parameters<typeof buildSeamPruefOverlayEntries>[2]>(new Map())
   const seamPruefEntries = useMemo(() => {
@@ -3266,8 +3278,19 @@ export function WorkspaceCanvas() {
   }, [contourEditEnabled, tool, setTool])
 
   useEffect(() => {
-    materializeMissingGrainLines()
+    if (pieces.some((p) => p.grainLine == null && p.cutLine.length >= 3)) {
+      materializeMissingGrainLines()
+    }
   }, [materializeMissingGrainLines, pieces])
+
+  useEffect(() => {
+    return () => {
+      if (pieceDragRafRef.current != null) {
+        cancelAnimationFrame(pieceDragRafRef.current)
+        pieceDragRafRef.current = null
+      }
+    }
+  }, [])
 
   const prevDraggingRef = useRef(dragging)
   useEffect(() => {
@@ -5885,12 +5908,27 @@ export function WorkspaceCanvas() {
         })
       } else if (dragging.kind === 'piece') {
         const world = toWorld(e.clientX, e.clientY)
-        const piece = pieces.find((p) => p.id === dragging.pieceId)
-        if (!piece) return
-        const dx = world.x - dragging.start.x
-        const dy = world.y - dragging.start.y
-        movePiece(dragging.pieceId, dx, dy)
-        setDragging((d) => (d && d.kind === 'piece' ? { ...d, start: world } : d))
+        if (!piecesById.get(dragging.pieceId)) return
+        pieceDragPieceIdRef.current = dragging.pieceId
+        if (!pieceDragStartRef.current) {
+          pieceDragStartRef.current = { ...dragging.start }
+        }
+        pieceDragLatestWorldRef.current = world
+        if (pieceDragRafRef.current != null) return
+        pieceDragRafRef.current = requestAnimationFrame(() => {
+          pieceDragRafRef.current = null
+          const pid = pieceDragPieceIdRef.current
+          const start = pieceDragStartRef.current
+          const latest = pieceDragLatestWorldRef.current
+          if (!pid || !start || !latest) return
+          const dx = latest.x - start.x
+          const dy = latest.y - start.y
+          if (dx !== 0 || dy !== 0) {
+            movePiece(pid, dx, dy)
+            pieceDragStartRef.current = { ...latest }
+            setDragging((d) => (d && d.kind === 'piece' ? { ...d, start: latest } : d))
+          }
+        })
       } else if (dragging.kind === 'rotate') {
         const piece = pieces.find((p) => p.id === dragging.pieceId)
         if (!piece || piece.cutLine.length < 3) return
@@ -6179,6 +6217,8 @@ export function WorkspaceCanvas() {
       canvasVertexPointUiScale,
       showPivotRotationUi,
       updateInternalCircle,
+      piecesById,
+      movePiece,
     ]
   )
 
@@ -7445,6 +7485,24 @@ export function WorkspaceCanvas() {
         }
       }
     }
+    // Letzten Piece-Drag-Frame noch anwenden (rAF konnte ausstehen)
+    if (dragging?.kind === 'piece') {
+      if (pieceDragRafRef.current != null) {
+        cancelAnimationFrame(pieceDragRafRef.current)
+        pieceDragRafRef.current = null
+      }
+      const pid = pieceDragPieceIdRef.current
+      const start = pieceDragStartRef.current
+      const latest = pieceDragLatestWorldRef.current
+      if (pid && start && latest) {
+        const dx = latest.x - start.x
+        const dy = latest.y - start.y
+        if (dx !== 0 || dy !== 0) movePiece(pid, dx, dy)
+      }
+      pieceDragPieceIdRef.current = null
+      pieceDragStartRef.current = null
+      pieceDragLatestWorldRef.current = null
+    }
     setDragging(null)
     setHoveredPieceId(null)
   }, [
@@ -7459,6 +7517,7 @@ export function WorkspaceCanvas() {
     insertPointOnCutLine,
     addNotch,
     addDrill,
+    movePiece,
     updateNotch,
     notchPreview,
     setTool,
@@ -10221,7 +10280,7 @@ export function WorkspaceCanvas() {
             seamAssignments.length > 0 &&
             seamAssignments.map((a: SeamAssignment) => {
               if (isInternalSeamAssignment(a)) {
-                const pieceA = pieces.find((p) => p.id === a.pieceIdA)
+                const pieceA = piecesById.get(a.pieceIdA)
                 if (!pieceA || pieceA.internalLines.length === 0) return null
                 const curves = getInternalSeamAssignmentCurves(pieceA, a)
                 if (curves.length === 0) return null
@@ -10281,8 +10340,8 @@ export function WorkspaceCanvas() {
                   </g>
                 )
               }
-              const pieceA = pieces.find((p) => p.id === a.pieceIdA)
-              const pieceB = pieces.find((p) => p.id === a.pieceIdB)
+              const pieceA = piecesById.get(a.pieceIdA)
+              const pieceB = piecesById.get(a.pieceIdB)
               if (!pieceA?.cutLine?.length || !pieceB?.cutLine?.length) return null
 
               const entry = seamPruefById.get(a.id)

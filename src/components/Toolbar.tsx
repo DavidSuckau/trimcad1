@@ -19,6 +19,7 @@ import { SettingsModal } from './SettingsModal'
 import { SeamAdjustmentModal } from './SeamAdjustmentModal'
 import { SeamAssignmentMetaModal } from './SeamAssignmentMetaModal'
 import { MassstabModal } from './MassstabModal'
+import { SchrumpfenModal } from './SchrumpfenModal'
 import { ConfiguratorModal } from './ConfiguratorModal'
 import { RockGeneratorModal } from './RockGeneratorModal'
 import { CONFIGURATOR_UI_ENABLED } from '../configurators/featureFlags'
@@ -116,6 +117,7 @@ export function Toolbar() {
     startDigitize,
     startImageSession,
     setToastMessage,
+    setSchrumpfenDialogPieceId,
     loadProjectFromFile,
     updateWorkspace,
     createConfiguratorInstance,
@@ -178,6 +180,7 @@ export function Toolbar() {
       startDigitize: s.startDigitize,
       startImageSession: s.startImageSession,
       setToastMessage: s.setToastMessage,
+      setSchrumpfenDialogPieceId: s.setSchrumpfenDialogPieceId,
       loadProjectFromFile: s.loadProjectFromFile,
       updateWorkspace: s.updateWorkspace,
       createConfiguratorInstance: s.createConfiguratorInstance,
@@ -928,6 +931,23 @@ export function Toolbar() {
               <li>
                 <button
                   type="button"
+                  className="menubar-dropdown-btn"
+                  onClick={() => {
+                    if (selectedPieceIds.length !== 1) {
+                      setToastMessage('warn:Bitte genau ein Teil auswählen.')
+                      closeMenu()
+                      return
+                    }
+                    setSchrumpfenDialogPieceId(selectedPieceIds[0])
+                    closeMenu()
+                  }}
+                >
+                  Schrumpfen (%)
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
                   className={`menubar-dropdown-btn${pieceSymmetryState ? ' active' : ''}`}
                   disabled={selectedPieceIds.length !== 1}
                   onClick={() => {
@@ -1436,6 +1456,7 @@ export function Toolbar() {
       <SeamAdjustmentModal />
       <SeamAssignmentMetaModal />
       <MassstabModal />
+      <SchrumpfenModal />
       {CONFIGURATOR_UI_ENABLED && (
         <>
           <ConfiguratorModal />

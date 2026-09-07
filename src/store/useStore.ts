@@ -111,8 +111,9 @@ import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece
 import {
   buildFacingGeometryFromParent,
   facingChildIds,
-  facingOffsetBesideParent,
+  facingPeekOffsetFromParent,
   isFacingDerivedPiece,
+  movePieceJustBefore,
 } from '../geometry/facingPiece'
 import {
   buildMirrorGeometryFromParent,
@@ -582,6 +583,8 @@ type Store = {
     currentLengthMm: number
     source?: 'edge' | 'internalLine'
   } | null
+  /** Schrumpfen (%): Dialog für dieses Teil (aktuelle Größe = 100 %). */
+  schrumpfenDialogPieceId: string | null
   digitizeState: DigitizeState | null
   imageDigitizeSession: ImageDigitizeSession | null
   /** 10×10-cm-Winkel auf dem Foto: Punkte setzen bis 3, dann Maßstab anwenden. */
@@ -703,6 +706,12 @@ type Store = {
   setMassstabDialog: (v: Store['massstabDialog']) => void
   /** Skaliert das Teil so, dass die gewählte Referenzkante `targetLengthMm` hat (Dialog schließen bei Erfolg). */
   applyMassstab: (targetLengthMm: number) => void
+  setSchrumpfenDialogPieceId: (pieceId: string | null) => void
+  /**
+   * Skaliert das ausgewählte Teil um `percentDelta` relativ zur aktuellen Größe (100 %).
+   * +2 → 102 %, −2 → 98 %. Pivot = Drehpunkt des Teils.
+   */
+  applySchrumpfenPercent: (percentDelta: number) => void
   /** Passt Notch-Positionen auf der Zielseite an die Referenzseite an. */
   adjustSeamNotches: (assignmentId: string, keepSide: 'A' | 'B') => void
   /** Prüft alle SeamAssignments: Gesamtlänge gleich + Notch-Abstände ungleich → Modal öffnen. */
@@ -1124,6 +1133,7 @@ export const useStore = create<Store>()(
   seamAdjustmentAcknowledged: {},
   seamAssignmentMetaDialogId: null,
   massstabDialog: null,
+  schrumpfenDialogPieceId: null,
   digitizeState: null,
   imageDigitizeSession: null,
   imageScaleCalibration: null,
@@ -1303,9 +1313,9 @@ export const useStore = create<Store>()(
     }
     const addFacing = (src: PatternPiece) => {
       const geom = buildFacingGeometryFromParent(src)
-      const offset = facingOffsetBesideParent(src)
+      const offset = facingPeekOffsetFromParent(src)
       const nameBase = src.name?.trim() || `Teil ${src.number}`
-      return get().addPiece({
+      const id = get().addPiece({
         ...geom,
         name: `${nameBase} Kaschierung`,
         facingParentId: src.id,
@@ -1320,6 +1330,14 @@ export const useStore = create<Store>()(
         },
         symmetryConstraint: undefined,
       })
+      // Unter der Mutter zeichnen, damit die Kaschierung hervorschaut
+      set((s) => ({
+        workspace: {
+          ...s.workspace,
+          pieces: movePieceJustBefore(s.workspace.pieces, id, src.id),
+        },
+      }))
+      return id
     }
     const id = addFacing(parent)
     if (!isMirrorDerivedPiece(parent)) {
@@ -2120,6 +2138,54 @@ export const useStore = create<Store>()(
       massstabDialog: null,
       tool: 'select',
       toastMessage: `success:Maßstab angewendet (Faktor ${(scale).toFixed(4)}).`,
+    }))
+  },
+
+  setSchrumpfenDialogPieceId: (pieceId) => set({ schrumpfenDialogPieceId: pieceId }),
+
+  applySchrumpfenPercent: (percentDelta) => {
+    const s = get()
+    const pieceId = s.schrumpfenDialogPieceId
+    if (!pieceId) {
+      set({ toastMessage: 'warn:Kein Teil für Schrumpfen gewählt.' })
+      return
+    }
+    if (!Number.isFinite(percentDelta)) {
+      set({ toastMessage: 'error:Bitte eine gültige Prozentzahl eingeben.' })
+      return
+    }
+    const scale = 1 + percentDelta / 100
+    if (!(scale > 0) || !Number.isFinite(scale)) {
+      set({ toastMessage: 'error:Ergebnisgröße muss größer als 0 % sein (z. B. nicht −100 oder kleiner).' })
+      return
+    }
+    const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+    if (facingBlock) return set(facingBlock)
+    const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+    if (!piece) {
+      set({ schrumpfenDialogPieceId: null, toastMessage: 'error:Teil nicht gefunden.' })
+      return
+    }
+    if (piece.cutLine.length < 3 && piece.seamLine.length < 3) {
+      set({ toastMessage: 'error:Teil hat keine brauchbare Kontur.' })
+      return
+    }
+    const pivot = getPiecePivotLocal(piece)
+    const result = applyUniformScaleToPiece(piece, pivot, scale)
+    if (!result.ok) {
+      set({ toastMessage: 'error:' + result.message })
+      return
+    }
+    const sign = percentDelta > 0 ? '+' : ''
+    set((st) => ({
+      workspace: {
+        ...st.workspace,
+        pieces: syncLinkedPiecesFromParents(
+          st.workspace.pieces.map((p) => (p.id === pieceId ? result.piece : p)),
+        ),
+      },
+      schrumpfenDialogPieceId: null,
+      toastMessage: `success:Schrumpfen ${sign}${percentDelta}% (Faktor ${scale.toFixed(4)}).`,
     }))
   },
 
@@ -4605,6 +4671,7 @@ export const useStore = create<Store>()(
       seamAdjustmentAcknowledged: {},
       seamAssignmentMetaDialogId: null,
       massstabDialog: null,
+      schrumpfenDialogPieceId: null,
       showHelpModal: false,
       showShortcutListModal: false,
       showSettingsModal: false,
@@ -4905,6 +4972,7 @@ export const useStore = create<Store>()(
       seamAssignmentMetaDialogId: null,
       profileDialogAssignmentId: null,
       massstabDialog: null,
+      schrumpfenDialogPieceId: null,
       showHelpModal: false,
       showShortcutListModal: false,
       showSettingsModal: false,

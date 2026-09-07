@@ -63,9 +63,13 @@ describe('createFacingPiece', () => {
     expect(child.kind).toBe('facing')
     expect(child.name).toBe('Vorderteil Kaschierung')
     expect(child.fillInterior).toBe(false)
-    expect(child.transform.x).toBeGreaterThan(20)
-    expect(child.transform.y).toBe(30)
+    expect(child.transform.x).toBe(30) // Mutter 20 + 10 mm rechts
+    expect(child.transform.y).toBe(20) // Mutter 30 − 10 mm oben
     expect(child.transform.rotation).toBe(15)
+    // Kaschierung liegt in der Liste vor der Mutter (darunter gezeichnet)
+    const parentIdx = pieces.findIndex((p) => p.id === 'parent')
+    const childIdx = pieces.findIndex((p) => p.id === id)
+    expect(childIdx).toBeLessThan(parentIdx)
     // Chamfer: mehr Segmente als Mutter-Rechteck
     expect(child.cutLine.length).toBeGreaterThan(4)
     // Nahtlinie bleibt eckig (4 Segmente)

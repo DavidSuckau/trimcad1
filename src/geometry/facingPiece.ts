@@ -221,11 +221,42 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
   }
 }
 
-/** Abstand neben die Mutter (mm), basierend auf Bounding-Box-Breite. */
+/** Versatz Kaschierung unter der Mutter (mm): leicht rausschauen. */
+export const FACING_PEEK_OFFSET_MM = 10
+
+/**
+ * Kaschierung fast auf der Mutter, 1 cm rechts und 1 cm nach oben (Bildschirm),
+ * damit sie darunter hervorschaut und die Zugehörigkeit klar ist.
+ * SVG/Welt: +x = rechts, −y = oben.
+ */
+export function facingPeekOffsetFromParent(_parent: PatternPiece): Point {
+  return { x: FACING_PEEK_OFFSET_MM, y: -FACING_PEEK_OFFSET_MM }
+}
+
+/** Abstand neben die Mutter (mm), basierend auf Bounding-Box-Breite (Spiegelkopie / Dicke). */
 export function facingOffsetBesideParent(parent: PatternPiece): Point {
   const bounds = curvesBounds(parent.cutLine.length >= 3 ? parent.cutLine : parent.seamLine)
   const width = bounds ? bounds.maxX - bounds.minX : 80
   return { x: width + 30, y: 0 }
+}
+
+/** Legt `pieceId` direkt vor `beforeId` in der Liste (Zeichnen darunter). */
+export function movePieceJustBefore(
+  pieces: PatternPiece[],
+  pieceId: string,
+  beforeId: string,
+): PatternPiece[] {
+  if (pieceId === beforeId) return pieces
+  const from = pieces.findIndex((p) => p.id === pieceId)
+  const to = pieces.findIndex((p) => p.id === beforeId)
+  if (from < 0 || to < 0) return pieces
+  if (from === to - 1) return pieces
+  const next = pieces.slice()
+  const [item] = next.splice(from, 1)
+  const insertAt = next.findIndex((p) => p.id === beforeId)
+  if (insertAt < 0) return pieces
+  next.splice(insertAt, 0, item)
+  return next
 }
 
 /**
