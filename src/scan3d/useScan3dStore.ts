@@ -4,9 +4,14 @@ import {
   rebuildVertexPathFromSurface,
   simplifySurfacePolyline,
 } from './geodesicPath'
-import { disposeVisualRoot, loadObjAssets, meshBoundingRadius, revokeBlobUrls } from './objImport'
+import {
+  disposeVisualRoot,
+  loadObjAssets as importMeshAssets,
+  meshBoundingRadius,
+  revokeBlobUrls,
+} from './objImport'
 import * as THREE from 'three'
-import type { MeshGraph, MeshHandle, ObjUnit, Scan3dLoadPhase, Scan3dSession, Scan3dTool } from './types'
+import type { MeshHandle, MeshGraph, ObjUnit, Scan3dLoadPhase, Scan3dSession, Scan3dTool } from './types'
 
 function snapRadiusMm(mesh: MeshHandle): number {
   return Math.max(15, meshBoundingRadius(mesh) * 0.035)
@@ -45,7 +50,8 @@ type Scan3dState = {
   loadLabel: string
   pendingUnit: ObjUnit
   setPendingUnit: (unit: ObjUnit) => void
-  loadObjAssets: (files: File[]) => Promise<void>
+  /** Lädt OBJ/STL/STEP und öffnet die Viewer-Session. */
+  loadMeshFiles: (files: File[]) => Promise<void>
   closeSession: () => void
   setTool: (tool: Scan3dTool) => void
   toggleWireframe: () => void
@@ -59,6 +65,7 @@ type Scan3dState = {
   deleteSeam: (id: string) => void
   undoLastSegment: () => void
   selectSeam: (id: string | null) => void
+  clearLoadError: () => void
 }
 
 function cleanupSession(session: Scan3dSession | null): void {
@@ -81,11 +88,24 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
   pendingUnit: 'mm',
 
   setPendingUnit: (unit) => set({ pendingUnit: unit }),
+  clearLoadError: () => set({ loadError: null }),
 
-  loadObjAssets: async (files) => {
+  loadMeshFiles: async (files) => {
     const unit = get().pendingUnit
     const prev = get().session
     if (prev) cleanupSession(prev)
+
+    const nonEmpty = files.filter((f) => f.size > 0)
+    if (nonEmpty.length === 0) {
+      set({
+        loadError:
+          'Datei ist leer oder noch nicht verfügbar (z. B. iCloud). Bitte lokal speichern und erneut wählen.',
+        isLoading: false,
+        session: null,
+        meshGraph: null,
+      })
+      return
+    }
 
     set({
       isLoading: true,
@@ -100,7 +120,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
     })
 
     try {
-      const result = await loadObjAssets(files, unit, (progress) => {
+      const result = await importMeshAssets(nonEmpty, unit, (progress) => {
         set({
           loadProgress: progress.pct,
           loadPhase: progress.phase,
@@ -110,6 +130,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
 
       if (!result.ok) {
         if (result.blobUrls) revokeBlobUrls(result.blobUrls)
+        console.error('[scan3d] Load failed:', result.error)
         set({
           loadError: result.error,
           loadWarnings: [],
@@ -124,7 +145,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
         return
       }
 
-      const meshFile = files.find((f) => /\.(obj|stl|step|stp)$/i.test(f.name))
+      const meshFile = nonEmpty.find((f) => /\.(obj|stl|step|stp)$/i.test(f.name))
       const session: Scan3dSession = {
         fileName: meshFile?.name ?? 'model',
         mesh: result.mesh,
@@ -151,9 +172,16 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
         loadLabel: 'Kantengraph wird erstellt…',
       })
 
+      if (!get().session) {
+        set({
+          loadError: 'Interner Fehler: Session wurde nicht übernommen. Bitte Seite neu laden.',
+          isBuildingGraph: false,
+        })
+        return
+      }
+
       try {
         const graph = await buildMeshGraphAsync(result.mesh, (subPct) => {
-          // Nur fortschreiben, wenn noch dieselbe Session aktiv ist
           if (get().session !== session) return
           const pct = Math.round(90 + (subPct / 100) * 9)
           set({
@@ -174,6 +202,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
         if (get().session !== session) return
         const msg =
           graphErr instanceof Error ? graphErr.message : 'Kantengraph konnte nicht erstellt werden.'
+        console.warn('[scan3d] Graph build failed:', graphErr)
         set({
           isBuildingGraph: false,
           loadWarnings: [...get().loadWarnings, `Nahtzeichnen eingeschränkt: ${msg}`],
@@ -184,6 +213,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '3D-Datei konnte nicht gelesen werden.'
+      console.error('[scan3d] Load exception:', err)
       set({
         loadError: msg,
         loadWarnings: [],

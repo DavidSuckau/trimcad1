@@ -298,10 +298,29 @@ function defaultScanMaterial(): THREE.MeshStandardMaterial {
 
 function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
   const loader = new STLLoader()
-  const geometry = loader.parse(buffer)
-  if (!geometry.getAttribute('position') || geometry.getAttribute('position').count < 3) {
+  let geometry: THREE.BufferGeometry
+  try {
+    geometry = loader.parse(buffer)
+  } catch (err) {
+    geometry = parseBinaryStlForced(buffer)
+    if (!geometry) {
+      throw err instanceof Error ? err : new Error('STL konnte nicht gelesen werden.')
+    }
+  }
+
+  let pos = geometry.getAttribute('position')
+  if (!pos || pos.count < 3) {
+    const forced = parseBinaryStlForced(buffer)
+    if (forced) {
+      geometry.dispose()
+      geometry = forced
+      pos = geometry.getAttribute('position')
+    }
+  }
+  if (!pos || pos.count < 3) {
     throw new Error('STL enthält keine gültige Geometrie.')
   }
+
   geometry.computeVertexNormals()
   geometry.computeBoundingSphere()
   const mesh = new THREE.Mesh(geometry, defaultScanMaterial())
@@ -309,6 +328,41 @@ function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
   const group = new THREE.Group()
   group.add(mesh)
   return group
+}
+
+/** Fallback, wenn Three.js eine Binary-STL fälschlich als ASCII liest. */
+function parseBinaryStlForced(buffer: ArrayBuffer): THREE.BufferGeometry | null {
+  if (buffer.byteLength < 84) return null
+  const reader = new DataView(buffer)
+  const faces = reader.getUint32(80, true)
+  if (faces <= 0 || faces > 5_000_000) return null
+  const expect = 84 + faces * 50
+  // Erlaube kleine Abweichungen (Padding)
+  if (buffer.byteLength + 64 < expect) return null
+
+  const vertices = new Float32Array(faces * 9)
+  const normals = new Float32Array(faces * 9)
+  for (let face = 0; face < faces; face++) {
+    const start = 84 + face * 50
+    if (start + 48 > buffer.byteLength) break
+    const nx = reader.getFloat32(start, true)
+    const ny = reader.getFloat32(start + 4, true)
+    const nz = reader.getFloat32(start + 8, true)
+    for (let i = 0; i < 3; i++) {
+      const vOff = start + 12 + i * 12
+      const dest = face * 9 + i * 3
+      vertices[dest] = reader.getFloat32(vOff, true)
+      vertices[dest + 1] = reader.getFloat32(vOff + 4, true)
+      vertices[dest + 2] = reader.getFloat32(vOff + 8, true)
+      normals[dest] = nx
+      normals[dest + 1] = ny
+      normals[dest + 2] = nz
+    }
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+  return geometry
 }
 
 function findMeshFile(files: File[]): File | undefined {

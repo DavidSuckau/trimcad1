@@ -7,8 +7,16 @@ import { useStore } from '../store/useStore'
 
 const SUPPORTED_MESH_RE = /\.(obj|stl|step|stp)$/i
 
-function isSupportedMeshFile(name: string): boolean {
-  return SUPPORTED_MESH_RE.test(name)
+function isSupportedMeshFile(file: File): boolean {
+  if (SUPPORTED_MESH_RE.test(file.name)) return true
+  const t = (file.type || '').toLowerCase()
+  return (
+    t.includes('stl') ||
+    t.includes('sla') ||
+    t.includes('step') ||
+    t.includes('model/obj') ||
+    t === 'application/octet-stream'
+  )
 }
 
 const Scan3dViewport = lazy(() =>
@@ -26,7 +34,8 @@ export function Scan3dModal() {
   const loadWarnings = useScan3dStore((s) => s.loadWarnings)
   const pendingUnit = useScan3dStore((s) => s.pendingUnit)
   const setPendingUnit = useScan3dStore((s) => s.setPendingUnit)
-  const loadObj = useScan3dStore((s) => s.loadObjAssets)
+  const loadMeshFiles = useScan3dStore((s) => s.loadMeshFiles)
+  const clearLoadError = useScan3dStore((s) => s.clearLoadError)
   const isLoading = useScan3dStore((s) => s.isLoading)
   const isBuildingGraph = useScan3dStore((s) => s.isBuildingGraph)
   const meshGraph = useScan3dStore((s) => s.meshGraph)
@@ -43,17 +52,15 @@ export function Scan3dModal() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+  /** Verhindert, dass Escape nach dem Dateidialog die Session/das Fenster sofort schließt. */
+  const filePickerOpenRef = useRef(false)
+  const ignoreEscapeUntilRef = useRef(0)
   const [dragOver, setDragOver] = useState(false)
   const [flattening, setFlattening] = useState(false)
   const trapRef = useFocusTrap<HTMLDivElement>(showScan3dModal)
 
   useEffect(() => {
-    if (loadError) setToastMessage(`error:${loadError}`)
-  }, [loadError, setToastMessage])
-
-  useEffect(() => {
     for (const w of loadWarnings) {
-      // Informative Auto-Einheit: als success/info, nicht als Fehler
       if (w.includes('automatisch auf')) {
         setToastMessage(`success:${w}`)
       } else {
@@ -64,6 +71,8 @@ export function Scan3dModal() {
 
   const handleClose = useCallback(() => {
     if (isLoading) return
+    if (filePickerOpenRef.current) return
+    if (Date.now() < ignoreEscapeUntilRef.current) return
     if (session && session.seams.length > 0) {
       const ok = window.confirm('3D-Session schließen? Gezeichnete Nähte gehen verloren.')
       if (!ok) return
@@ -76,6 +85,11 @@ export function Scan3dModal() {
     if (!showScan3dModal) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (filePickerOpenRef.current || Date.now() < ignoreEscapeUntilRef.current) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
         if (session?.activeSeamId) {
           cancelActiveSeam()
         } else {
@@ -91,26 +105,49 @@ export function Scan3dModal() {
         undoLastSegment()
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [showScan3dModal, session, handleClose, cancelActiveSeam, finishActiveSeam, undoLastSegment])
+
+  const armFilePickerGuard = useCallback(() => {
+    filePickerOpenRef.current = true
+    ignoreEscapeUntilRef.current = Date.now() + 1500
+    const onWindowFocus = () => {
+      window.setTimeout(() => {
+        filePickerOpenRef.current = false
+        ignoreEscapeUntilRef.current = Date.now() + 800
+      }, 300)
+      window.removeEventListener('focus', onWindowFocus)
+    }
+    window.addEventListener('focus', onWindowFocus)
+  }, [])
 
   const handleFiles = useCallback(
     async (fileList: FileList | File[]) => {
+      filePickerOpenRef.current = false
+      ignoreEscapeUntilRef.current = Date.now() + 1200
       const files = Array.from(fileList)
-      if (!files.some((f) => isSupportedMeshFile(f.name))) {
+      const meshFiles = files.filter((f) => isSupportedMeshFile(f) || SUPPORTED_MESH_RE.test(f.name))
+      if (meshFiles.length === 0) {
         setToastMessage('warn:Unterstützt: OBJ, STL, STEP (.step / .stp).')
         return
       }
       if (isLoading) return
-      await loadObj(files)
+      clearLoadError()
+      try {
+        await loadMeshFiles(meshFiles)
+      } catch (err) {
+        console.error('[scan3d] handleFiles', err)
+        setToastMessage(`error:${err instanceof Error ? err.message : 'Laden fehlgeschlagen'}`)
+      }
     },
-    [loadObj, isLoading, setToastMessage],
+    [loadMeshFiles, isLoading, setToastMessage, clearLoadError],
   )
 
   const onFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files?.length) void handleFiles(e.target.files)
+      const list = e.target.files
+      if (list?.length) void handleFiles(list)
       e.target.value = ''
     },
     [handleFiles],
@@ -124,6 +161,16 @@ export function Scan3dModal() {
     },
     [handleFiles],
   )
+
+  const openFilePicker = useCallback(() => {
+    armFilePickerGuard()
+    fileInputRef.current?.click()
+  }, [armFilePickerGuard])
+
+  const openFolderPicker = useCallback(() => {
+    armFilePickerGuard()
+    folderInputRef.current?.click()
+  }, [armFilePickerGuard])
 
   const handleFlatten = useCallback(async () => {
     if (!session || flattening || isLoading) return
@@ -177,7 +224,7 @@ export function Scan3dModal() {
   const canDrawSeams = Boolean(session && meshGraph && !isBuildingGraph)
 
   return (
-    <div className="scan3d-window" ref={trapRef} role="dialog" aria-modal="true" aria-label="3D-Scan zeichnen">
+    <div className="scan3d-window" ref={trapRef} role="dialog" aria-modal="true" aria-label="3D → 2D Abwicklung">
       <header className="scan3d-window-header">
         <div className="scan3d-window-title">
           <h2>3D → 2D Abwicklung</h2>
@@ -192,7 +239,7 @@ export function Scan3dModal() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".obj,.stl,.step,.stp,model/stl,model/obj"
+            accept=".obj,.stl,.STL,.step,.stp,.STEP,.STP"
             className="scan3d-hidden-input"
             onChange={onFileChange}
           />
@@ -201,24 +248,13 @@ export function Scan3dModal() {
             type="file"
             className="scan3d-hidden-input"
             multiple
-            accept=".obj,.stl,.step,.stp,.jpg,.jpeg,.png,.mtl"
             {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
             onChange={onFileChange}
           />
-          <button
-            type="button"
-            className="sidebar-btn"
-            disabled={isLoading}
-            onClick={() => fileInputRef.current?.click()}
-          >
+          <button type="button" className="sidebar-btn" disabled={isLoading} onClick={openFilePicker}>
             OBJ / STL / STEP
           </button>
-          <button
-            type="button"
-            className="sidebar-btn"
-            disabled={isLoading}
-            onClick={() => folderInputRef.current?.click()}
-          >
+          <button type="button" className="sidebar-btn" disabled={isLoading} onClick={openFolderPicker}>
             Ordner
           </button>
           {session && (
@@ -262,7 +298,7 @@ export function Scan3dModal() {
                 type="button"
                 className="sidebar-btn primary"
                 disabled={!canFlatten}
-                onClick={() => handleFlatten()}
+                onClick={() => void handleFlatten()}
               >
                 {flattening ? 'Abwicklung…' : '2D-Abwicklung'}
               </button>
@@ -302,59 +338,53 @@ export function Scan3dModal() {
 
       {!session ? (
         <div className="scan3d-window-empty-wrap">
-        <div
-          className={`scan3d-window-empty ${dragOver && !isLoading ? 'scan3d-window-empty--drag' : ''}`}
-          onDragOver={(e) => {
-            if (isLoading) return
-            e.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-        >
-          <p className="scan3d-format-list">
-            <strong>Unterstützte 3D-Formate:</strong>
-            <br />
-            OBJ (mit Textur) · STL · STEP (.step / .stp)
-          </p>
-          <p>
-            <strong>OBJ (Polycam):</strong> OBJ und Texturdatei (.jpg/.png) gemeinsam wählen — per Drag &amp; Drop
-            beide Dateien auf einmal ablegen. Optional: ganzen Export-Ordner laden (enthält oft auch .mtl).
-          </p>
-          <p>
-            <strong>STL / STEP:</strong> Einzelne Datei — nach dem Laden erscheint das Modell sofort
-            im 3D-Viewer (Standard-Einheit: Millimeter). STEP wird im Browser trianguliert.
-            Im Dateidialog ggf. „Alle Dateien“ wählen, falls .step nicht angezeigt wird.
-          </p>
-          <label className="scan3d-field">
-            <span>Einheit im Modell</span>
-            <select
-              className="notch-input"
-              value={pendingUnit}
-              onChange={(e) => setPendingUnit(e.target.value as ObjUnit)}
-            >
-              <option value="mm">Millimeter (mm)</option>
-              <option value="cm">Zentimeter (cm)</option>
-              <option value="m">Meter (m)</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="sidebar-btn primary"
-            disabled={isLoading}
-            onClick={() => fileInputRef.current?.click()}
+          <div
+            className={`scan3d-window-empty ${dragOver && !isLoading ? 'scan3d-window-empty--drag' : ''}`}
+            onDragOver={(e) => {
+              if (isLoading) return
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
           >
-            3D-Datei wählen (OBJ · STL · STEP)
-          </button>
-          <button
-            type="button"
-            className="sidebar-btn"
-            disabled={isLoading}
-            onClick={() => folderInputRef.current?.click()}
-          >
-            Export-Ordner (Polycam)
-          </button>
-        </div>
+            {loadError && (
+              <div className="scan3d-load-error" role="alert">
+                <strong>Laden fehlgeschlagen</strong>
+                <p>{loadError}</p>
+                <button type="button" className="sidebar-btn primary" onClick={openFilePicker}>
+                  Erneut versuchen
+                </button>
+              </div>
+            )}
+            <p className="scan3d-format-list">
+              <strong>Unterstützte 3D-Formate:</strong>
+              <br />
+              OBJ (mit Textur) · STL · STEP (.step / .stp)
+            </p>
+            <p>
+              <strong>STL:</strong> Datei wählen oder hierher ziehen — das Modell erscheint danach direkt
+              im 3D-Viewer (Standard: Millimeter).
+            </p>
+            <label className="scan3d-field">
+              <span>Einheit im Modell</span>
+              <select
+                className="notch-input"
+                value={pendingUnit}
+                onChange={(e) => setPendingUnit(e.target.value as ObjUnit)}
+              >
+                <option value="mm">Millimeter (mm)</option>
+                <option value="cm">Zentimeter (cm)</option>
+                <option value="m">Meter (m)</option>
+              </select>
+            </label>
+            <button type="button" className="sidebar-btn primary" disabled={isLoading} onClick={openFilePicker}>
+              3D-Datei wählen (OBJ · STL · STEP)
+            </button>
+            <button type="button" className="sidebar-btn" disabled={isLoading} onClick={openFolderPicker}>
+              Export-Ordner (Polycam)
+            </button>
+          </div>
         </div>
       ) : (
         <div className="scan3d-window-body">
@@ -407,7 +437,10 @@ export function Scan3dModal() {
                         Naht {idx + 1}
                         {seam.closed ? ' (geschlossen)' : ''}
                         {' · '}
-                        {seam.vertexPath.length > 0 ? seam.vertexPath.length : Math.floor(seam.surfacePoints.length / 3)} Punkte
+                        {seam.vertexPath.length > 0
+                          ? seam.vertexPath.length
+                          : Math.floor(seam.surfacePoints.length / 3)}{' '}
+                        Punkte
                       </button>
                       <button
                         type="button"
