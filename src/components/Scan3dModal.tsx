@@ -1,8 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { useStore } from '../store/useStore'
+import { flattenDraftsToPiecePartials, flattenMeshToPieces } from '../scan3d/flatten'
 import { useScan3dStore } from '../scan3d/useScan3dStore'
 import type { ObjUnit } from '../scan3d/types'
+import { useStore } from '../store/useStore'
 
 const SUPPORTED_MESH_RE = /\.(obj|stl|step|stp)$/i
 
@@ -18,6 +19,7 @@ export function Scan3dModal() {
   const showScan3dModal = useStore((s) => s.showScan3dModal)
   const setShowScan3dModal = useStore((s) => s.setShowScan3dModal)
   const setToastMessage = useStore((s) => s.setToastMessage)
+  const addPiece = useStore((s) => s.addPiece)
 
   const session = useScan3dStore((s) => s.session)
   const loadError = useScan3dStore((s) => s.loadError)
@@ -40,6 +42,7 @@ export function Scan3dModal() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [flattening, setFlattening] = useState(false)
   const trapRef = useFocusTrap<HTMLDivElement>(showScan3dModal)
 
   useEffect(() => {
@@ -113,15 +116,61 @@ export function Scan3dModal() {
     [handleFiles],
   )
 
+  const handleFlatten = useCallback(async () => {
+    if (!session || flattening || isLoading) return
+    if (session.activeSeamId) {
+      finishActiveSeam()
+    }
+    const fresh = useScan3dStore.getState().session
+    if (!fresh) return
+
+    setFlattening(true)
+    await new Promise<void>((r) => setTimeout(r, 0))
+    try {
+      const baseName = fresh.fileName.replace(/\.(obj|stl|step|stp)$/i, '') || 'Abwicklung'
+      const result = flattenMeshToPieces(fresh.mesh, fresh.seams, { baseName })
+      if (!result.ok) {
+        setToastMessage(`error:${result.error}`)
+        for (const w of result.warnings) setToastMessage(`warn:${w}`)
+        return
+      }
+      const partials = flattenDraftsToPiecePartials(result.pieces)
+      for (const partial of partials) addPiece(partial)
+      const hint = result.warnings.length ? ` ${result.warnings[0]}` : ''
+      setToastMessage(
+        `success:${result.pieces.length} Abwicklung(en) auf die Arbeitsfläche übernommen.${hint}`,
+      )
+      for (let i = 1; i < result.warnings.length; i++) {
+        setToastMessage(`warn:${result.warnings[i]}`)
+      }
+      closeSession()
+      setShowScan3dModal(false)
+    } catch (err) {
+      setToastMessage(`error:${err instanceof Error ? err.message : 'Abwicklung fehlgeschlagen'}`)
+    } finally {
+      setFlattening(false)
+    }
+  }, [
+    session,
+    flattening,
+    isLoading,
+    finishActiveSeam,
+    addPiece,
+    setToastMessage,
+    closeSession,
+    setShowScan3dModal,
+  ])
+
   if (!showScan3dModal) return null
 
   const triangleCount = session ? session.mesh.indices.length / 3 : 0
+  const canFlatten = Boolean(session) && !isLoading && !flattening
 
   return (
     <div className="scan3d-window" ref={trapRef} role="dialog" aria-modal="true" aria-label="3D-Scan zeichnen">
       <header className="scan3d-window-header">
         <div className="scan3d-window-title">
-          <h2>3D-Scan zeichnen</h2>
+          <h2>3D → 2D Abwicklung</h2>
           {session && (
             <span className="scan3d-window-subtitle">
               {session.fileName} · {triangleCount.toLocaleString('de-DE')} Dreiecke
@@ -195,6 +244,14 @@ export function Scan3dModal() {
                   Naht abschließen
                 </button>
               )}
+              <button
+                type="button"
+                className="sidebar-btn primary"
+                disabled={!canFlatten}
+                onClick={() => handleFlatten()}
+              >
+                {flattening ? 'Abwicklung…' : '2D-Abwicklung'}
+              </button>
             </>
           )}
           <button
@@ -306,7 +363,18 @@ export function Scan3dModal() {
                 <strong>Gerade Naht:</strong> Startpunkt klicken, zum Endpunkt ziehen, loslassen.
                 <br />
                 Rücktaste = letzten Punkt entfernen · Drahtgitter hilft beim Kontrollieren.
+                <br />
+                <strong>2D-Abwicklung:</strong> Nähte teilen das Mesh in Regionen; jede Region wird
+                flach als Schnittteil auf die Arbeitsfläche gelegt. Mehr Nähte = weniger Dehnung.
               </p>
+              <button
+                type="button"
+                className="sidebar-btn primary scan3d-flatten-btn"
+                disabled={!canFlatten}
+                onClick={() => handleFlatten()}
+              >
+                {flattening ? 'Abwicklung wird berechnet…' : '2D-Abwicklung erzeugen'}
+              </button>
               <h3 className="scan3d-sidebar-heading">Nähte ({session.seams.length})</h3>
               {session.seams.length === 0 ? (
                 <p className="scan3d-empty-list">Noch keine Nähte gezeichnet.</p>

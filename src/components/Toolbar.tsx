@@ -670,7 +670,7 @@ export function Toolbar() {
                     closeMenu()
                   }}
                 >
-                  3D-Scan zeichnen
+                  3D → 2D Abwicklung
                 </button>
               </li>
               {SEAT_3D_PREVIEW_ENABLED && (

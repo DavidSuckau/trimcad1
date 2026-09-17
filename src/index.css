@@ -2531,6 +2531,11 @@ body {
   gap: 4px;
   font-size: 0.85rem;
 }
+.scan3d-flatten-btn {
+  width: 100%;
+  margin: 0.5rem 0 0.75rem;
+}
+
 .scan3d-hint {
   margin: 0;
   font-size: 0.8rem;
