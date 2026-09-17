@@ -298,7 +298,7 @@ function defaultScanMaterial(): THREE.MeshStandardMaterial {
 
 function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
   const loader = new STLLoader()
-  let geometry: THREE.BufferGeometry
+  let geometry: THREE.BufferGeometry | null = null
   try {
     geometry = loader.parse(buffer)
   } catch (err) {
@@ -317,7 +317,7 @@ function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
       pos = geometry.getAttribute('position')
     }
   }
-  if (!pos || pos.count < 3) {
+  if (!geometry || !pos || pos.count < 3) {
     throw new Error('STL enthält keine gültige Geometrie.')
   }
 
