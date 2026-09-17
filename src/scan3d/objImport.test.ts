@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { meshBoundingRadius, parseObjText, parseStlText, pickPrimaryTextureFile } from './objImport'
+import {
+  meshBoundingRadius,
+  parseObjText,
+  parseStlText,
+  pickPrimaryTextureFile,
+  reduceMeshToTriangleBudget,
+} from './objImport'
+import type { MeshHandle } from './types'
 
 const MINI_OBJ = `
 o Cube
@@ -99,5 +106,48 @@ describe('meshBoundingRadius', () => {
     const result = await parseObjText(MINI_OBJ, 'mm')
     if (!result.ok) return
     expect(meshBoundingRadius(result.mesh)).toBeGreaterThan(0)
+  })
+})
+
+describe('reduceMeshToTriangleBudget', () => {
+  function denseGridMesh(n: number): MeshHandle {
+    // (n+1)² Vertices, 2*n² Dreiecke auf XY-Ebene
+    const positions: number[] = []
+    for (let y = 0; y <= n; y++) {
+      for (let x = 0; x <= n; x++) {
+        positions.push(x, y, 0)
+      }
+    }
+    const indices: number[] = []
+    const row = n + 1
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const a = y * row + x
+        const b = a + 1
+        const c = a + row
+        const d = c + 1
+        indices.push(a, b, d, a, d, c)
+      }
+    }
+    return {
+      positions: new Float32Array(positions),
+      indices: new Uint32Array(indices),
+      vertexCount: positions.length / 3,
+    }
+  }
+
+  it('lässt kleine Meshes unverändert', async () => {
+    const mesh = denseGridMesh(2)
+    const out = await reduceMeshToTriangleBudget(mesh, 500_000)
+    expect(out.indices.length).toBe(mesh.indices.length)
+  })
+
+  it('reduziert dichtes Mesh unter das Budget', async () => {
+    const mesh = denseGridMesh(40) // 3200 Dreiecke
+    expect(mesh.indices.length / 3).toBe(3200)
+    const out = await reduceMeshToTriangleBudget(mesh, 800)
+    expect(out.indices.length / 3).toBeLessThanOrEqual(800)
+    expect(out.indices.length / 3).toBeGreaterThanOrEqual(3)
+    expect(out.vertexCount).toBeGreaterThanOrEqual(3)
   })
 })

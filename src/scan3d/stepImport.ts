@@ -90,11 +90,17 @@ export async function loadStepGroup(buffer: ArrayBuffer, unit: ObjUnit): Promise
   }
 
   const triangleCount = result.stats?.triangleCount ?? 0
-  if (triangleCount > 500_000) {
-    throw new Error(`STEP-Modell zu groß (${triangleCount} Dreiecke, max. 500.000).`)
+  if (triangleCount > 8_000_000) {
+    throw new Error(
+      `STEP-Modell zu groß (${triangleCount.toLocaleString('de-DE')} Dreiecke, max. 8.000.000).`,
+    )
   }
-  if (triangleCount > 200_000) {
-    warnings.push(`Großes STEP-Modell (${triangleCount} Dreiecke) — Zeichnen kann langsam sein.`)
+  if (triangleCount > 500_000) {
+    warnings.push(
+      `Großes STEP-Modell (${triangleCount.toLocaleString('de-DE')} Dreiecke) — wird beim Laden ggf. vereinfacht.`,
+    )
+  } else if (triangleCount > 200_000) {
+    warnings.push(`Großes STEP-Modell (${triangleCount.toLocaleString('de-DE')} Dreiecke) — Zeichnen kann langsam sein.`)
   }
 
   warnings.push('STEP enthält keine Textur — Modell wird mit CAD-Farben oder grau dargestellt.')

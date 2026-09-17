@@ -45,7 +45,10 @@ function reportLoadProgress(
   onProgress({ pct, phase, label: LOAD_PHASE_LABELS[phase] })
 }
 
-const MAX_TRIANGLES = 500_000
+/** Zielgröße nach Auto-Vereinfachung (Graph/Zeichnen bleibt flüssig). */
+const TARGET_TRIANGLES = 500_000
+/** Harte Obergrenze: darüber wird gar nicht erst versucht (Browser-RAM). */
+const HARD_MAX_TRIANGLES = 8_000_000
 const WELD_TOLERANCE = 1e-4
 
 const UNIT_TO_MM: Record<ObjUnit, number> = {
@@ -389,19 +392,213 @@ async function finalizeLoadedGroupAsync(
   centerObject(group)
 
   reportLoadProgress(onProgress, 'mesh', 0)
-  const mesh = await mergeAndWeldFromObjectAsync(group, (subPct) => reportLoadProgress(onProgress, 'mesh', subPct))
+  let mesh = await mergeAndWeldFromObjectAsync(group, (subPct) =>
+    reportLoadProgress(onProgress, 'mesh', Math.min(70, subPct * 0.7)),
+  )
+  const originalTriangles = mesh.indices.length / 3
+
+  if (originalTriangles < 1) return { ok: false, error: 'Mesh enthält keine Dreiecke.', blobUrls: [] }
+  if (originalTriangles > HARD_MAX_TRIANGLES) {
+    return {
+      ok: false,
+      error: `Mesh zu groß (${originalTriangles.toLocaleString('de-DE')} Dreiecke, max. ${HARD_MAX_TRIANGLES.toLocaleString('de-DE')}).`,
+      blobUrls: [],
+    }
+  }
+
+  if (originalTriangles > TARGET_TRIANGLES) {
+    reportLoadProgress(onProgress, 'mesh', 72)
+    const reduced = await reduceMeshToTriangleBudget(mesh, TARGET_TRIANGLES, (subPct) =>
+      reportLoadProgress(onProgress, 'mesh', 72 + Math.round((subPct / 100) * 26)),
+    )
+    mesh = reduced
+    const reducedTris = mesh.indices.length / 3
+    warnings.push(
+      `Mesh automatisch vereinfacht: ${originalTriangles.toLocaleString('de-DE')} → ${reducedTris.toLocaleString('de-DE')} Dreiecke (Original-STL unverändert).`,
+    )
+    // Visual an Arbeitsmesh anpassen (weniger RAM, Raycast = Graph).
+    replaceVisualMeshesWithHandle(group, mesh)
+  } else if (originalTriangles > 200_000) {
+    warnings.push(`Großes Mesh (${originalTriangles.toLocaleString('de-DE')} Dreiecke) — Zeichnen kann langsam sein.`)
+  }
+
   const triangleCount = mesh.indices.length / 3
-
-  if (triangleCount < 1) return { ok: false, error: 'Mesh enthält keine Dreiecke.', blobUrls: [] }
-  if (triangleCount > MAX_TRIANGLES) {
-    return { ok: false, error: `Mesh zu groß (${triangleCount} Dreiecke, max. ${MAX_TRIANGLES}).`, blobUrls: [] }
-  }
-  if (triangleCount > 200_000) {
-    warnings.push(`Großes Mesh (${triangleCount} Dreiecke) — Zeichnen kann langsam sein.`)
-  }
-
   reportLoadProgress(onProgress, 'mesh', 100)
   return { ok: true, mesh, visualRoot: group, triangleCount, warnings, blobUrls: [] }
+}
+
+function meshBoundingBox(mesh: MeshHandle): {
+  minX: number
+  minY: number
+  minZ: number
+  maxX: number
+  maxY: number
+  maxZ: number
+  diagonal: number
+} {
+  let minX = Infinity
+  let minY = Infinity
+  let minZ = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let maxZ = -Infinity
+  for (let i = 0; i < mesh.vertexCount; i++) {
+    const x = mesh.positions[i * 3]
+    const y = mesh.positions[i * 3 + 1]
+    const z = mesh.positions[i * 3 + 2]
+    if (x < minX) minX = x
+    if (y < minY) minY = y
+    if (z < minZ) minZ = z
+    if (x > maxX) maxX = x
+    if (y > maxY) maxY = y
+    if (z > maxZ) maxZ = z
+  }
+  const dx = maxX - minX
+  const dy = maxY - minY
+  const dz = maxZ - minZ
+  return { minX, minY, minZ, maxX, maxY, maxZ, diagonal: Math.hypot(dx, dy, dz) || 1 }
+}
+
+/** Vertex-Clustering: Punkte in einem Gitterzellen zusammenfassen → weniger Dreiecke. */
+async function clusterMeshByGrid(
+  mesh: MeshHandle,
+  cellSize: number,
+  onProgress?: (subPct: number) => void,
+): Promise<MeshHandle> {
+  const { minX, minY, minZ } = meshBoundingBox(mesh)
+  const inv = 1 / Math.max(cellSize, 1e-9)
+  const keyToIndex = new Map<string, number>()
+  const positions: number[] = []
+
+  const mapVertex = (vi: number): number => {
+    const x = mesh.positions[vi * 3]
+    const y = mesh.positions[vi * 3 + 1]
+    const z = mesh.positions[vi * 3 + 2]
+    const ix = Math.floor((x - minX) * inv)
+    const iy = Math.floor((y - minY) * inv)
+    const iz = Math.floor((z - minZ) * inv)
+    const key = `${ix},${iy},${iz}`
+    const existing = keyToIndex.get(key)
+    if (existing !== undefined) return existing
+    const newIdx = positions.length / 3
+    positions.push(x, y, z)
+    keyToIndex.set(key, newIdx)
+    return newIdx
+  }
+
+  const indices: number[] = []
+  const triCount = mesh.indices.length / 3
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 3
+    const a = mapVertex(mesh.indices[i])
+    const b = mapVertex(mesh.indices[i + 1])
+    const c = mapVertex(mesh.indices[i + 2])
+    if (a !== b && b !== c && c !== a) {
+      indices.push(a, b, c)
+    }
+    if (t > 0 && t % WELD_CHUNK === 0) {
+      onProgress?.(Math.round((t / triCount) * 100))
+      await yieldToMain()
+    }
+  }
+  onProgress?.(100)
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+    vertexCount: positions.length / 3,
+  }
+}
+
+/** Fallback: jedes n-te Dreieck behalten (wenn Clustering nicht reicht). */
+function thinTrianglesUniform(mesh: MeshHandle, targetTriangles: number): MeshHandle {
+  const triCount = mesh.indices.length / 3
+  if (triCount <= targetTriangles) return mesh
+  const step = Math.max(1, Math.ceil(triCount / targetTriangles))
+  const used = new Map<number, number>()
+  const positions: number[] = []
+  const indices: number[] = []
+
+  const mapV = (vi: number): number => {
+    const existing = used.get(vi)
+    if (existing !== undefined) return existing
+    const ni = positions.length / 3
+    positions.push(mesh.positions[vi * 3], mesh.positions[vi * 3 + 1], mesh.positions[vi * 3 + 2])
+    used.set(vi, ni)
+    return ni
+  }
+
+  for (let t = 0; t < triCount; t += step) {
+    const i = t * 3
+    const a = mapV(mesh.indices[i])
+    const b = mapV(mesh.indices[i + 1])
+    const c = mapV(mesh.indices[i + 2])
+    if (a !== b && b !== c && c !== a) indices.push(a, b, c)
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+    vertexCount: positions.length / 3,
+  }
+}
+
+/**
+ * Reduziert ein Mesh auf höchstens `targetTriangles` (Originaldatei bleibt unverändert).
+ * Primär Vertex-Grid-Clustering, sonst gleichmäßiges Ausdünnen.
+ */
+export async function reduceMeshToTriangleBudget(
+  mesh: MeshHandle,
+  targetTriangles: number,
+  onProgress?: (subPct: number) => void,
+): Promise<MeshHandle> {
+  const original = mesh.indices.length / 3
+  if (original <= targetTriangles) return mesh
+
+  const { diagonal } = meshBoundingBox(mesh)
+  // Start: grobe Schätzung, damit ~target Dreiecke übrig bleiben
+  let cellSize = diagonal / Math.cbrt(Math.max(8, targetTriangles * 1.5))
+  cellSize = Math.max(cellSize, diagonal * 1e-5)
+
+  let best: MeshHandle = mesh
+  let bestCount = original
+
+  for (let attempt = 0; attempt < 14; attempt++) {
+    const clustered = await clusterMeshByGrid(mesh, cellSize, (sub) => {
+      onProgress?.(Math.round(((attempt + sub / 100) / 14) * 90))
+    })
+    const count = clustered.indices.length / 3
+    if (count > 0 && count < bestCount) {
+      best = clustered
+      bestCount = count
+    }
+    if (count > 0 && count <= targetTriangles) {
+      onProgress?.(100)
+      return clustered
+    }
+    if (count === 0) {
+      cellSize *= 0.75
+      continue
+    }
+    const ratio = count / targetTriangles
+    cellSize *= Math.max(1.12, Math.min(2.2, Math.cbrt(ratio)))
+  }
+
+  onProgress?.(95)
+  const thinned = thinTrianglesUniform(bestCount > targetTriangles ? best : mesh, targetTriangles)
+  onProgress?.(100)
+  return thinned.indices.length >= 3 ? thinned : best
+}
+
+function replaceVisualMeshesWithHandle(group: THREE.Group, mesh: MeshHandle): void {
+  disposeVisualRoot(group)
+  while (group.children.length > 0) {
+    group.remove(group.children[0])
+  }
+  const geometry = meshToBufferGeometry(mesh)
+  const visual = new THREE.Mesh(geometry, defaultScanMaterial())
+  visual.frustumCulled = false
+  group.add(visual)
+  group.updateMatrixWorld(true)
 }
 
 async function weldPositionsIndicesAsync(
