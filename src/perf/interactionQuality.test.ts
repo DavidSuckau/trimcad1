@@ -80,6 +80,39 @@ describe('pieceGeomEpoch', () => {
     })
     expect(a).not.toBe(b)
   })
+
+  it('ändert sich wenn nur Bézier-Kontrollpunkte verschoben werden', () => {
+    const base = {
+      id: 'p1',
+      seamLine: [],
+      notches: { length: 0 },
+    }
+    const a = pieceGeomEpoch({
+      ...base,
+      cutLine: [
+        {
+          type: 'bezier',
+          start: { x: 0, y: 0 },
+          end: { x: 100, y: 0 },
+          cp1: { x: 30, y: 0 },
+          cp2: { x: 70, y: 0 },
+        },
+      ],
+    })
+    const b = pieceGeomEpoch({
+      ...base,
+      cutLine: [
+        {
+          type: 'bezier',
+          start: { x: 0, y: 0 },
+          end: { x: 100, y: 0 },
+          cp1: { x: 30, y: 40 },
+          cp2: { x: 70, y: -40 },
+        },
+      ],
+    })
+    expect(a).not.toBe(b)
+  })
 })
 
 describe('curveBoundsPad', () => {
