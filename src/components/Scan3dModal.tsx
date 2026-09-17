@@ -10,13 +10,7 @@ const SUPPORTED_MESH_RE = /\.(obj|stl|step|stp)$/i
 function isSupportedMeshFile(file: File): boolean {
   if (SUPPORTED_MESH_RE.test(file.name)) return true
   const t = (file.type || '').toLowerCase()
-  return (
-    t.includes('stl') ||
-    t.includes('sla') ||
-    t.includes('step') ||
-    t.includes('model/obj') ||
-    t === 'application/octet-stream'
-  )
+  return t.includes('stl') || t.includes('sla') || t.includes('step') || t.includes('model/obj')
 }
 
 const Scan3dViewport = lazy(() =>
