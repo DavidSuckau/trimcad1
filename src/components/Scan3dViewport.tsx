@@ -36,22 +36,24 @@ function seamLinePoints(
 }
 
 function CameraFit({ meshRadius }: { meshRadius: number }) {
-  const { camera } = useThree()
-  const fitted = useRef(false)
+  const { camera, controls } = useThree()
 
   useEffect(() => {
-    if (fitted.current) return
-    fitted.current = true
     const radius = Math.max(meshRadius, 1)
     const dist = radius * 2.8
     camera.position.set(dist * 0.6, dist * 0.45, dist)
     if (camera instanceof THREE.PerspectiveCamera) {
-      camera.near = radius / 100
-      camera.far = radius * 20
+      camera.near = Math.max(radius / 200, 0.01)
+      camera.far = Math.max(radius * 40, 1000)
       camera.updateProjectionMatrix()
     }
     camera.lookAt(0, 0, 0)
-  }, [camera, meshRadius])
+    const orbit = controls as { target?: THREE.Vector3; update?: () => void } | null
+    if (orbit?.target) {
+      orbit.target.set(0, 0, 0)
+      orbit.update?.()
+    }
+  }, [camera, controls, meshRadius])
 
   return null
 }

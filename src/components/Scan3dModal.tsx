@@ -28,6 +28,8 @@ export function Scan3dModal() {
   const setPendingUnit = useScan3dStore((s) => s.setPendingUnit)
   const loadObj = useScan3dStore((s) => s.loadObjAssets)
   const isLoading = useScan3dStore((s) => s.isLoading)
+  const isBuildingGraph = useScan3dStore((s) => s.isBuildingGraph)
+  const meshGraph = useScan3dStore((s) => s.meshGraph)
   const loadProgress = useScan3dStore((s) => s.loadProgress)
   const loadLabel = useScan3dStore((s) => s.loadLabel)
   const closeSession = useScan3dStore((s) => s.closeSession)
@@ -46,11 +48,18 @@ export function Scan3dModal() {
   const trapRef = useFocusTrap<HTMLDivElement>(showScan3dModal)
 
   useEffect(() => {
-    if (loadError) setToastMessage(`warn:${loadError}`)
+    if (loadError) setToastMessage(`error:${loadError}`)
   }, [loadError, setToastMessage])
 
   useEffect(() => {
-    for (const w of loadWarnings) setToastMessage(`warn:${w}`)
+    for (const w of loadWarnings) {
+      // Informative Auto-Einheit: als success/info, nicht als Fehler
+      if (w.includes('automatisch auf')) {
+        setToastMessage(`success:${w}`)
+      } else {
+        setToastMessage(`warn:${w}`)
+      }
+    }
   }, [loadWarnings, setToastMessage])
 
   const handleClose = useCallback(() => {
@@ -165,6 +174,7 @@ export function Scan3dModal() {
 
   const triangleCount = session ? session.mesh.indices.length / 3 : 0
   const canFlatten = Boolean(session) && !isLoading && !flattening
+  const canDrawSeams = Boolean(session && meshGraph && !isBuildingGraph)
 
   return (
     <div className="scan3d-window" ref={trapRef} role="dialog" aria-modal="true" aria-label="3D-Scan zeichnen">
@@ -182,6 +192,7 @@ export function Scan3dModal() {
             ref={fileInputRef}
             type="file"
             multiple
+            accept=".obj,.stl,.step,.stp,model/stl,model/obj"
             className="scan3d-hidden-input"
             onChange={onFileChange}
           />
@@ -190,6 +201,7 @@ export function Scan3dModal() {
             type="file"
             className="scan3d-hidden-input"
             multiple
+            accept=".obj,.stl,.step,.stp,.jpg,.jpeg,.png,.mtl"
             {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
             onChange={onFileChange}
           />
@@ -221,6 +233,7 @@ export function Scan3dModal() {
               <button
                 type="button"
                 className={`sidebar-btn ${session.tool === 'drawSeam' ? 'primary' : ''}`}
+                disabled={!canDrawSeams}
                 onClick={() => setTool('drawSeam')}
               >
                 Freihand
@@ -228,6 +241,7 @@ export function Scan3dModal() {
               <button
                 type="button"
                 className={`sidebar-btn ${session.tool === 'drawLine' ? 'primary' : ''}`}
+                disabled={!canDrawSeams}
                 onClick={() => setTool('drawLine')}
               >
                 Gerade Naht
@@ -308,7 +322,8 @@ export function Scan3dModal() {
             beide Dateien auf einmal ablegen. Optional: ganzen Export-Ordner laden (enthält oft auch .mtl).
           </p>
           <p>
-            <strong>STL / STEP:</strong> Einzelne Datei — STEP wird im Browser trianguliert (CAD-Konstruktion).
+            <strong>STL / STEP:</strong> Einzelne Datei — nach dem Laden erscheint das Modell sofort
+            im 3D-Viewer (Standard-Einheit: Millimeter). STEP wird im Browser trianguliert.
             Im Dateidialog ggf. „Alle Dateien“ wählen, falls .step nicht angezeigt wird.
           </p>
           <label className="scan3d-field">
@@ -367,11 +382,17 @@ export function Scan3dModal() {
                 <strong>2D-Abwicklung:</strong> Nähte teilen das Mesh in Regionen; jede Region wird
                 flach als Schnittteil auf die Arbeitsfläche gelegt. Mehr Nähte = weniger Dehnung.
               </p>
+              {isBuildingGraph && (
+                <p className="scan3d-graph-status" role="status">
+                  Modell sichtbar — Nahtgraph wird noch vorbereitet…
+                  {loadProgress > 0 ? ` (${loadProgress} %)` : ''}
+                </p>
+              )}
               <button
                 type="button"
                 className="sidebar-btn primary scan3d-flatten-btn"
                 disabled={!canFlatten}
-                onClick={() => handleFlatten()}
+                onClick={() => void handleFlatten()}
               >
                 {flattening ? 'Abwicklung wird berechnet…' : '2D-Abwicklung erzeugen'}
               </button>

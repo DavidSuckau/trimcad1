@@ -35,6 +35,8 @@ function appendSurfacePoint(seam: { surfacePoints: number[] }, x: number, y: num
 type Scan3dState = {
   session: Scan3dSession | null
   meshGraph: MeshGraph | null
+  /** true solange der Kantengraph im Hintergrund gebaut wird */
+  isBuildingGraph: boolean
   loadError: string | null
   loadWarnings: string[]
   isLoading: boolean
@@ -68,13 +70,15 @@ function cleanupSession(session: Scan3dSession | null): void {
 export const useScan3dStore = create<Scan3dState>((set, get) => ({
   session: null,
   meshGraph: null,
+  isBuildingGraph: false,
   loadError: null,
   loadWarnings: [],
   isLoading: false,
   loadProgress: 0,
   loadPhase: null,
   loadLabel: '',
-  pendingUnit: 'm',
+  /** STL/CAD sind meist mm — früher „m“ machte Modelle unsichtbar groß. */
+  pendingUnit: 'mm',
 
   setPendingUnit: (unit) => set({ pendingUnit: unit }),
 
@@ -85,6 +89,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
 
     set({
       isLoading: true,
+      isBuildingGraph: false,
       loadProgress: 2,
       loadPhase: 'reading',
       loadLabel: 'Datei wird gelesen…',
@@ -94,67 +99,103 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
       meshGraph: null,
     })
 
-    const result = await loadObjAssets(files, unit, (progress) => {
-      set({
-        loadProgress: progress.pct,
-        loadPhase: progress.phase,
-        loadLabel: progress.label,
+    try {
+      const result = await loadObjAssets(files, unit, (progress) => {
+        set({
+          loadProgress: progress.pct,
+          loadPhase: progress.phase,
+          loadLabel: progress.label,
+        })
       })
-    })
 
-    if (!result.ok) {
-      if (result.blobUrls) revokeBlobUrls(result.blobUrls)
+      if (!result.ok) {
+        if (result.blobUrls) revokeBlobUrls(result.blobUrls)
+        set({
+          loadError: result.error,
+          loadWarnings: [],
+          session: null,
+          meshGraph: null,
+          isLoading: false,
+          isBuildingGraph: false,
+          loadProgress: 0,
+          loadPhase: null,
+          loadLabel: '',
+        })
+        return
+      }
+
+      const meshFile = files.find((f) => /\.(obj|stl|step|stp)$/i.test(f.name))
+      const session: Scan3dSession = {
+        fileName: meshFile?.name ?? 'model',
+        mesh: result.mesh,
+        visualRoot: result.visualRoot,
+        blobUrls: result.blobUrls,
+        seams: [],
+        activeSeamId: null,
+        linePreviewPoints: [],
+        showWireframe: false,
+        tool: 'navigate',
+        unit,
+      }
+
+      // Modell sofort anzeigen — Graph danach im Hintergrund
       set({
-        loadError: result.error,
+        session,
+        meshGraph: null,
+        loadError: null,
+        loadWarnings: result.warnings,
+        isLoading: false,
+        isBuildingGraph: true,
+        loadProgress: 90,
+        loadPhase: 'graph',
+        loadLabel: 'Kantengraph wird erstellt…',
+      })
+
+      try {
+        const graph = await buildMeshGraphAsync(result.mesh, (subPct) => {
+          // Nur fortschreiben, wenn noch dieselbe Session aktiv ist
+          if (get().session !== session) return
+          const pct = Math.round(90 + (subPct / 100) * 9)
+          set({
+            loadProgress: pct,
+            loadPhase: 'graph',
+            loadLabel: 'Kantengraph wird erstellt…',
+          })
+        })
+        if (get().session !== session) return
+        set({
+          meshGraph: graph,
+          isBuildingGraph: false,
+          loadProgress: 100,
+          loadPhase: 'done',
+          loadLabel: 'Fertig',
+        })
+      } catch (graphErr) {
+        if (get().session !== session) return
+        const msg =
+          graphErr instanceof Error ? graphErr.message : 'Kantengraph konnte nicht erstellt werden.'
+        set({
+          isBuildingGraph: false,
+          loadWarnings: [...get().loadWarnings, `Nahtzeichnen eingeschränkt: ${msg}`],
+          loadProgress: 100,
+          loadPhase: 'done',
+          loadLabel: 'Fertig',
+        })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '3D-Datei konnte nicht gelesen werden.'
+      set({
+        loadError: msg,
         loadWarnings: [],
         session: null,
         meshGraph: null,
         isLoading: false,
+        isBuildingGraph: false,
         loadProgress: 0,
         loadPhase: null,
         loadLabel: '',
       })
-      return
     }
-
-    set({
-      loadProgress: 85,
-      loadPhase: 'graph',
-      loadLabel: 'Kantengraph wird erstellt…',
-    })
-
-    const graph = await buildMeshGraphAsync(result.mesh, (subPct) => {
-      const pct = Math.round(82 + (subPct / 100) * 16)
-      set({
-        loadProgress: pct,
-        loadPhase: 'graph',
-        loadLabel: 'Kantengraph wird erstellt…',
-      })
-    })
-
-    const meshFile = files.find((f) => /\.(obj|stl|step|stp)$/i.test(f.name))
-    const session: Scan3dSession = {
-      fileName: meshFile?.name ?? 'model',
-      mesh: result.mesh,
-      visualRoot: result.visualRoot,
-      blobUrls: result.blobUrls,
-      seams: [],
-      activeSeamId: null,
-      linePreviewPoints: [],
-      showWireframe: false,
-      tool: 'navigate',
-      unit,
-    }
-    set({
-      session,
-      meshGraph: graph,
-      loadError: null,
-      loadWarnings: result.warnings,
-      isLoading: false,
-      loadProgress: 100,
-      loadPhase: 'done',
-      loadLabel: 'Fertig',
-    })
   },
 
   closeSession: () => {
@@ -163,6 +204,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
     set({
       session: null,
       meshGraph: null,
+      isBuildingGraph: false,
       loadError: null,
       loadWarnings: [],
       isLoading: false,
@@ -271,7 +313,7 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
 
   finishActiveSeam: () => {
     const { session, meshGraph } = get()
-    if (!session || !meshGraph || !session.activeSeamId) return
+    if (!session || !session.activeSeamId) return
 
     get().simplifyActiveSeam()
 
@@ -285,12 +327,15 @@ export const useScan3dStore = create<Scan3dState>((set, get) => ({
         se.surfacePoints.length >= 6
           ? simplifySurfacePolyline(se.surfacePoints, simplifySurfaceEpsilonMm(fresh.mesh))
           : se.surfacePoints
-      const vertexPath = rebuildVertexPathFromSurface(
-        fresh.mesh,
-        meshGraph,
-        surfacePoints,
-        snapRadiusMm(fresh.mesh),
-      )
+      const vertexPath =
+        meshGraph != null
+          ? rebuildVertexPathFromSurface(
+              fresh.mesh,
+              meshGraph,
+              surfacePoints,
+              snapRadiusMm(fresh.mesh),
+            )
+          : []
       const closed =
         surfacePoints.length >= 9 &&
         distSurfacePoints(surfacePoints, 0, surfacePoints.length - 3) <

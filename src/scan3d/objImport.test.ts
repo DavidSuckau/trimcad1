@@ -67,11 +67,30 @@ endsolid test
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.triangleCount).toBe(1)
-    expect(result.warnings.some((w) => w.includes('STL'))).toBe(true)
+    // 1-Einheiten-Dreieck bei „m“ bleibt Meter (auto-korrigiert nicht unter 5)
     const dx = result.mesh.positions[3] - result.mesh.positions[0]
     const dy = result.mesh.positions[4] - result.mesh.positions[1]
     const dz = result.mesh.positions[5] - result.mesh.positions[2]
     expect(Math.sqrt(dx * dx + dy * dy + dz * dz)).toBeCloseTo(1000, 0)
+  })
+
+  it('korrigiert typische mm-STL von Einheit m auf mm', async () => {
+    const stl = `solid test
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 100 0 0
+      vertex 0 100 0
+    endloop
+  endfacet
+endsolid test
+`
+    const result = await parseStlText(stl, 'm')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.warnings.some((w) => w.includes('Millimeter'))).toBe(true)
+    const dx = result.mesh.positions[3] - result.mesh.positions[0]
+    expect(Math.abs(dx)).toBeCloseTo(100, 0)
   })
 })
 

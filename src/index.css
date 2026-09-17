@@ -2536,6 +2536,17 @@ body {
   margin: 0.5rem 0 0.75rem;
 }
 
+.scan3d-graph-status {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #334;
+  background: #eef4fa;
+  border: 1px solid #c5d6e8;
+  border-radius: 4px;
+}
+
 .scan3d-hint {
   margin: 0;
   font-size: 0.8rem;

@@ -288,18 +288,24 @@ async function loadObjGroup(
 
 function defaultScanMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: '#b8c4d0',
-    roughness: 0.65,
-    metalness: 0.05,
+    color: '#c5d0dc',
+    roughness: 0.55,
+    metalness: 0.08,
     side: THREE.DoubleSide,
+    flatShading: false,
   })
 }
 
 function loadStlGroup(buffer: ArrayBuffer): THREE.Group {
   const loader = new STLLoader()
   const geometry = loader.parse(buffer)
+  if (!geometry.getAttribute('position') || geometry.getAttribute('position').count < 3) {
+    throw new Error('STL enthält keine gültige Geometrie.')
+  }
   geometry.computeVertexNormals()
+  geometry.computeBoundingSphere()
   const mesh = new THREE.Mesh(geometry, defaultScanMaterial())
+  mesh.frustumCulled = false
   const group = new THREE.Group()
   group.add(mesh)
   return group
@@ -315,10 +321,15 @@ function findMeshFile(files: File[]): File | undefined {
 
 async function finalizeLoadedGroupAsync(
   group: THREE.Group,
-  unit: ObjUnit,
+  preferredUnit: ObjUnit,
   warnings: string[],
   onProgress?: LoadProgressCallback,
 ): Promise<ObjImportResult & { blobUrls: string[] }> {
+  const nativeDiag = nativeBoundingDiagonal(group)
+  const resolved = resolveUnitForMeshSize(preferredUnit, nativeDiag)
+  const unit = resolved.unit
+  if (resolved.note) warnings.push(resolved.note)
+
   const scaleToMm = UNIT_TO_MM[unit]
   applyUnitScale(group, scaleToMm)
   centerObject(group)
@@ -416,13 +427,51 @@ async function mergeAndWeldFromObjectAsync(
 }
 
 function centerObject(object: THREE.Object3D): void {
+  object.updateMatrixWorld(true)
   const box = new THREE.Box3().setFromObject(object)
+  if (box.isEmpty()) return
   const center = box.getCenter(new THREE.Vector3())
   object.position.sub(center)
+  object.updateMatrixWorld(true)
 }
 
 function applyUnitScale(object: THREE.Object3D, scaleToMm: number): void {
   object.scale.multiplyScalar(scaleToMm)
+  object.updateMatrixWorld(true)
+}
+
+/** Bounding-Diagonalenlänge in Datei-Einheiten (vor mm-Skalierung). */
+function nativeBoundingDiagonal(object: THREE.Object3D): number {
+  object.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(object)
+  if (box.isEmpty()) return 0
+  return box.getSize(new THREE.Vector3()).length()
+}
+
+/**
+ * Viele STL/STEP-Dateien sind in mm, Default war früher „m“ → Modell unsichtbar riesig.
+ * Korrigiert offensichtlich falsche Einheiten anhand der Rohgröße.
+ */
+export function resolveUnitForMeshSize(
+  preferred: ObjUnit,
+  nativeDiagonal: number,
+): { unit: ObjUnit; note: string | null } {
+  if (!(nativeDiagonal > 0) || !Number.isFinite(nativeDiagonal)) {
+    return { unit: preferred, note: null }
+  }
+  // Sehr klein in „mm“ gewählt → eher Meter
+  if (preferred === 'mm' && nativeDiagonal < 0.5) {
+    return { unit: 'm', note: 'Einheit automatisch auf Meter gestellt (sehr kleines Modell).' }
+  }
+  // „Meter“ gewählt, aber Werte wie typische mm-Koordinaten (z. B. 50–5000)
+  if (preferred === 'm' && nativeDiagonal >= 5 && nativeDiagonal <= 50_000) {
+    return { unit: 'mm', note: 'Einheit automatisch auf Millimeter gestellt (übliche STL-Größe).' }
+  }
+  // „cm“ mit klaren mm-Maßen
+  if (preferred === 'cm' && nativeDiagonal >= 50 && nativeDiagonal <= 50_000) {
+    return { unit: 'mm', note: 'Einheit automatisch auf Millimeter gestellt (übliche STL-Größe).' }
+  }
+  return { unit: preferred, note: null }
 }
 
 export function meshBoundingRadius(mesh: MeshHandle): number {
@@ -458,7 +507,7 @@ export function revokeBlobUrls(urls: string[]): void {
 
 export async function loadObjAssets(
   files: File[],
-  unit: ObjUnit = 'm',
+  unit: ObjUnit = 'mm',
   onProgress?: LoadProgressCallback,
 ): Promise<ObjImportResult> {
   const warnings: string[] = []
@@ -493,7 +542,7 @@ export async function loadObjAssets(
       await yieldToMain()
       group = loadStlGroup(buffer)
       reportLoadProgress(onProgress, 'parsing', 100)
-      warnings.push('STL enthält keine Textur — Modell wird grau dargestellt.')
+      // Keine Toast-Warnung: fehlende Textur ist bei STL normal.
     } else {
       const textureFile = pickPrimaryTextureFile(meshFile, files, null)
       if (!textureFile && !files.some((f) => f.name.toLowerCase().endsWith('.mtl'))) {
