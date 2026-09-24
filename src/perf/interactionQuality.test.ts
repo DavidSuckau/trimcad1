@@ -3,6 +3,7 @@ import {
   curveBoundsPad,
   nearestCurveQualityFor,
   pieceGeomEpoch,
+  shouldRenderDetailNotchOverlay,
   shouldShowContourMeasurementsLive,
   shouldShowSeamPruefLive,
   shouldSimplifyNotchRender,
@@ -38,6 +39,41 @@ describe('live overlay gates', () => {
     expect(shouldSimplifyNotchRender('dragging', false)).toBe(true)
     expect(shouldSimplifyNotchRender('normal', true)).toBe(true)
     expect(shouldSimplifyNotchRender('normal', false)).toBe(false)
+  })
+
+  it('detail notch overlay only for selected/hovered/drag piece', () => {
+    expect(
+      shouldRenderDetailNotchOverlay({
+        simplifyNotches: false,
+        isSelected: false,
+        isHovered: false,
+        pieceHasDraggedNotch: false,
+      }),
+    ).toBe(false)
+    expect(
+      shouldRenderDetailNotchOverlay({
+        simplifyNotches: false,
+        isSelected: true,
+        isHovered: false,
+        pieceHasDraggedNotch: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldRenderDetailNotchOverlay({
+        simplifyNotches: false,
+        isSelected: false,
+        isHovered: true,
+        pieceHasDraggedNotch: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldRenderDetailNotchOverlay({
+        simplifyNotches: true,
+        isSelected: true,
+        isHovered: true,
+        pieceHasDraggedNotch: true,
+      }),
+    ).toBe(false)
   })
 })
 

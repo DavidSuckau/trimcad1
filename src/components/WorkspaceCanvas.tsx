@@ -143,6 +143,7 @@ import {
   shouldShowSeamPruefLive,
   shouldShowContourMeasurementsLive,
   shouldSimplifyNotchRender,
+  shouldRenderDetailNotchOverlay,
   nearestCurveQualityFor,
   type InteractionQuality,
 } from '../perf/interactionQuality'
@@ -1464,6 +1465,14 @@ const PieceGroup = memo(function PieceGroup({
     notchIdBeingDragged ?? undefined,
     simplifyNotches,
   )
+  /** Nur Anzeige: Detail-Kerben-Overlay am aktiven/hovered Teil — Kontur bleibt voll. */
+  const detailNotchOverlay = shouldRenderDetailNotchOverlay({
+    simplifyNotches,
+    isSelected,
+    isHovered,
+    pieceHasDraggedNotch:
+      notchIdBeingDragged != null && notches.some((n) => n.id === notchIdBeingDragged),
+  })
   const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
   const isDialogHighlightActive = isDialogHovered
   const isFacing = piece.kind === 'facing' || !!piece.facingParentId
@@ -1765,32 +1774,8 @@ const PieceGroup = memo(function PieceGroup({
           />
         )
       })()}
-      {simplifyNotches
+      {detailNotchOverlay
         ? notches.map((n) => {
-            const ease = isEaseNotch(n)
-            if (ease ? showEaseNotches === false : showNotches === false) return null
-            if (notchIdBeingDragged === n.id) return null
-            let pos: Point | null = null
-            if (isNotchOnInternalLine(n) && internalLines.length > 0) {
-              pos = getNotchPositionAndAngleOnInternalLine(n, internalLines)?.position ?? null
-            } else {
-              pos = getNotchPositionAndAngleOnCutLine(n, cutLine, seamLine).position
-            }
-            if (!pos) return null
-            return (
-              <circle
-                key={n.id}
-                cx={pos.x}
-                cy={pos.y}
-                r={1.2 * ptPs}
-                fill={ease ? T.notch.easeStroke : NOTCH_STROKE}
-                stroke="none"
-                pointerEvents="none"
-                opacity={0.85}
-              />
-            )
-          })
-        : notches.map((n) => {
         const ease = isEaseNotch(n)
         if (ease ? showEaseNotches === false : showNotches === false) return null
         if (notchIdBeingDragged === n.id) return null
@@ -1902,7 +1887,31 @@ const PieceGroup = memo(function PieceGroup({
             ) : null}
           </g>
         )
-      })}
+      })
+        : notches.map((n) => {
+            const ease = isEaseNotch(n)
+            if (ease ? showEaseNotches === false : showNotches === false) return null
+            if (notchIdBeingDragged === n.id) return null
+            let pos: Point | null = null
+            if (isNotchOnInternalLine(n) && internalLines.length > 0) {
+              pos = getNotchPositionAndAngleOnInternalLine(n, internalLines)?.position ?? null
+            } else {
+              pos = getNotchPositionAndAngleOnCutLine(n, cutLine, seamLine).position
+            }
+            if (!pos) return null
+            return (
+              <circle
+                key={n.id}
+                cx={pos.x}
+                cy={pos.y}
+                r={1.2 * ptPs}
+                fill={ease ? T.notch.easeStroke : NOTCH_STROKE}
+                stroke="none"
+                pointerEvents="none"
+                opacity={0.85}
+              />
+            )
+          })}
       {showDrills !== false && drills.map((d) => (
         <circle
           key={d.id}

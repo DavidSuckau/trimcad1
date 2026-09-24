@@ -35,6 +35,23 @@ export function shouldSimplifyNotchRender(
 }
 
 /**
+ * Detail-Kerben-SVG-Overlay nur am Edit-/Hover-Teil.
+ * Andere Teile behalten Kontur-Cutouts; Overlay = günstige Marker.
+ * (Leitlinie: 200 sichtbar ≠ 200 mit vollem Edit-Overlay.)
+ * Ändert KEINE Geometrie — nur Anzeigeaufwand.
+ */
+export function shouldRenderDetailNotchOverlay(opts: {
+  simplifyNotches: boolean
+  isSelected: boolean
+  isHovered: boolean
+  /** Dieses Teil hat die gerade gezogene Kerbe. */
+  pieceHasDraggedNotch: boolean
+}): boolean {
+  if (opts.simplifyNotches) return false
+  return opts.isSelected || opts.isHovered || opts.pieceHasDraggedNotch
+}
+
+/**
  * Cheap fingerprint for path-cache keys — lengths / counts, not full geometry.
  */
 export function pieceGeomEpoch(piece: {

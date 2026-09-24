@@ -1,0 +1,581 @@
+================================================================================
+TrimTex — TECHNISCHE LEITLINIE: VOLLE FUNKTION BEI VIELEN SCHNITTTEILEN
+================================================================================
+Stand: 2026-09-24 (Leitlinie nach Kollegen-Abstimmung)
+Status: TECHNISCHE LEITLINIE — Grundlage der Weiterentwicklung (hier keine Umsetzung)
+Bezug: Ergänzung zu docs/PERFORMANCE-IDEEN.txt (Client-Tuning, Hit-Tests, SVG)
+
+--------------------------------------------------------------------------------
+ZENTRALE LEITSÄTZE
+--------------------------------------------------------------------------------
+
+  1) Nicht weniger Schnittteile anzeigen und nicht weniger Funktionen anbieten —
+     sondern nur noch das berechnen, was für die aktuelle Interaktion
+     tatsächlich benötigt wird.
+
+  2) Es darf niemals zwei Wahrheiten für ein Schnittteil geben.
+     Punkt, Linie, Kurve, Kerbe und Naht müssen aus demselben
+     Geometriemodell entstehen.
+
+  3) Interaktive Aktionen dürfen NIEMALS spürbar verzögert sein.
+     Punkt verschieben, Kerbe ziehen, Teil bewegen, Snap, Hover —
+     alles muss für den Nutzer elegant, sofort und ruckelfrei wirken.
+     Kein Nachziehen, kein „Hang“, kein Warten auf Server oder Batch.
+
+  4) Der Geometry Worker ist KEINE zweite Geometrie-Instanz.
+     Er ist der Ort, an dem die EINE Geometrie-Wahrheit verarbeitet wird.
+     Das verhindert genau den früheren Fehler
+     „Punkt bewegt sich, Linie bleibt stehen“.
+
+  5) Der eigentliche Performance-Trick (wichtigster Satz):
+     200 Teile dürfen existieren und sichtbar sein, aber TrimTex muss nicht
+     200 Teile bearbeiten, wenn der Benutzer gerade Punkt 4 eines einzigen
+     Teils bewegt.
+
+Das ist die Architektur, die TrimTex verfolgen soll —
+deutlich besser als ein „Performance-Modus“.
+
+
+--------------------------------------------------------------------------------
+ZIELBILD FÜR TRIMTEX
+--------------------------------------------------------------------------------
+
+                         TRIMTEX
+                            │
+             ┌──────────────┴──────────────┐
+             │                             │
+        BROWSER                         SERVER
+             │                             │
+       ┌─────┴─────┐                 Nesting
+       │           │                 große Jobs
+     React      Canvas/WebGL
+       │           ▲
+       │           │
+       └─────► Geometry Worker
+                   │
+              EINE GEOMETRIE
+                 = WAHRHEIT
+
+Lesen des Bildes:
+
+  • React         = Bedienung und Anwendungszustand (keine zweite Kontur)
+  • Geometry Worker = verarbeitet die eine Geometrie-Wahrheit (nicht eine Kopie
+                      „neben“ dem Modell)
+  • Canvas/WebGL  = zeigt den daraus erzeugten Renderzustand
+  • Server        = Nesting-/Compute-Engine — nicht Performance-Retter
+                      für die Maus
+
+Bei Punkt 4 ziehen passiert also NICHT:
+
+  Punkt → sofort verschieben
+  Linie → später berechnen
+  Naht  → irgendwann aktualisieren
+
+sondern logisch IMMER:
+
+  Neue Punktposition
+         ↓
+  Geometriemodell aktualisieren
+         ↓
+  abhängige Geometrie berechnen
+         ↓
+  neuer vollständiger Renderzustand
+         ↓
+  Anzeige
+
+Der Nutzer sieht dadurch eine einzige Bewegung.
+
+
+--------------------------------------------------------------------------------
+0a) HARTE ANFORDERUNG: SOFORTIGE, RUCKELFREIE INTERAKTION
+--------------------------------------------------------------------------------
+
+Nicht verhandelbar für TrimTex:
+
+  • Jede direkte Nutzeraktion (Punkt, Kante, Kerbe, Teil, Zoom/Pan-relevant
+    Feedback) muss SOFORT ausgeführt und sichtbar werden.
+  • Keine spürbare Zeitverzögerung, kein Ruckeln, kein „Punkt hängt hinter
+    der Maus“, keine Linie die Frames später nachkommt.
+  • Das Gefühl muss elegant und flüssig sein — wie bei einer guten
+    Desktop-CAD, nicht wie bei einer wartenden Web-Seite.
+
+Daraus folgt technisch:
+
+  • Live-Edit NIEMALS über den Server (Netzwerk-Latenz ist Gift).
+  • Live-Edit lokal auf dem PC des Nutzers (Browser / Geometry Worker).
+  • Architektur und Optimierung dienen diesem Gefühl — nicht umgekehrt.
+  • Wenn eine Optimierung die Aktion verzögert oder „aufspaltet“
+    (Punkt jetzt, Linie später), ist sie FALSCH — auch wenn sie „CPU spart“.
+  • Grobe Zwischenrechnung während Drag ist nur erlaubt, wenn der Nutzer
+    trotzdem sofortiges, glattes Mitlaufen sieht; Feinrechnung darf
+    höchstens unsichtbar nachziehen, nie die Aktion blockieren.
+
+Kurz: Performance ohne Sofortigkeit ist für TrimTex keine Lösung.
+
+
+--------------------------------------------------------------------------------
+0) LEHRSTÜCK: FRÜHERE OPTIMIERUNG — PUNKT BEWEGT, LINIE BLEIBT
+--------------------------------------------------------------------------------
+
+Wir hatten schon einmal Performance-Optimierungen.
+Dabei trat u. a. dieser Fehler auf:
+
+  Punkt wurde lokal verschoben → die eigentliche Kontur/Linie kam nicht nach.
+
+Das ist kein „kleiner Render-Bug“, sondern ein Architektur-Symptom:
+
+  Geometrie wurde auf verschiedene Systeme / Pfade verteilt,
+  OHNE eine zentrale Wahrheit für die Geometrie.
+
+Typisches Anti-Pattern (vereinfacht):
+
+  Drag aktualisiert nur den sichtbaren Punkt (UI / Handle)
+     ↓
+  Linie/Pfad wird später oder woanders neu gerechnet — oder gar nicht
+     ↓
+  Anzeige und „echte“ Geometrie laufen auseinander
+
+Deshalb gilt für TrimTex ab jetzt verbindlich:
+
+  Performance darf die Geometrie nicht „zerteilen“.
+  Wir dürfen Anzeige und Berechnung entkoppeln —
+  aber NICHT mehrere konkurrierende Geometrie-Zustände erzeugen.
+
+  Der Geometry Worker löst das, indem er die eine Wahrheit VERARBEITET —
+  er ist kein zweites Modell „daneben“.
+
+
+--------------------------------------------------------------------------------
+1) PROBLEM (aus Nutzersicht)
+--------------------------------------------------------------------------------
+
+Sobald viele Schnittteile auf der Arbeitsfläche liegen, wird die App stockend /
+hängt. Der Browser wirkt überfordert.
+
+Wunsch:
+  • Alles soll weiterhin sauber und „volle Pulle“ funktionieren
+  • Punkte verschieben, Kerben setzen/verschieben, Naht, Nesting, Stückliste …
+  • Aktionen wie Punkt verschieben müssen sofort und ruckelfrei reagieren
+  • Kein dauerhafter Sparmodus, der Features wegnimmt oder versteckt
+  • Primär weiter im Web laufen (Desktop-App nur Fallback)
+  • Nesting und andere schwere Optimierung auf dem Server
+
+
+--------------------------------------------------------------------------------
+2) WARUM „NUR PERFORMANCE-MODUS“ KEINE GUTE DAUERLÖSUNG IST
+--------------------------------------------------------------------------------
+
+Ein Schalter „weniger Hover / grobere Kerben / keine Live-Prüfanzeigen“ kann
+kurzfristig helfen (siehe docs/PERFORMANCE-IDEEN.txt).
+
+Aber:
+  • Er löst nicht die Grundlast bei vielen Teilen.
+  • Nutzer brauchen genau bei großen Projekten volle Bearbeitung.
+  • Gefühl: „funktioniert nur, wenn man Funktionen abschaltet“.
+
+Fazit: Feinjustierung im Client bleibt sinnvoll — die Architektur muss aber
+volle Funktion bei großen Projekten tragen, ohne die Geometrie-Wahrheit
+aufzusplitten.
+
+
+--------------------------------------------------------------------------------
+3) EIN DATENMODELL = WAHRHEIT DER SCHNITTTEILE
+--------------------------------------------------------------------------------
+
+Für Entwickler entscheidend:
+
+  Der Geometry Worker ist keine zweite Geometrie-Instanz.
+  Er ist der Ort, an dem die eine Geometrie-Wahrheit verarbeitet wird.
+
+So soll TrimTex aufgebaut sein:
+
+                    TRIMTEX
+                       │
+             ┌─────────▼─────────┐
+             │  EIN Datenmodell  │
+             │  = Wahrheit       │
+             │  der Schnittteile │
+             └─────────┬─────────┘
+                       │
+              ┌────────▼────────┐
+              │ Geometry Worker │  ← verarbeitet die Wahrheit
+              │ (kein 2. Modell)│
+              │                 │
+              │ Punkte          │
+              │ Linien          │
+              │ Kurven          │
+              │ Kerben          │
+              │ Nahtzugabe      │
+              │ Snap            │
+              │ Hit-Tests       │
+              └────────┬────────┘
+                       │
+                       ▼
+                 Canvas / WebGL
+                 (± Overlay)
+                       │
+                       ▼
+                    Anzeige
+
+Der Worker verändert also nicht nur den Punkt.
+
+Wenn Punkt 4 verschoben wird — atomar aus demselben Modell:
+
+  Neue Punktposition
+         ↓
+  Geometriemodell aktualisieren
+         ↓
+  abhängige Geometrie berechnen (Linie/Kurve, Naht, Kerben, …)
+         ↓
+  neuer vollständiger Renderzustand
+         ↓
+  Anzeige
+
+Der Nutzer sieht dadurch eine einzige Bewegung.
+Damit kann nicht mehr passieren:
+  „Punkt bewegt sich, aber die Linie bleibt an der alten Position.“
+
+Wichtig:
+  • Canvas/WebGL zeichnet nur, was aus dem Modell kommt.
+  • React speichert Anwendungszustand (Auswahl, Dialoge, Modi) —
+    aber keine zweite, abweichende Kontur-Wahrheit „nur fürs Zeichnen“.
+  • Caches (Paths, Bitmaps) sind Ableitungen und werden invalidiert,
+    sobald das Modell sich ändert — nie eine parallele Wahrheit.
+  • Worker und Modell sind eine Verarbeitungseinheit, keine zwei Kopien.
+
+--------------------------------------------------------------------------------
+4) NUR ZWEI ECHTE RECHENORTE
+--------------------------------------------------------------------------------
+
+Das ist die saubere Trennung (klarer als „alles irgendwo hin verteilen“):
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ LOKAL (Browser / Geometry Worker)                           │
+  │ Alles, was der Benutzer JETZT DIREKT bearbeitet:            │
+  │   Punkte, Kurven, Kerben, Snap, Hit-Tests, Live-Offset,     │
+  │   Verschieben/Drehen, unmittelbares Feedback                │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ SERVER                                                      │
+  │ Alles, was lange und intensiv optimiert werden kann:        │
+  │   Nesting (verbindlich), ggf. großer Import, schwere PDFs   │
+  └─────────────────────────────────────────────────────────────┘
+
+Nicht:
+  • Live-Drag über HTTP (Latenz → fühlt sich kaputt / verzögert an)
+  • Nesting im Browser bei vielen Teilen (hängt den Tab)
+  • Geometrie halb in React, halb im Worker, halb im Canvas
+  • „Erst speichern/rechnen, dann Anzeige“ bei Punkt/Kerbe/Teil-Ziehen
+
+Der Nutzer merkt bei Live-Edit nur: Aktion → sofort sichtbares Ergebnis.
+Alles andere (Server, Fein-Nachrechnung, Caches) darf die Hand nicht
+ausbremsen.
+
+
+--------------------------------------------------------------------------------
+5) NESTING KOMPLETT AUF DEM SERVER — KLARE AUFGABE
+--------------------------------------------------------------------------------
+
+Entscheidung: Nesting rechnen wir auf dem Server — nicht im Browser.
+
+Der Server ist bei TrimTex NICHT der Performance-Retter für die
+Mausinteraktion. Er ist die Nesting-/Compute-Engine.
+
+Beispiel-Auftrag:
+
+  „Ich habe 300 Schnittteile, Materialbreite 1,60 m, bestimmte Abstände
+   und 4 Größen. Finde eine möglichst gute Anordnung.“
+
+Das ist perfekt für den Server.
+
+Ablauf:
+
+  Browser
+    │
+    │  „Nesting starten“ (+ Material, Stückzahlen, Abstände, …)
+    ▼
+  Server
+    │
+    ├── Teile analysieren
+    ├── mögliche Drehungen
+    ├── Platzierungen
+    ├── Abstände
+    ├── Materialbreite / Rollenbreite
+    ├── Optimierung
+    └── beste Lösung suchen
+    │
+    ▼
+  fertiges Nesting (Plan / Platzierungen)
+    │
+    ▼
+  Browser zeigt Ergebnis (und erlaubt Export etc.)
+
+Währenddessen kann der Benutzer im Browser weiter:
+  • ein anderes Teil öffnen / bearbeiten
+  • Maße anschauen
+  • Stückliste bearbeiten
+  • Projekt navigieren
+  • andere Dinge vorbereiten
+und bekommt nach Abschluss das Nesting-Ergebnis zurück.
+
+Der Browser muss währenddessen nicht selbst das Nesting rechnen.
+
+Weitere Kandidaten für denselben Server-Pfad (später):
+  • sehr große DXF-Imports
+  • schwere Stücklisten-PDF mit vielen Anlagen
+Nicht dafür: Punkt ziehen, Kerbe setzen, Kontur live ändern.
+
+
+--------------------------------------------------------------------------------
+6) DER WICHTIGSTE ARCHITEKTURWECHSEL (PERFORMANCE)
+--------------------------------------------------------------------------------
+
+Aktuell gedanklich (skaliert bei 100–200 Schnittteilen schlecht):
+
+  React → SVG → Geometrie → Hit-Tests → Drag → Berechnung → Rendering
+
+  Bei einer Mausbewegung kann der Main Thread beginnen, sämtliche 200
+  Schnittteile neu zu analysieren — und zusätzlich droht das
+  „Punkt vs. Linie“-Auseinanderlaufen, wenn Pfade nicht atomar sind.
+
+Ziel:
+
+  React
+    → Bedienoberfläche und Anwendungszustand
+
+  EIN Geometriemodell (+ Geometry Worker)
+    → einzige Wahrheit; jede Edit-Aktion aktualisiert das Modell vollständig
+
+  Canvas / WebGL (± Overlay)
+    → möglichst dummes, schnelles Zeichnen aus dem Modell / Cache
+
+  Server
+    → Nesting und andere schwere Batch-Jobs
+
+Damit:
+  • Main Thread analysiert nicht mehr alle 200 Teile pro Move.
+  • Punkt und Linie können nicht mehr auseinanderlaufen.
+
+
+--------------------------------------------------------------------------------
+7) DER EIGENTLICHE PERFORMANCE-TRICK + SZENENVERWALTUNG
+--------------------------------------------------------------------------------
+
+Wichtigster Satz (nochmals):
+
+  200 Teile dürfen existieren und sichtbar sein, aber TrimTex muss nicht
+  200 Teile bearbeiten, wenn der Benutzer gerade Punkt 4 eines einzigen
+  Teils bewegt.
+
+Genau daraus entstehen (ohne Feature-Abschaltung):
+
+  • Spatial Index     → nur relevante Kandidaten bei Hit/Snap
+  • Render Cache      → nicht alles neu zeichnen
+  • Edit-Level        → nur aktives Teil detailliert bearbeiten
+  • Geometry Worker   → Berechnung weg vom React-Main-Thread
+                        (eine Wahrheit verarbeiten, keine zweite Instanz)
+  • Server            → Nesting weg vom Browser
+
+Scene Index und Caches sind KEINE zweite Geometrie — nur Zugriffswege und
+Ableitungen aus dem einen Datenmodell:
+
+                    TRIMTEX PROJECT
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+       Datenmodell                 Scene Index
+       (Wahrheit)                  (Ableitung)
+             │                         │
+      alle Schnittteile          Bounding Boxes
+             │                    Spatial Index
+             └────────────┬────────────┘
+                          │
+                    aktueller View
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+        Hintergrund              Aktives Teil
+        gecacht                    volle Details
+        (Render-Ableitung)         (Edit am Modell)
+             │                         │
+       schnelles Zeichnen      Punkte/Kerben/Snap
+                               aus demselben Modell
+
+Bedeutung:
+  • Nutzer sieht weiterhin alle Teile.
+  • Interaktionslogik untersucht nicht 200 Teile pro Mausbewegung.
+  • TrimTex behandelt nicht jedes Teil so, als würde der Benutzer
+    gerade alle 200 gleichzeitig bearbeiten.
+  • Sobald ein Teil editiert wird, kommt die neue Zeichen-Geometrie
+    immer aus dem aktualisierten Modell — nie „nur der Handle“.
+
+
+--------------------------------------------------------------------------------
+8) DREI DETAILSTUFEN (Hebel — ohne zweite Wahrheit)
+--------------------------------------------------------------------------------
+
+8.1 Projekt-Level (jedes Teil, immer billig)
+  • vorhanden, Position/Transform, Bounding Box, Sichtbarkeit, Auswahl
+  → Listen, Index, Mehrfachauswahl
+
+8.2 Render-Level (sichtbare Teile)
+  • vorberechneter Path / Canvas-/GPU-Geometrie aus dem Modell
+  • Cache invalidieren, wenn das Modell dieses Teils sich ändert
+  → „sieht aus wie das Schnittteil“, kostet wenig
+
+8.3 Edit-Level (aktuell bearbeitetes Teil, ggf. Naht-Partner)
+  • Punkte, Kerben, Kanten, Snap, Handles, Hilfslinien, detaillierte Hits
+  • Jede Änderung geht durch den Geometry-Pfad (Modell vollständig)
+  → teure Interaktion bewusst begrenzt
+
+Regel:
+  Anzeige = viele Teile auf Render-Level (Ableitung).
+  Interaktion = wenige Teile auf Edit-Level (schreibt ins Modell).
+  Wahrheit = immer dasselbe Geometriemodell.
+
+
+--------------------------------------------------------------------------------
+9) HYBRID-ZEICHENFLÄCHE — SVG NICHT ALS DOGMA ABSCHAFFEN
+--------------------------------------------------------------------------------
+
+Nicht sofort: „SVG raus, WebGL rein“.
+Zuerst messen (Profiler bei 50 / 100 / 200 Teilen: Hover, Drag, Pan).
+
+Wahrscheinlich guter Kompromiss:
+
+  React
+   │
+   ├── normale UI
+   │
+   └── Workspace
+         │
+         ├── Canvas / WebGL → Masse statischer Teile (Render-Ableitung)
+         │
+         ├── SVG / Canvas-Overlay → aktives Teil (Edit-UI)
+         │         aber: Geometrie kommt aus dem Modell / Worker,
+         │         nicht aus einem parallelen „SVG-only“-Zustand
+         │
+         └── Geometry Worker
+               ├── Hit-Test / Snap
+               ├── Geometrie (Punkt→Linie→Naht→Kerbe)
+               └── Zeichen-Geometrie erzeugen
+
+UI-Overlay darf Handles zeichnen — die zugrunde liegenden Koordinaten
+müssen dieselben sein wie im Modell.
+
+
+--------------------------------------------------------------------------------
+10) WARUM DAS BESSER IST ALS „NUR DESKTOP-APP“
+--------------------------------------------------------------------------------
+
+Desktop hilft bei RAM/Tabs, löst aber weder „eine Wahrheit“ noch
+„nicht 200 Teile pro Move analysieren“, wenn dieselbe Architektur bleibt.
+
+Deshalb: Web zuerst (Worker + Szenenverwaltung + Nesting-Server).
+Desktop höchstens später als Hülle um dieselbe App.
+
+
+--------------------------------------------------------------------------------
+11) WEITERE BAUSTEINE
+--------------------------------------------------------------------------------
+
+A) Spatial Index — Kandidaten filtern, nicht alle Teile linear treffen
+B) Interaction Quality ohne Feature-Kill-Switch
+   Während Drag darf intern grober gerechnet werden — ABER nur so, dass
+   Punkt+Linie sofort und glatt der Maus folgen. Feinrechnung nach
+   Loslassen darf die Aktion nicht verzögern und nicht sichtbar „nachholen“
+   in einem Ruck. Nie: Aktion blockieren bis alles „perfekt“ ist.
+C) Nesting immer Server; Import/PDF optional ebenfalls
+D) Persistenz: große Projekte idle / stückweise speichern
+E) Regression-Test-Idee: „Punkt ziehen → angrenzende Segmente und
+   abgeleitete Naht/Kerben müssen mitwandern“ (gegen den alten Bug)
+
+
+--------------------------------------------------------------------------------
+12) WAS WIR NICHT ALS ZIEL VERKAUFEN / BAUEN SOLLTEN
+--------------------------------------------------------------------------------
+
+  ✗ Dauerhafter Performance-Modus als Pflicht
+  ✗ Geometry Worker als zweite Geometrie-Kopie „daneben“
+  ✗ Geometrie halb in UI, halb im Worker (zwei Wahrheiten)
+  ✗ Nur Handle/Punkt verschieben, Linie „später irgendwann“
+  ✗ Spürbare Verzögerung oder Ruckeln bei Punkt/Kerbe/Teil-Aktionen
+  ✗ Nesting im Browser bei großen Jobs
+  ✗ Live-Edit über den Server / Server als Maus-Performance-Retter
+  ✗ WebGL-Rewrite ohne Messung / ohne Modell-Klarheit
+  ✗ „Weniger Teile / weniger Tools“ als Produktlösung
+
+
+--------------------------------------------------------------------------------
+13) GROBER PHASENPLAN (IDEE, NICHT COMMIT)
+--------------------------------------------------------------------------------
+
+Phase 0 — Messen + Bug-Muster absichern
+  Profiler + sicherstellen, dass Edit-Pfade Modell→Anzeige atomar bleiben
+  (Regression: Punkt und Linie nicht auseinander).
+
+Phase 1 — Eine Wahrheit festzurren
+  Alle Live-Edits über einen Geometry-Pfad; Anzeige nur Ableitung/Cache.
+
+Phase 2 — Scene Index + Detailstufen
+  Edit-Level nur am aktiven Teil; alle Teile sichtbar auf Render-Level.
+
+Phase 3 — Geometry Worker
+  Hit-Test / Snap / Drag-Geometrie im Worker; Main Thread zeichnet.
+
+Phase 4 — Hybrid-Zeichenfläche
+  Hintergrund gecacht + Overlay für aktives Teil.
+
+Phase 5 — Nesting auf Server (verbindlich)
+  Browser startet Job, zeigt Fortschritt und Ergebnis.
+
+Phase 6 — Optional Desktop-Shell
+  Gleiche Codebasis, falls nötig.
+
+
+--------------------------------------------------------------------------------
+14) ERFOLGSKRITERIUM
+--------------------------------------------------------------------------------
+
+  • Viele Teile: flüssig, volle Werkzeuge, kein Sparmodus-Zwang
+  • Punkt / Kerbe / Teil ziehen: SOFORT, elegant, ruckelfrei — keine
+    spürbare Verzögerung, kein Nachziehen hinter der Maus
+  • Punkt ziehen → Linie/Kurve/Naht/Kerben stimmen sofort mit
+  • Nie zwei konkurrierende Geometrie-Zustände für ein Teil
+  • Nesting läuft auf dem Server; Browser bleibt währenddessen bedienbar
+  • Pro Interaktion nur das Nötige berechnen (Index + Edit-Level)
+  • Optimierungen gelten nur, wenn sie dieses Sofort-Gefühl nicht opfern
+
+
+--------------------------------------------------------------------------------
+15) KURZFAZIT — DIE ARCHITEKTUR FÜR TRIMTEX
+--------------------------------------------------------------------------------
+
+Das Dokument ist die technische Leitlinie. Kern:
+
+  • EINE Geometrie = Wahrheit
+  • Geometry Worker = Ort der Verarbeitung (keine zweite Instanz)
+  • React / Canvas = UI und Anzeige
+  • Server = Nesting-/Compute-Engine (nicht Maus-Retter)
+  • Live-Aktionen = sofort, elegant, ruckelfrei, lokal
+  • 200 Teile sichtbar ≠ 200 Teile pro Punkt-Move bearbeiten
+       → Spatial Index, Render Cache, Edit-Level, Worker, Server
+  • Kein Feature wird abgeschaltet
+
+Leitsätze zum Mitnehmen:
+
+  Nicht weniger anzeigen, nicht weniger anbieten —
+  sondern nur berechnen, was die aktuelle Interaktion braucht.
+
+  Es darf niemals zwei Wahrheiten für ein Schnittteil geben.
+
+  Der Geometry Worker ist keine zweite Geometrie — er verarbeitet die eine.
+
+  Interaktion muss sich sofort und flüssig anfühlen.
+
+Damit bleibt TrimTex ein Web-/Cloud-Produkt — performant, korrekt und elegant.
+
+================================================================================
+Ende Leitlinie
+================================================================================

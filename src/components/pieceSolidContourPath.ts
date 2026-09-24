@@ -13,7 +13,7 @@ export type PieceContourDisplayPaths = {
   dashedStrokeOnly: boolean
 }
 
-const PATH_CACHE_MAX = 64
+const PATH_CACHE_MAX = 256
 const pathCache = new Map<string, PieceContourDisplayPaths>()
 
 function pathCacheGet(key: string): PieceContourDisplayPaths | undefined {
