@@ -239,10 +239,13 @@ function mergeVNotchLines(
           const otherB = dist2d(tb, tip) < 0.01 ? { x: b.x2, y: b.y2 } : { x: b.x1, y: b.y1 }
           const depth = (dist2d(otherA, tip) + dist2d(otherB, tip)) / 2
           const width = dist2d(otherA, otherB)
-          const angle = (Math.atan2(tip.y - (otherA.y + otherB.y) / 2, tip.x - (otherA.x + otherB.x) / 2) * 180) / Math.PI
+          // Position an der Kontur-Öffnung (Sehne), Winkel zur Spitze = ins Teilinnere.
+          const opening = { x: (otherA.x + otherB.x) / 2, y: (otherA.y + otherB.y) / 2 }
+          const angle =
+            (Math.atan2(tip.y - opening.y, tip.x - opening.x) * 180) / Math.PI
           out.push({
             id: Math.random().toString(36).slice(2, 12),
-            position: tip,
+            position: opening,
             angle,
             type: 'v',
             depth: Math.max(1, depth),

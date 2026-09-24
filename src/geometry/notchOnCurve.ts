@@ -10,6 +10,7 @@ import {
 import { isNotchOnInternalLine } from './notchOnInternalLine'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { VERTEX_T_EPS, lerpPt } from './geometryConstants'
+import { isPointInClosedCurves } from './pointInPolygon'
 
 /** Innen-Normalenwinkel (Grad) an (curveIndex, t). An Vertices (t≈0 oder t≈1) Winkelhalbierende der beiden Segmente. */
 function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): number {
@@ -21,6 +22,7 @@ function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): nu
   const toVector = (deg: number) => ({ x: Math.cos(toRad(deg)), y: Math.sin(toRad(deg)) })
   const inward = (ci: number, tt: number) => outwardNormalAngleAt(curves, ci, tt) + 180
 
+  let angleDeg: number
   if (t <= VERTEX_T_EPS) {
     const prevIdx = (curveIndex - 1 + n) % n
     const a1 = inward(prevIdx, 1)
@@ -30,11 +32,12 @@ function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): nu
     const sx = v1.x + v2.x
     const sy = v1.y + v2.y
     const len = Math.hypot(sx, sy)
-    if (len < 1e-10) return Number.isFinite(a1) ? a1 : 0
-    const out = toDeg(Math.atan2(sy, sx))
-    return Number.isFinite(out) ? out : (Number.isFinite(a1) ? a1 : 0)
-  }
-  if (t >= 1 - VERTEX_T_EPS) {
+    if (len < 1e-10) angleDeg = Number.isFinite(a1) ? a1 : 0
+    else {
+      const out = toDeg(Math.atan2(sy, sx))
+      angleDeg = Number.isFinite(out) ? out : Number.isFinite(a1) ? a1 : 0
+    }
+  } else if (t >= 1 - VERTEX_T_EPS) {
     const nextIdx = (curveIndex + 1) % n
     const a1 = inward(curveIndex, 1)
     const a2 = inward(nextIdx, 0)
@@ -43,12 +46,55 @@ function inwardNormalAngleAt(curves: Curve[], curveIndex: number, t: number): nu
     const sx = v1.x + v2.x
     const sy = v1.y + v2.y
     const len = Math.hypot(sx, sy)
-    if (len < 1e-10) return Number.isFinite(a1) ? a1 : 0
-    const out = toDeg(Math.atan2(sy, sx))
-    return Number.isFinite(out) ? out : (Number.isFinite(a1) ? a1 : 0)
+    if (len < 1e-10) angleDeg = Number.isFinite(a1) ? a1 : 0
+    else {
+      const out = toDeg(Math.atan2(sy, sx))
+      angleDeg = Number.isFinite(out) ? out : Number.isFinite(a1) ? a1 : 0
+    }
+  } else {
+    const direct = inward(curveIndex, t)
+    angleDeg = Number.isFinite(direct) ? direct : 0
   }
-  const direct = inward(curveIndex, t)
-  return Number.isFinite(direct) ? direct : 0
+
+  return ensureAnglePointsIntoContour(curves, curveIndex, t, angleDeg)
+}
+
+/**
+ * Stellt sicher, dass der Kerben-Winkel ins Teilinnere zeigt.
+ * Manche DXF-Konturen (Winding/Self-Touch) liefern eine um 180° verdrehte Normale —
+ * dann würden Kerben nach außen gezeichnet.
+ */
+function ensureAnglePointsIntoContour(
+  curves: Curve[],
+  curveIndex: number,
+  t: number,
+  angleDeg: number,
+): number {
+  if (curves.length < 3 || !Number.isFinite(angleDeg)) return angleDeg
+  const onCurve = pointOnCurveAt(curves, curveIndex, t)
+  if (!onCurve) return angleDeg
+  // Geschlossen genug? Sonst kein zuverlässiger Inside-Test.
+  const first = curves[0].start
+  const last = curves[curves.length - 1].end
+  if (Math.hypot(first.x - last.x, first.y - last.y) > 0.5) return angleDeg
+
+  const rad = (angleDeg * Math.PI) / 180
+  const probeMm = 0.75
+  const inwardProbe = {
+    x: onCurve.x + probeMm * Math.cos(rad),
+    y: onCurve.y + probeMm * Math.sin(rad),
+  }
+  const outwardProbe = {
+    x: onCurve.x - probeMm * Math.cos(rad),
+    y: onCurve.y - probeMm * Math.sin(rad),
+  }
+  const inIn = isPointInClosedCurves(inwardProbe, curves)
+  const inOut = isPointInClosedCurves(outwardProbe, curves)
+  if (!inIn && inOut) {
+    // Aktueller Winkel zeigt nach außen → umdrehen
+    return angleDeg + 180
+  }
+  return angleDeg
 }
 
 /**

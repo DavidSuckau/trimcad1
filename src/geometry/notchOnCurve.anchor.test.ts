@@ -128,4 +128,35 @@ describe('resolveNotchCutLineAnchor / materialize', () => {
     const geom = notchCutoutPoints(pos.position, pos.angle, notch.depth, notch.width ?? 6, cutLine, { curveIndex: 0, t: 0 }, notch.type)
     expect(geom).not.toBeNull()
   })
+
+  it('Kerben-Winkel zeigt bei CCW- und CW-Kontur ins Innere (nicht nach außen)', () => {
+    const ccw = square(100)
+    const cw: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 0, y: 100 } },
+      { type: 'line', start: { x: 0, y: 100 }, end: { x: 100, y: 100 } },
+      { type: 'line', start: { x: 100, y: 100 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 0, y: 0 } },
+    ]
+    for (const cutLine of [ccw, cw]) {
+      const notch: Notch = {
+        id: 'n-in',
+        position: { x: 50, y: 0 },
+        angle: -90, // absichtlich nach außen
+        type: 'v',
+        depth: 5,
+        width: 6,
+      }
+      const pos = getNotchPositionAndAngle(notch, cutLine)
+      const rad = (pos.angle * Math.PI) / 180
+      const tip = {
+        x: pos.position.x + 5 * Math.cos(rad),
+        y: pos.position.y + 5 * Math.sin(rad),
+      }
+      // Spitze muss im Quadrat 0..100 liegen
+      expect(tip.x).toBeGreaterThan(1)
+      expect(tip.x).toBeLessThan(99)
+      expect(tip.y).toBeGreaterThan(1)
+      expect(tip.y).toBeLessThan(99)
+    }
+  })
 })

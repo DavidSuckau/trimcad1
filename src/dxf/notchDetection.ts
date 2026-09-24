@@ -141,7 +141,20 @@ function tryDetectNotchAtTip(
   const midX = (pPrev.x + pNext.x) / 2
   const midY = (pPrev.y + pNext.y) / 2
   const position: Point = { x: midX, y: midY }
-  const inwardAngle = Math.atan2(pTip.y - midY, pTip.x - midX)
+  // Richtung Öffnung → Spitze (= typisch ins Teilinnere bei konkaver Einbuchtung)
+  let inwardAngle = Math.atan2(pTip.y - midY, pTip.x - midX)
+  // Absichern: Spitze muss auf der Innenseite der Öffnungs-Sehne liegen (CCW: links, CW: rechts).
+  if (polygonAreaSigned != null && Math.abs(polygonAreaSigned) > 1e-8) {
+    const toTipX = pTip.x - midX
+    const toTipY = pTip.y - midY
+    const edgeX = pNext.x - pPrev.x
+    const edgeY = pNext.y - pPrev.y
+    const cross = edgeX * toTipY - edgeY * toTipX
+    const tipPointsInward = polygonAreaSigned > 0 ? cross > 0 : cross < 0
+    if (!tipPointsInward) {
+      inwardAngle += Math.PI
+    }
+  }
   const angle = (inwardAngle * 180) / Math.PI
   const rawDepth = dist({ x: midX, y: midY }, pTip)
   const rawWidth = dist(pPrev, pNext)
@@ -200,7 +213,16 @@ function tryDetectSlitNotchAt(
   const position: Point = { x: midOx, y: midOy }
   const rawDepth = dist({ x: midOx, y: midOy }, { x: midBx, y: midBy })
   const rawWidth = opening
-  const inwardAngle = Math.atan2(midBy - midOy, midBx - midOx)
+  let inwardAngle = Math.atan2(midBy - midOy, midBx - midOx)
+  if (Math.abs(polygonAreaSigned) > 1e-8) {
+    const toInX = midBx - midOx
+    const toInY = midBy - midOy
+    const edgeX = e.x - b.x
+    const edgeY = e.y - b.y
+    const cross = edgeX * toInY - edgeY * toInX
+    const pointsInward = polygonAreaSigned > 0 ? cross > 0 : cross < 0
+    if (!pointsInward) inwardAngle += Math.PI
+  }
   const angle = (inwardAngle * 180) / Math.PI
   const { depth, width } = clampDepthWidth(rawDepth, rawWidth)
 
