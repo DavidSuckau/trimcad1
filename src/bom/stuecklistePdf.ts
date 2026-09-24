@@ -23,6 +23,11 @@ import {
 import { buildWorkspaceOverviewSvgDocument } from '../workspace/buildWorkspaceOverviewSvg'
 import type { OverviewImageSession } from '../workspace/workspaceOverviewBounds'
 import { APP_NAME } from '../branding'
+import {
+  appendProfilePdfsToStueckliste,
+  collectUniqueProfilePdfAttachments,
+  downloadPdfBytes,
+} from './appendProfilePdfs'
 
 function fmtAreaM2(mm2: number): string {
   return (mm2 / 1_000_000).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
@@ -228,8 +233,9 @@ function drawWorkspacePreviewTechnicalPage(doc: jsPDF, p: TechnicalPreviewPagePa
 
 /**
  * Stückliste als DIN A3 Querformat-PDF (Übersicht: Kopf, Tabellen, optional Vorschau-Grafik).
+ * Anschließend werden alle an Profilen hinterlegten PDF-Zeichnungen angehängt (jede Seite = eigene Seite).
  */
-export async function downloadStuecklistePdf(params: StuecklistePdfParams): Promise<void> {
+export async function downloadStuecklistePdf(params: StuecklistePdfParams): Promise<{ warnings?: string[] }> {
   const { workspace, docDateLabel, imageSession, imageDataUrl } = params
   const includeNaehplan = params.includeNaehplan !== false
   const { pieces } = workspace
@@ -547,5 +553,15 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
 
   const datePart = new Date().toISOString().slice(0, 10)
   const fname = `Stueckliste_${safeFilenamePart(workspace.name)}_${datePart}.pdf`
-  doc.save(fname)
+
+  const bomBytes = doc.output('arraybuffer')
+  const attachments = collectUniqueProfilePdfAttachments(workspace.profileAssignments ?? [])
+  if (attachments.length === 0) {
+    doc.save(fname)
+    return {}
+  }
+
+  const merged = await appendProfilePdfsToStueckliste(bomBytes, attachments)
+  downloadPdfBytes(merged.bytes, fname)
+  return merged.warnings.length ? { warnings: merged.warnings } : {}
 }

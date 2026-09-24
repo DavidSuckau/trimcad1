@@ -437,13 +437,18 @@ export function StuecklisteModal() {
               setPdfExporting(true)
               try {
                 const { downloadStuecklistePdf } = await import('../bom/stuecklistePdf')
-                await downloadStuecklistePdf({
+                const result = await downloadStuecklistePdf({
                   workspace,
                   docDateLabel,
                   imageSession: imageDigitizeSession,
                   imageDataUrl: imageDigitizeSession?.imageDataUrl ?? null,
                   includeNaehplan,
                 })
+                if (result.warnings?.length) {
+                  setToastMessage(`warn:PDF erstellt, aber einige Profil-Zeichnungen fehlten: ${result.warnings.join(' ')}`)
+                } else {
+                  setToastMessage('success:Stückliste-PDF erstellt.')
+                }
               } catch {
                 setToastMessage('error:PDF konnte nicht erstellt werden.')
               } finally {
