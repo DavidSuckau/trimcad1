@@ -30,6 +30,7 @@ import { seamRingFromDraftVertices, stripDuplicateContourInternalLines, collectP
 import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { isBinaryDxf, scanUnsupportedEntityHints } from './dxfBinaryHints'
+import { rotateImportedPiecesGeometry180 } from './dxfImportOrient'
 
 export type ImportDxfOptions = {
   /** Zusätzliche Layer-Namen (kommagetrennt in den Einstellungen), die als Schnittkontur gelten. */
@@ -473,7 +474,10 @@ export function importDxfFromString(content: string, options?: ImportDxfOptions)
       }
     }
 
-    return { pieces, warnings: warnings.length ? warnings : undefined }
+    // DXF/CAD → TrimTex: Teile erscheinen sonst systematisch um 180° verdreht.
+    const oriented = rotateImportedPiecesGeometry180(pieces)
+
+    return { pieces: oriented, warnings: warnings.length ? warnings : undefined }
   } catch (err) {
     return {
       pieces: [],

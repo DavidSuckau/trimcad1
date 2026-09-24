@@ -21,6 +21,7 @@ import {
 } from './dxfImporter'
 import { enrichPiecesFromParsedDxf, type PieceCutRing } from './dxfImportEnrichment'
 import { draftInternalsToPieceFields } from './dxfCollectCutDrafts'
+import { rotateImportedPiecesGeometry180 } from './dxfImportOrient'
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 12)
@@ -185,7 +186,9 @@ export function importDxfOpenContoursFromString(
       }
     }
 
-    return { pieces, warnings: warnings.length ? warnings : undefined }
+    const oriented = rotateImportedPiecesGeometry180(pieces)
+
+    return { pieces: oriented, warnings: warnings.length ? warnings : undefined }
   } catch (err) {
     return {
       pieces: [],
