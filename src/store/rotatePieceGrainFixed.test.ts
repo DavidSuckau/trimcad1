@@ -40,6 +40,7 @@ describe('rotatePiece90 keepGrainWorldFixed', () => {
         pieces: [rectPiece()],
         seamAssignments: [],
         profileAssignments: [],
+        view: { zoom: 1, panX: 0, panY: 0 },
       },
     })
   })

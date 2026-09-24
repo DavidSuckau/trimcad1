@@ -74,7 +74,7 @@ import {
   remapNotchesAfterInternalLineRemove,
   remapNotchesAfterInternalLineSplit,
 } from '../geometry/notchOnInternalLine'
-import { pieceLocalToWorld, getPiecePivotLocal, worldToPieceLocal } from '../geometry/pieceTransform'
+import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
