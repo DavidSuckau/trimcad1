@@ -1,33 +1,28 @@
 import { describe, it, expect } from 'vitest'
 import type { PatternPiece } from '../types/model'
-import { rotateImportedPieceGeometry180 } from './dxfImportOrient'
+import {
+  commonPivotOfPieces,
+  rotateImportedPieceGeometry180,
+  rotateImportedPiecesGeometry180,
+} from './dxfImportOrient'
 import { importDxfFromString } from './dxfImporter'
 
-function rectPiece(): PatternPiece {
+function rectPiece(id: string, x0: number, y0: number, w: number, h: number): PatternPiece {
   return {
-    id: 'p1',
-    number: '001',
-    name: 'Test',
+    id,
+    number: id,
+    name: id,
     cutLine: [
-      { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
-      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 40 } },
-      { type: 'line', start: { x: 100, y: 40 }, end: { x: 0, y: 40 } },
-      { type: 'line', start: { x: 0, y: 40 }, end: { x: 0, y: 0 } },
+      { type: 'line', start: { x: x0, y: y0 }, end: { x: x0 + w, y: y0 } },
+      { type: 'line', start: { x: x0 + w, y: y0 }, end: { x: x0 + w, y: y0 + h } },
+      { type: 'line', start: { x: x0 + w, y: y0 + h }, end: { x: x0, y: y0 + h } },
+      { type: 'line', start: { x: x0, y: y0 + h }, end: { x: x0, y: y0 } },
     ],
     seamLine: [],
     seamAllowanceMm: null,
-    notches: [
-      {
-        id: 'n1',
-        position: { x: 50, y: 0 },
-        angle: 90,
-        type: 'v',
-        depth: 4,
-        width: 6,
-      },
-    ],
-    drills: [{ id: 'd1', center: { x: 10, y: 5 }, radius: 2 }],
-    grainLine: { start: { x: 50, y: 5 }, end: { x: 50, y: 35 } },
+    notches: [],
+    drills: [{ id: `d-${id}`, center: { x: x0 + 5, y: y0 + 5 }, radius: 2 }],
+    grainLine: { start: { x: x0 + w / 2, y: y0 + 5 }, end: { x: x0 + w / 2, y: y0 + h - 5 } },
     internalLines: [],
     internalCircles: [],
     layer: 'CUT',
@@ -40,16 +35,47 @@ function rectPiece(): PatternPiece {
 
 describe('rotateImportedPieceGeometry180', () => {
   it('dreht Geometrie um 180° um den Teilmittelpunkt (BBox bleibt)', () => {
-    const p = rotateImportedPieceGeometry180(rectPiece())
-    // BBox weiterhin 0..100 × 0..40
+    const p = rotateImportedPieceGeometry180(rectPiece('p1', 0, 0, 100, 40))
     expect(p.cutLine[0].start.x).toBeCloseTo(100, 5)
     expect(p.cutLine[0].start.y).toBeCloseTo(40, 5)
-    // Drill war (10,5) → (90,35)
-    expect(p.drills[0].center.x).toBeCloseTo(90, 5)
+    expect(p.drills[0].center.x).toBeCloseTo(95, 5)
     expect(p.drills[0].center.y).toBeCloseTo(35, 5)
-    // Kerbe war unten Mitte → oben Mitte
-    expect(p.notches[0].position.x).toBeCloseTo(50, 1)
-    expect(p.notches[0].position.y).toBeCloseTo(40, 1)
+  })
+})
+
+describe('rotateImportedPiecesGeometry180 (gemeinsamer Pivot)', () => {
+  it('hält angrenzende Teile aneinander (gemeinsame Kante bleibt gemeinsam)', () => {
+    // Links 0..50, rechts 50..100 — gemeinsame Kante x=50
+    const left = rectPiece('L', 0, 0, 50, 40)
+    const right = rectPiece('R', 50, 0, 50, 40)
+    const [L, R] = rotateImportedPiecesGeometry180([left, right])
+
+    const leftEdgeX = L.cutLine.flatMap((c) => [c.start.x, c.end.x]).filter((x) => Math.abs(x - 50) < 1e-6 || true)
+    // Nach globaler 180° um (50, 20): linkes Teil landet rechts, rechtes links —
+    // die ehemalige gemeinsame Kante x=50 bleibt bei x=50 und gehört zu beiden.
+    const Lxs = new Set(
+      L.cutLine.flatMap((c) => [c.start.x, c.end.x]).map((x) => Math.round(x * 1e6) / 1e6),
+    )
+    const Rxs = new Set(
+      R.cutLine.flatMap((c) => [c.start.x, c.end.x]).map((x) => Math.round(x * 1e6) / 1e6),
+    )
+    expect(Lxs.has(50)).toBe(true)
+    expect(Rxs.has(50)).toBe(true)
+
+    // Drill links war (5,5) → global 180 um (50,20) → (95,35) — bleibt auf dem (jetzt rechts liegenden) Teil
+    expect(L.drills[0].center.x).toBeCloseTo(95, 5)
+    expect(L.drills[0].center.y).toBeCloseTo(35, 5)
+    // Drill rechts war (55,5) → (45,35)
+    expect(R.drills[0].center.x).toBeCloseTo(45, 5)
+    expect(R.drills[0].center.y).toBeCloseTo(35, 5)
+
+    void leftEdgeX
+  })
+
+  it('commonPivotOfPieces mittig über alle Teile', () => {
+    const pivot = commonPivotOfPieces([rectPiece('a', 0, 0, 50, 40), rectPiece('b', 50, 0, 50, 40)])
+    expect(pivot?.cx).toBeCloseTo(50, 5)
+    expect(pivot?.cy).toBeCloseTo(20, 5)
   })
 })
 

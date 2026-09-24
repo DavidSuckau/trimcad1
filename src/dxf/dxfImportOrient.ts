@@ -1,6 +1,8 @@
 /**
  * DXF-Import-Orientierung: CAD/DXF-Teile erscheinen in TrimTex systematisch um 180° verdreht.
- * Nach dem Einlesen um den Bounding-Box-Mittelpunkt des Teils drehen (Lage auf der Fläche bleibt).
+ * Alle Teile gemeinsam um den gemeinsamen Bounding-Box-Mittelpunkt drehen —
+ * so bleiben angrenzende Teile korrekt aneinander (rechte Kante an linker, oben an unten).
+ * Laufrichtung dreht mit der Geometrie mit; Teilename bleibt auf dem Canvas lesbar (kein Text-Rotate).
  */
 
 import type { Curve, Drill, Line, Notch, PatternPiece, Point } from '../types/model'
@@ -8,7 +10,7 @@ import { resyncNotchesAfterCutLineRebuilt } from '../geometry/notchResyncCutLine
 import { materializeNotchAnchorsOnInternalLine } from '../geometry/notchOnInternalLine'
 import { isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 
-function boundsOfCurves(curves: Curve[]): { cx: number; cy: number } | null {
+function boundsOfCurves(curves: Curve[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
   if (curves.length === 0) return null
   let minX = Infinity
   let minY = Infinity
@@ -29,6 +31,35 @@ function boundsOfCurves(curves: Curve[]): { cx: number; cy: number } | null {
     }
   }
   if (!Number.isFinite(minX)) return null
+  return { minX, minY, maxX, maxY }
+}
+
+function pivotOfCurves(curves: Curve[]): { cx: number; cy: number } | null {
+  const b = boundsOfCurves(curves)
+  if (!b) return null
+  return { cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2 }
+}
+
+/** Gemeinsamer Mittelpunkt aller Schnittkonturen (Fallback: Naht/Intern). */
+export function commonPivotOfPieces(pieces: PatternPiece[]): { cx: number; cy: number } | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let any = false
+  for (const piece of pieces) {
+    const b =
+      boundsOfCurves(piece.cutLine) ??
+      boundsOfCurves(piece.seamLine) ??
+      boundsOfCurves(piece.internalLines)
+    if (!b) continue
+    any = true
+    minX = Math.min(minX, b.minX)
+    minY = Math.min(minY, b.minY)
+    maxX = Math.max(maxX, b.maxX)
+    maxY = Math.max(maxY, b.maxY)
+  }
+  if (!any) return null
   return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 }
 }
 
@@ -74,16 +105,20 @@ function rotNotches180(notches: Notch[], cx: number, cy: number): Notch[] {
 }
 
 /**
- * Dreht die lokale Geometrie eines importierten Teils um 180° um den Mittelpunkt der Schnittkontur.
+ * Dreht die lokale Geometrie eines importierten Teils um 180° um den gegebenen Pivot.
  * Transform (Platzierung) bleibt unverändert.
  */
-export function rotateImportedPieceGeometry180(piece: PatternPiece): PatternPiece {
-  const pivot =
-    boundsOfCurves(piece.cutLine) ??
-    boundsOfCurves(piece.seamLine) ??
-    boundsOfCurves(piece.internalLines)
-  if (!pivot) return piece
-  const { cx, cy } = pivot
+export function rotateImportedPieceGeometry180(
+  piece: PatternPiece,
+  pivot?: { cx: number; cy: number },
+): PatternPiece {
+  const resolved =
+    pivot ??
+    pivotOfCurves(piece.cutLine) ??
+    pivotOfCurves(piece.seamLine) ??
+    pivotOfCurves(piece.internalLines)
+  if (!resolved) return piece
+  const { cx, cy } = resolved
 
   const cutLine = piece.cutLine.map((c) => rotCurve180(c, cx, cy))
   const seamLine = piece.seamLine.map((c) => rotCurve180(c, cx, cy))
@@ -92,7 +127,7 @@ export function rotateImportedPieceGeometry180(piece: PatternPiece): PatternPiec
     ...ic,
     center: rot180(ic.center, cx, cy),
   }))
-  const grainLine = rotLine180(piece.grainLine, cx, cy) ?? undefined
+  const grainLine = rotLine180(piece.grainLine, cx, cy)
   const drills = rotDrills180(piece.drills, cx, cy)
   let notches = rotNotches180(piece.notches, cx, cy)
 
@@ -116,6 +151,12 @@ export function rotateImportedPieceGeometry180(piece: PatternPiece): PatternPiec
   }
 }
 
+/**
+ * Dreht alle importierten Teile gemeinsam um 180° um den gemeinsamen Mittelpunkt.
+ * So bleiben Teile korrekt aneinander (wie in CAD).
+ */
 export function rotateImportedPiecesGeometry180(pieces: PatternPiece[]): PatternPiece[] {
-  return pieces.map(rotateImportedPieceGeometry180)
+  const pivot = commonPivotOfPieces(pieces)
+  if (!pivot) return pieces
+  return pieces.map((p) => rotateImportedPieceGeometry180(p, pivot))
 }
