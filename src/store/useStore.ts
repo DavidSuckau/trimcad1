@@ -74,13 +74,13 @@ import {
   remapNotchesAfterInternalLineRemove,
   remapNotchesAfterInternalLineSplit,
 } from '../geometry/notchOnInternalLine'
-import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
+import { pieceLocalToWorld, getPiecePivotLocal, worldToPieceLocal } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner, rematerializeNotchesAfterGeometricMirror } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal, getReferenceInternalLinePivotLocal } from '../geometry/scalePieceLocal'
-import { withDefaultGrainLine } from '../geometry/grainArrowLayout'
+import { withDefaultGrainLine, getPieceGrainLine, grainLineKeepingWorldFixed } from '../geometry/grainArrowLayout'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
 import {
   buildEasePairDrafts,
@@ -858,10 +858,18 @@ type Store = {
   applyPieceSymmetry: (pieceId: string, axisA: Point, axisB: Point, keepSide: PieceSymmetryKeepSide) => void
   /** Entfernt die aktive Teil-Symmetrie; Geometrie bleibt, beide Seiten sind danach unabhängig. */
   clearPieceSymmetry: (pieceId: string) => void
-  /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt). */
+  /** Teil auf der Arbeitsfläche um 90° im Uhrzeigersinn drehen (um Pivot). Laufrichtung bleibt weltfest. */
   rotatePiece90: (pieceId: string) => void
-  /** Rotation eines Teils setzen (Grad), Pivot bleibt fest. Für freie Drehung. */
-  setPieceRotation: (pieceId: string, rotationDeg: number) => void
+  /**
+   * Rotation eines Teils setzen (Grad), Pivot bleibt fest.
+   * Standard: Laufrichtung (und damit Teilename am Pfeil) bleibt in Weltkoordinaten stehen.
+   * `keepGrainWorldFixed: false` für „An Laufrichtung/Kante ausrichten“.
+   */
+  setPieceRotation: (
+    pieceId: string,
+    rotationDeg: number,
+    opts?: { keepGrainWorldFixed?: boolean },
+  ) => void
   /** Drehpunkt (Pivot) setzen oder zurücksetzen (null = Bounds-Mitte). */
   setPiecePivot: (pieceId: string, pivotLocal: Point | null) => void
   /** Laufrichtungslinie (Fadenlauf) setzen. */
@@ -4693,10 +4701,11 @@ export const useStore = create<Store>()(
     }))
   },
 
-  setPieceRotation: (pieceId, rotationDeg) =>
+  setPieceRotation: (pieceId, rotationDeg, opts) =>
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
+      const keepGrain = opts?.keepGrainWorldFixed !== false
       const pivot = getPiecePivotLocal(piece)
       const t = piece.transform
       const worldCenter = pieceLocalToWorld(pivot, t)
@@ -4708,12 +4717,28 @@ export const useStore = create<Store>()(
       const txNew = worldCenter.x - (lx * cos - ly * sin)
       const tyNew = worldCenter.y - (lx * sin + ly * cos)
       const persistPivot = piece.transform.pivotLocal == null ? pivot : piece.transform.pivotLocal
+      const newTransform = {
+        ...piece.transform,
+        x: txNew,
+        y: tyNew,
+        rotation: rotationDeg,
+        pivotLocal: persistPivot,
+      }
+      let grainLine = piece.grainLine
+      if (keepGrain) {
+        const src = getPieceGrainLine(piece)
+        grainLine = grainLineKeepingWorldFixed(src, t, newTransform)
+      }
       return {
         workspace: {
           ...s.workspace,
           pieces: s.workspace.pieces.map((p) =>
             p.id === pieceId
-              ? { ...p, transform: { ...p.transform, x: txNew, y: tyNew, rotation: rotationDeg, pivotLocal: persistPivot } }
+              ? {
+                  ...p,
+                  transform: newTransform,
+                  ...(keepGrain ? { grainLine } : {}),
+                }
               : p
           ),
         },
@@ -4738,7 +4763,11 @@ export const useStore = create<Store>()(
     })),
 
   rotatePiece90: (pieceId) =>
-    get().setPieceRotation(pieceId, (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90),
+    get().setPieceRotation(
+      pieceId,
+      (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90,
+      { keepGrainWorldFixed: true },
+    ),
 
   setGrainLine: (pieceId, line) =>
     set((s) => ({
@@ -4798,7 +4827,7 @@ export const useStore = create<Store>()(
     let delta = targetWorldAngle - currentWorldAngle
     while (delta > 180) delta -= 360
     while (delta < -180) delta += 360
-    get().setPieceRotation(pieceId, piece.transform.rotation + delta)
+    get().setPieceRotation(pieceId, piece.transform.rotation + delta, { keepGrainWorldFixed: false })
   },
 
   alignPieceEdgeHorizontal: (pieceId, edgeIndex) => {
@@ -4822,7 +4851,7 @@ export const useStore = create<Store>()(
     if (len < 1e-9) return false
     const thetaDeg = (Math.atan2(dy, dx) * 180) / Math.PI
     const delta = deltaMinimalDegToHorizontal(thetaDeg)
-    get().setPieceRotation(pieceId, piece.transform.rotation + delta)
+    get().setPieceRotation(pieceId, piece.transform.rotation + delta, { keepGrainWorldFixed: false })
     return true
   },
 

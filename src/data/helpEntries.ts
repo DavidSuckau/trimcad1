@@ -238,8 +238,9 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Werkzeuge',
     name: '90° drehen',
-    description: 'Ausgewählte Teile um 90° im Uhrzeigersinn drehen (um Teilmittelpunkt).',
-    access: 'Menü Bearbeiten → 90° drehen',
+    description:
+      'Ausgewählte Teile um 90° im Uhrzeigersinn drehen (um Pivot). Laufrichtungspfeil und Teilename bleiben in Weltausrichtung stehen und drehen nicht mit.',
+    access: 'Taste R oder Menü Bearbeiten → 90° drehen',
     shortcut: 'R',
   },
   {

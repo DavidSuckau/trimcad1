@@ -1,6 +1,7 @@
-import type { Curve, Line, PatternPiece, Point } from '../types/model'
+import type { Curve, Line, PatternPiece, PatternPieceTransform, Point } from '../types/model'
 import { bezierDerivativeAt, curvesBounds } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
+import { pieceLocalToWorld, worldToPieceLocal } from './pieceTransform'
 
 /** Max. Abstand Linienmitte → Schnittkontur (mm) zum Snappen an eine Kante. */
 export const GRAIN_SNAP_TO_EDGE_MM = 14
@@ -80,6 +81,22 @@ export function withDefaultGrainLine(piece: PatternPiece): PatternPiece {
 export function getPieceGrainLine(piece: PatternPiece): Line {
   if (piece.grainLine) return piece.grainLine
   return createDefaultGrainLine(piece)
+}
+
+/**
+ * Passt die Laufrichtung in lokalen Koordinaten so an, dass Start/Ende in der Welt
+ * gleich bleiben, wenn sich die Teil-Transform (z. B. Rotation) ändert.
+ * Dadurch drehen Pfeil und Teilename beim Drehen (R) nicht mit.
+ */
+export function grainLineKeepingWorldFixed(
+  grain: Line,
+  oldTransform: PatternPieceTransform,
+  newTransform: PatternPieceTransform,
+): Line {
+  return {
+    start: worldToPieceLocal(pieceLocalToWorld(grain.start, oldTransform), newTransform),
+    end: worldToPieceLocal(pieceLocalToWorld(grain.end, oldTransform), newTransform),
+  }
 }
 
 /**
