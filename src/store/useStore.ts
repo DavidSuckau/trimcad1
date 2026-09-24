@@ -81,6 +81,7 @@ import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
 import { resyncNotchesAfterCutLineRebuilt, resyncNotchesViaSeamAnchor, notchPushedToCorner, rematerializeNotchesAfterGeometricMirror } from '../geometry/notchResyncCutLine'
 import { applyUniformScaleToPiece, getReferenceEdgePivotLocal, getReferenceInternalLinePivotLocal } from '../geometry/scalePieceLocal'
 import { withDefaultGrainLine, getPieceGrainLine, grainLineKeepingWorldFixed } from '../geometry/grainArrowLayout'
+import { remapPieceMaterialKey as remapPieceMaterialKeys } from '../material/remapPieceMaterialKey'
 import { reapplySeamAssignmentCutTrimsForAllPieces } from '../geometry/seamAssignmentCutTrim'
 import {
   buildEasePairDrafts,
@@ -547,6 +548,11 @@ type Store = {
   showSettingsModal: boolean
   showStuecklisteModal: boolean
   showMaterialCatalogModal: boolean
+  /**
+   * Zähler: steigt bei jeder Materialdatenbank-Speicherung.
+   * Stückliste / Nesting / Teil-Zuordnung laden den Katalog dadurch neu.
+   */
+  materialCatalogRevision: number
   showNestingModal: boolean
   nestingSelectedMaterialKey: string | null
   /** Stückzahl pro Teil nur für Nesting (pieceId → qty). */
@@ -669,6 +675,9 @@ type Store = {
   setShowSettingsModal: (v: boolean) => void
   setShowStuecklisteModal: (v: boolean) => void
   setShowMaterialCatalogModal: (v: boolean) => void
+  bumpMaterialCatalogRevision: () => void
+  /** Materialnummer umbenannt → `piece.material` aller betroffenen Schnittteile anpassen. */
+  remapPieceMaterialKey: (oldKey: string, newKey: string) => void
   setShowNestingModal: (v: boolean) => void
   setNestingSelectedMaterialKey: (key: string | null) => void
   setNestingInputQuantity: (pieceId: string, quantity: number) => void
@@ -1151,6 +1160,7 @@ export const useStore = create<Store>()(
   showSettingsModal: false,
   showStuecklisteModal: false,
   showMaterialCatalogModal: false,
+  materialCatalogRevision: 0,
   showNestingModal: false,
   nestingSelectedMaterialKey: null,
   nestingInputs: {},
@@ -1760,6 +1770,14 @@ export const useStore = create<Store>()(
   setShowSettingsModal: (v) => set({ showSettingsModal: v }),
   setShowStuecklisteModal: (v) => set({ showStuecklisteModal: v }),
   setShowMaterialCatalogModal: (v) => set({ showMaterialCatalogModal: v }),
+  bumpMaterialCatalogRevision: () =>
+    set((s) => ({ materialCatalogRevision: s.materialCatalogRevision + 1 })),
+  remapPieceMaterialKey: (oldKey, newKey) =>
+    set((s) => {
+      const pieces = remapPieceMaterialKeys(s.workspace.pieces, oldKey, newKey)
+      if (pieces === s.workspace.pieces) return s
+      return { workspace: { ...s.workspace, pieces } }
+    }),
   setShowNestingModal: (v) => set({ showNestingModal: v }),
   setNestingSelectedMaterialKey: (key) => set({ nestingSelectedMaterialKey: key, nestingPlan: null, nestingStatus: 'idle', nestingError: null }),
   setNestingInputQuantity: (pieceId, quantity) =>

@@ -13,14 +13,18 @@ import {
  * Aktualisiert sich bei jeder Änderung an Schnittkontur, Stückzahl oder Material.
  */
 export function WorkspaceLiveCostPanel() {
-  const { showLiveBomCost, pieces } = useStore(
+  const { showLiveBomCost, pieces, materialCatalogRevision } = useStore(
     useShallow((s) => ({
       showLiveBomCost: s.showLiveBomCost,
       pieces: s.workspace.pieces,
+      materialCatalogRevision: s.materialCatalogRevision,
     })),
   )
 
-  const summary = useMemo(() => computeLiveBomSummary(pieces), [pieces])
+  const summary = useMemo(
+    () => computeLiveBomSummary(pieces),
+    [pieces, materialCatalogRevision],
+  )
 
   if (!showLiveBomCost) return null
 

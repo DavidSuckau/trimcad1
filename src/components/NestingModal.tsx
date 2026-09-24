@@ -39,6 +39,7 @@ export function NestingModal() {
     materializeMissingGrainLines,
     setToastMessage,
     dxfExportScale,
+    materialCatalogRevision,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -62,11 +63,15 @@ export function NestingModal() {
       materializeMissingGrainLines: s.materializeMissingGrainLines,
       setToastMessage: s.setToastMessage,
       dxfExportScale: s.dxfExportScale,
+      materialCatalogRevision: s.materialCatalogRevision,
     })),
   )
 
   const { pieces } = workspace
-  const catalogRows = useMemo(() => loadMaterialCatalog().rows, [pieces])
+  const catalogRows = useMemo(
+    () => loadMaterialCatalog().rows,
+    [pieces, materialCatalogRevision],
+  )
   const materialOptions = useMemo(() => listNestingMaterialOptions(pieces, catalogRows), [pieces, catalogRows])
 
   const [computing, setComputing] = useState(false)
@@ -78,6 +83,21 @@ export function NestingModal() {
     if (nestingSelectedMaterialKey && materialOptions.some((o) => o.materialKey === nestingSelectedMaterialKey)) return
     if (materialOptions.length > 0) setNestingSelectedMaterialKey(materialOptions[0].materialKey)
   }, [showNestingModal, materialOptions, nestingSelectedMaterialKey, setNestingSelectedMaterialKey])
+
+  useEffect(() => {
+    if (!nestingPlan || !nestingSelectedMaterialKey) return
+    const opt = materialOptions.find((o) => o.materialKey === nestingSelectedMaterialKey)
+    if (!opt || opt.rollWidthMm !== nestingPlan.rollWidthMm) {
+      setNestingPlan(null)
+      setNestingStatus('idle')
+    }
+  }, [
+    materialOptions,
+    nestingPlan,
+    nestingSelectedMaterialKey,
+    setNestingPlan,
+    setNestingStatus,
+  ])
 
   useEffect(() => {
     if (!showNestingModal) return

@@ -59,6 +59,7 @@ export function StuecklisteModal() {
     updateWorkspace,
     imageDigitizeSession,
     setToastMessage,
+    materialCatalogRevision,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -68,6 +69,7 @@ export function StuecklisteModal() {
       updateWorkspace: s.updateWorkspace,
       imageDigitizeSession: s.imageDigitizeSession,
       setToastMessage: s.setToastMessage,
+      materialCatalogRevision: s.materialCatalogRevision,
     })),
   )
   const { pieces } = workspace
@@ -95,7 +97,10 @@ export function StuecklisteModal() {
     return aggregateBomByMaterial(rows)
   }, [pieces])
 
-  const catalogRows = useMemo(() => loadMaterialCatalog().rows, [pieces, showStuecklisteModal])
+  const catalogRows = useMemo(
+    () => loadMaterialCatalog().rows,
+    [pieces, showStuecklisteModal, materialCatalogRevision],
+  )
 
   const materialCostByKey = useMemo(
     () => materialCostSumByMaterialKey(pieces, catalogRows),

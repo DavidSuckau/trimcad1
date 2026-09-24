@@ -18,6 +18,7 @@ export function PiecePropertiesModal() {
     setShowMaterialCatalogModal,
     showMaterialCatalogModal,
     unlinkThicknessPiece,
+    materialCatalogRevision,
   } = useStore(
     useShallow((s) => ({
       workspace: s.workspace,
@@ -29,6 +30,7 @@ export function PiecePropertiesModal() {
       setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
       showMaterialCatalogModal: s.showMaterialCatalogModal,
       unlinkThicknessPiece: s.unlinkThicknessPiece,
+      materialCatalogRevision: s.materialCatalogRevision,
     })),
   )
 
@@ -45,7 +47,7 @@ export function PiecePropertiesModal() {
     return [...byNum.entries()]
       .map(([num, label]) => ({ num, label }))
       .sort((a, b) => a.num.localeCompare(b.num, 'de'))
-  }, [piecePropertiesDialogPieceId, showMaterialCatalogModal])
+  }, [piecePropertiesDialogPieceId, showMaterialCatalogModal, materialCatalogRevision])
 
   const piece =
     piecePropertiesDialogPieceId != null

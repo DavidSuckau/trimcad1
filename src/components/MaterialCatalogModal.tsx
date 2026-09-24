@@ -40,12 +40,21 @@ function mergeRowsWithNumericDrafts(
 }
 
 export function MaterialCatalogModal() {
-  const { showMaterialCatalogModal, setShowMaterialCatalogModal, workspace, setToastMessage } = useStore(
+  const {
+    showMaterialCatalogModal,
+    setShowMaterialCatalogModal,
+    workspace,
+    setToastMessage,
+    bumpMaterialCatalogRevision,
+    remapPieceMaterialKey,
+  } = useStore(
     useShallow((s) => ({
       showMaterialCatalogModal: s.showMaterialCatalogModal,
       setShowMaterialCatalogModal: s.setShowMaterialCatalogModal,
       workspace: s.workspace,
       setToastMessage: s.setToastMessage,
+      bumpMaterialCatalogRevision: s.bumpMaterialCatalogRevision,
+      remapPieceMaterialKey: s.remapPieceMaterialKey,
     })),
   )
 
@@ -95,14 +104,16 @@ export function MaterialCatalogModal() {
     }
     const id = window.setTimeout(() => {
       saveMaterialCatalog(catalogPayload)
+      bumpMaterialCatalogRevision()
     }, DEBOUNCE_MS)
     return () => window.clearTimeout(id)
-  }, [catalogPayload, showMaterialCatalogModal])
+  }, [catalogPayload, showMaterialCatalogModal, bumpMaterialCatalogRevision])
 
   const close = useCallback(() => {
     saveMaterialCatalog(catalogPayload)
+    bumpMaterialCatalogRevision()
     setShowMaterialCatalogModal(false)
-  }, [catalogPayload, setShowMaterialCatalogModal])
+  }, [catalogPayload, bumpMaterialCatalogRevision, setShowMaterialCatalogModal])
 
   const applyCatalogFile = useCallback(
     (file: MaterialCatalogFile) => {
@@ -112,19 +123,21 @@ export function MaterialCatalogModal() {
       setPriceDraft({})
       setQtyDraft({})
       saveMaterialCatalog(file)
+      bumpMaterialCatalogRevision()
     },
-    [],
+    [bumpMaterialCatalogRevision],
   )
 
   const handleSaveJson = useCallback(() => {
     saveMaterialCatalog(catalogPayload)
+    bumpMaterialCatalogRevision()
     downloadBlob(
       stringifyMaterialCatalog(catalogPayload),
       suggestedMaterialCatalogFilename(),
       'application/json;charset=utf-8',
     )
     setToastMessage('success:Materialdatenbank als JSON gespeichert.')
-  }, [catalogPayload, setToastMessage])
+  }, [catalogPayload, bumpMaterialCatalogRevision, setToastMessage])
 
   const handleLoadJsonClick = useCallback(() => {
     jsonImportInputRef.current?.click()
@@ -193,9 +206,22 @@ export function MaterialCatalogModal() {
     return sum
   }, [mergedForTotals])
 
-  const updateRow = useCallback((id: string, patch: Partial<MaterialCatalogRow>) => {
-    setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-  }, [])
+  const updateRow = useCallback(
+    (id: string, patch: Partial<MaterialCatalogRow>) => {
+      setRows((prev) => {
+        const before = prev.find((r) => r.id === id)
+        if (before && typeof patch.materialNumber === 'string') {
+          const oldK = before.materialNumber.trim()
+          const newK = patch.materialNumber.trim()
+          if (oldK && newK && oldK !== newK) {
+            queueMicrotask(() => remapPieceMaterialKey(oldK, newK))
+          }
+        }
+        return prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+      })
+    },
+    [remapPieceMaterialKey],
+  )
 
   const addRow = useCallback(() => {
     const row = createEmptyMaterialCatalogRow()
