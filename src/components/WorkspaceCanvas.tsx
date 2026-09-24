@@ -8986,13 +8986,11 @@ export function WorkspaceCanvas() {
               isSymmetryAxisHovered={hoveredSymmetryAxis?.pieceId === piece.id}
               isRotationActive={dragging != null && dragging.kind === 'rotate' && dragging.pieceId === piece.id}
               notchIdBeingDragged={
-                notchPreview?.pieceId === piece.id
-                  ? dragging?.kind === 'notchMove' && dragging.pieceId === piece.id
-                    ? dragging.notchId
-                    : notchMoveDistanceEditor?.pieceId === piece.id
-                      ? notchMoveDistanceEditor.notchId
-                      : null
-                  : null
+                dragging?.kind === 'notchMove' && dragging.pieceId === piece.id
+                  ? dragging.notchId
+                  : notchMoveDistanceEditor?.pieceId === piece.id
+                    ? notchMoveDistanceEditor.notchId
+                    : null
               }
               hoveredNotchId={
                 hoveredDeletableNotch?.pieceId === piece.id ? hoveredDeletableNotch.notchId : null

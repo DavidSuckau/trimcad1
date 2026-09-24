@@ -53,12 +53,25 @@ export function shouldRenderDetailNotchOverlay(opts: {
 
 /**
  * Cheap fingerprint for path-cache keys — lengths / counts, not full geometry.
+ * Kerben-Positionen müssen rein: sonst bleibt nach Kerben-Verschieben der alte Cutout im Cache.
  */
 export function pieceGeomEpoch(piece: {
   id: string
   cutLine: unknown
   seamLine: unknown
-  notches: { length: number }
+  notches: ReadonlyArray<{
+    id?: string
+    position?: { x: number; y: number }
+    angle?: number
+    depth?: number
+    width?: number
+    type?: string
+    sNormalized?: number
+    arcLengthMm?: number
+    curveIndex?: number
+    t?: number
+    internalLineIndex?: number
+  }>
   softVertices?: unknown
   roundedCorners?: unknown
   seamAllowanceMm?: unknown
@@ -70,6 +83,7 @@ export function pieceGeomEpoch(piece: {
     arrLen(piece.cutLine),
     arrLen(piece.seamLine),
     piece.notches.length,
+    cheapNotchesHash(piece.notches),
     arrLen(piece.softVertices),
     arrLen(piece.roundedCorners),
     piece.seamAllowanceMm ?? '',
@@ -79,6 +93,43 @@ export function pieceGeomEpoch(piece: {
     cheapCurveEndpointsHash(piece.cutLine),
     cheapCurveEndpointsHash(piece.seamLine),
   ].join('|')
+}
+
+function cheapNotchesHash(
+  notches: ReadonlyArray<{
+    id?: string
+    position?: { x: number; y: number }
+    angle?: number
+    depth?: number
+    width?: number
+    type?: string
+    sNormalized?: number
+    arcLengthMm?: number
+    curveIndex?: number
+    t?: number
+    internalLineIndex?: number
+  }>,
+): string {
+  if (!notches.length) return '0'
+  let h = notches.length * 10007
+  for (let i = 0; i < notches.length; i++) {
+    const n = notches[i]
+    if (!n) continue
+    h = (h + (n.id?.length ?? 0) * 19) | 0
+    if (n.position) {
+      h = (h + Math.round(n.position.x * 10) * 31 + Math.round(n.position.y * 10) * 17) | 0
+    }
+    if (Number.isFinite(n.angle)) h = (h + Math.round((n.angle as number) * 10) * 13) | 0
+    if (Number.isFinite(n.depth)) h = (h + Math.round((n.depth as number) * 10) * 11) | 0
+    if (Number.isFinite(n.width)) h = (h + Math.round((n.width as number) * 10) * 7) | 0
+    if (Number.isFinite(n.sNormalized)) h = (h + Math.round((n.sNormalized as number) * 1000) * 23) | 0
+    if (Number.isFinite(n.arcLengthMm)) h = (h + Math.round((n.arcLengthMm as number) * 10) * 29) | 0
+    if (Number.isFinite(n.curveIndex)) h = (h + (n.curveIndex as number) * 37) | 0
+    if (Number.isFinite(n.t)) h = (h + Math.round((n.t as number) * 1000) * 41) | 0
+    if (Number.isFinite(n.internalLineIndex)) h = (h + (n.internalLineIndex as number) * 43) | 0
+    if (n.type) h = (h + n.type.length * 47) | 0
+  }
+  return String(h)
 }
 
 function cheapCurveEndpointsHash(curves: unknown): string {

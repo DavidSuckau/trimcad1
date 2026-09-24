@@ -83,7 +83,7 @@ describe('pieceGeomEpoch', () => {
       id: 'p1',
       cutLine: [{}, {}, {}],
       seamLine: [{}, {}],
-      notches: { length: 2 },
+      notches: [{}, {}],
       softVertices: [0, 1],
       seamAllowanceMm: 10,
     })
@@ -91,7 +91,7 @@ describe('pieceGeomEpoch', () => {
       id: 'p1',
       cutLine: [{}, {}, {}],
       seamLine: [{}, {}],
-      notches: { length: 2 },
+      notches: [{}, {}],
       softVertices: [0, 1],
       seamAllowanceMm: 10,
     })
@@ -106,13 +106,13 @@ describe('pieceGeomEpoch', () => {
       id: 'p1',
       cutLine: [{}, {}],
       seamLine: [],
-      notches: { length: 0 },
+      notches: [],
     })
     const b = pieceGeomEpoch({
       id: 'p1',
       cutLine: [{}, {}, {}],
       seamLine: [],
-      notches: { length: 0 },
+      notches: [],
     })
     expect(a).not.toBe(b)
   })
@@ -121,7 +121,7 @@ describe('pieceGeomEpoch', () => {
     const base = {
       id: 'p1',
       seamLine: [],
-      notches: { length: 0 },
+      notches: [] as [],
     }
     const a = pieceGeomEpoch({
       ...base,
@@ -150,6 +150,23 @@ describe('pieceGeomEpoch', () => {
     expect(a).not.toBe(b)
   })
 
+  it('ändert sich wenn eine Kerbe verschoben wird (gleiche Anzahl)', () => {
+    const base = {
+      id: 'p1',
+      cutLine: [{ type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } }],
+      seamLine: [],
+    }
+    const a = pieceGeomEpoch({
+      ...base,
+      notches: [{ id: 'n1', position: { x: 40, y: 0 }, angle: 90, depth: 4, width: 6 }],
+    })
+    const b = pieceGeomEpoch({
+      ...base,
+      notches: [{ id: 'n1', position: { x: 70, y: 0 }, angle: 90, depth: 4, width: 6 }],
+    })
+    expect(a).not.toBe(b)
+  })
+
   it('ändert sich wenn ein Eckpunkt jenseits Index 12 nur in Y bewegt wird', () => {
     const line = (x0: number, y0: number, x1: number, y1: number) => ({
       type: 'line' as const,
@@ -165,7 +182,7 @@ describe('pieceGeomEpoch', () => {
           ? { ...c, end: { x: c.end.x, y: 25 } }
           : c,
     )
-    const base = { id: 'p1', seamLine: [], notches: { length: 0 } }
+    const base = { id: 'p1', seamLine: [], notches: [] as [] }
     expect(pieceGeomEpoch({ ...base, cutLine: cutA })).not.toBe(pieceGeomEpoch({ ...base, cutLine: cutB }))
   })
 })
