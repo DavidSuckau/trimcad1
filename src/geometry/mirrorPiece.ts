@@ -214,8 +214,8 @@ export function mirrorOffsetBesideParent(parent: PatternPiece): Point {
 
 /**
  * Synchronisiert alle Spiegelkopien aus ihren Mutterteilen.
- * Behält Transform, id, number, name, grainLine und mirrorParentId der Kinder.
- * Material folgt immer der Mutter.
+ * Behält Transform, id, number, name, grainLine, material und mirrorParentId der Kinder.
+ * Material bleibt am Kind editierbar (Startwert von der Mutter, danach unabhängig).
  */
 export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
@@ -232,7 +232,7 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       id: p.id,
       number: p.number,
       name: p.name,
-      material: parent.material ?? '',
+      material: p.material ?? '',
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,

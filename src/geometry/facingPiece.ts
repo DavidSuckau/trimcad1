@@ -261,8 +261,8 @@ export function movePieceJustBefore(
 
 /**
  * Synchronisiert alle Kaschierungen in der Piece-Liste aus ihren Mutterteilen.
- * Behält Transform, id, number, name, grainLine und facingParentId der Kinder.
- * Material folgt immer der Mutter (auch wenn die Mutter selbst eine Spiegelkopie ist).
+ * Behält Transform, id, number, name, grainLine, material und facingParentId der Kinder.
+ * Material bleibt am Kind editierbar (wird beim Anlegen von der Mutter übernommen, danach unabhängig).
  */
 export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
@@ -279,7 +279,7 @@ export function syncFacingPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       id: p.id,
       number: p.number,
       name: p.name,
-      material: parent.material ?? '',
+      material: p.material ?? '',
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,

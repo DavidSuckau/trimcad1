@@ -159,7 +159,19 @@ const NOTCH_MIN_ANGLE_VERY_RELAXED_DEG = 20
 
 export type NotchImportDetectTier = 'strict' | 'relaxed' | 'veryRelaxed' | null
 
-function detectNotchesWithToleranceFallback(
+/**
+ * Mehrstufige V-Kerben-Erkennung.
+ *
+ * Wichtig: Nicht abbrechen, sobald die strenge Stufe *irgendeine* Kerbe findet.
+ * Kerben auf geraden Kanten (kurze Schenkel, klarer Knick) passen oft schon in
+ * `strict`, während schräge / tessellierte / etwas längere Kerben erst mit
+ * lockerer Toleranz erkannt werden. Früherer Early-Return ließ genau diese
+ * Einbuchtungen in der Kontur stehen → wirkten wie übergroße Kerben-Geometrie.
+ *
+ * Auswahl: Ergebnis mit den meisten Kerben; bei Gleichstand die strengere Stufe
+ * (weniger Risiko für Fehl-Erkennungen).
+ */
+export function detectNotchesWithToleranceFallback(
   vertices: DxfPoint[],
   closedRing: boolean
 ): {
@@ -167,28 +179,45 @@ function detectNotchesWithToleranceFallback(
   notches: ReturnType<typeof detectNotchesInPolyline>['notches']
   notchTier: NotchImportDetectTier
 } {
-  const strict = detectNotchesInPolyline(vertices, { closedRing })
-  if (strict.notches.length > 0) {
-    return { ...strict, notchTier: 'strict' }
+  const candidates: Array<{
+    cleanedVertices: DxfPoint[]
+    notches: ReturnType<typeof detectNotchesInPolyline>['notches']
+    notchTier: Exclude<NotchImportDetectTier, null>
+  }> = [
+    {
+      ...detectNotchesInPolyline(vertices, { closedRing }),
+      notchTier: 'strict',
+    },
+    {
+      ...detectNotchesInPolyline(vertices, {
+        closedRing,
+        shortSegmentMaxMm: NOTCH_SHORT_MAX_RELAXED_MM,
+        minAngleDeg: NOTCH_MIN_ANGLE_RELAXED_DEG,
+      }),
+      notchTier: 'relaxed',
+    },
+    {
+      ...detectNotchesInPolyline(vertices, {
+        closedRing,
+        shortSegmentMaxMm: NOTCH_SHORT_MAX_VERY_RELAXED_MM,
+        minAngleDeg: NOTCH_MIN_ANGLE_VERY_RELAXED_DEG,
+        legLengthMode: 'asymmetric',
+      }),
+      notchTier: 'veryRelaxed',
+    },
+  ]
+
+  let best = candidates[0]
+  for (let i = 1; i < candidates.length; i++) {
+    if (candidates[i].notches.length > best.notches.length) {
+      best = candidates[i]
+    }
   }
-  const relaxed = detectNotchesInPolyline(vertices, {
-    closedRing,
-    shortSegmentMaxMm: NOTCH_SHORT_MAX_RELAXED_MM,
-    minAngleDeg: NOTCH_MIN_ANGLE_RELAXED_DEG,
-  })
-  if (relaxed.notches.length > 0) {
-    return { ...relaxed, notchTier: 'relaxed' }
+
+  if (best.notches.length === 0) {
+    return { cleanedVertices: [...vertices], notches: [], notchTier: null }
   }
-  const veryRelaxed = detectNotchesInPolyline(vertices, {
-    closedRing,
-    shortSegmentMaxMm: NOTCH_SHORT_MAX_VERY_RELAXED_MM,
-    minAngleDeg: NOTCH_MIN_ANGLE_VERY_RELAXED_DEG,
-    legLengthMode: 'asymmetric',
-  })
-  if (veryRelaxed.notches.length > 0) {
-    return { ...veryRelaxed, notchTier: 'veryRelaxed' }
-  }
-  return { ...strict, notchTier: null }
+  return best
 }
 
 /**

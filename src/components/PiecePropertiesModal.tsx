@@ -5,7 +5,6 @@ import { enumerateEdges } from '../geometry/edgeEnumeration'
 import { edgeTotalLength } from '../geometry/seamUtils'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { loadMaterialCatalog } from '../material/materialCatalogStorage'
-import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 import { isThicknessDerivedPiece } from '../geometry/thicknessCorrection'
 
 export function PiecePropertiesModal() {
@@ -64,7 +63,6 @@ export function PiecePropertiesModal() {
   if (!piecePropertiesDialogPieceId || !piece) return null
 
   const fillOn = piece.fillInterior !== false
-  const materialLocked = isLinkedDerivedPiece(piece)
   const thicknessLinked =
     isThicknessDerivedPiece(piece) && piece.thicknessCorrection?.linked !== false
   const thicknessStats = piece.thicknessCorrection?.stats
@@ -156,17 +154,11 @@ export function PiecePropertiesModal() {
 
         <div className="nahtzugabe-dialog-label">
           <span>Material (Stückliste)</span>
-          {materialLocked ? (
-            <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--muted, #666)' }}>
-              Material folgt dem Mutterteil und kann hier nicht geändert werden.
-            </p>
-          ) : null}
           {catalogMaterialSelectOptions.length > 0 ? (
             <select
               className="nahtzugabe-dialog-input"
               style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8 }}
               aria-label="Materialnummer aus Datenbank"
-              disabled={materialLocked}
               value={
                 catalogMaterialSelectOptions.some((o) => o.num === (piece.material ?? '').trim())
                   ? (piece.material ?? '').trim()
@@ -196,7 +188,6 @@ export function PiecePropertiesModal() {
             list={catalogMaterialSelectOptions.length > 0 ? 'trimtex-piece-material-datalist' : undefined}
             value={piece.material ?? ''}
             onChange={(e) => updatePiece(piece.id, { material: e.target.value })}
-            disabled={materialLocked}
             placeholder={
               catalogMaterialSelectOptions.length > 0
                 ? 'Materialnummer / Freitext (z. B. Baumwolle)'

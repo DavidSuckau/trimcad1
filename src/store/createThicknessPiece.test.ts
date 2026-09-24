@@ -158,21 +158,22 @@ describe('createThicknessCorrectedPiece', () => {
     expect(ids).not.toContain(childId)
   })
 
-  it('sync übernimmt Material und Kontur von der Mutter', () => {
+  it('sync übernimmt Kontur von der Mutter, Material bleibt am Kind unabhängig', () => {
     const childId = useStore.getState().createThicknessCorrectedPiece('parent', {
       thicknessMm: 5,
       mode: 'mid',
       meanRadiusMm: 120,
     })!
+    useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
     useStore.getState().updatePiece('parent', { material: 'Canvas' })
-    // Material sync via updatePiece → syncLinkedPiecesFromParents
-    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Canvas')
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Futterstoff')
 
     useStore.getState().updateVertex('parent', 0, { x: -10, y: -10 })
     const child = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
     expect(child.thicknessParentId).toBe('parent')
     expect(child.cutLine).toHaveLength(4)
     expect(child.notches).toHaveLength(1)
+    expect(child.material).toBe('Futterstoff')
   })
 
   it('erzeugt keine Dickenkorrektur aus Kaschierung', () => {

@@ -1477,6 +1477,22 @@ body {
   box-sizing: border-box;
 }
 
+.stueckliste-doc-check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: #333;
+  min-height: 2rem;
+}
+
+.stueckliste-doc-check-row input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  flex-shrink: 0;
+}
+
 .stueckliste-material-input {
   min-width: 7rem;
   max-width: min(28rem, 100%);

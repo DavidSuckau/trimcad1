@@ -335,7 +335,7 @@ export function syncThicknessPiecesFromParents(pieces: PatternPiece[]): PatternP
       id: p.id,
       number: p.number,
       name: p.name,
-      material: parent.material ?? '',
+      material: p.material ?? '',
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,

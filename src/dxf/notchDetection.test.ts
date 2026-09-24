@@ -3,6 +3,7 @@ import {
   detectNotchesInPolyline,
   normalizeClosedPolylineVertices,
 } from './notchDetection'
+import { detectNotchesWithToleranceFallback } from './dxfImporter'
 
 describe('normalizeClosedPolylineVertices', () => {
   it('entfernt doppelten Schließpunkt', () => {
@@ -110,5 +111,50 @@ describe('detectNotchesInPolyline', () => {
     })
     expect(bothMode.notches.length).toBe(0)
     expect(asym.notches.length).toBe(1)
+  })
+
+  it('erkennt V-Kerbe auf schräger Geraden (rotationsinvariant bzgl. Winkel)', () => {
+    // Diagonale Kante mit V-Einbuchtung nach innen: Schenkel 2.5 mm, Knickwinkel klar > 45°.
+    const withDup = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 9, y: 11 },
+      { x: 7.5, y: 9 },
+      { x: 6, y: 11 },
+      { x: 0, y: 20 },
+      { x: 0, y: 0 },
+    ]
+    const { notches } = detectNotchesInPolyline(withDup)
+    expect(notches.length).toBe(1)
+  })
+})
+
+describe('detectNotchesWithToleranceFallback', () => {
+  it('findet kurze Gerade-Kerbe und längere/schräge Kerbe zusammen (kein Early-Return auf strict)', () => {
+    // Unten: klassische kurze V-Kerbe (strict). Rechts: längere Schenkel ~5.8 mm nach innen (erst relaxed).
+    // Früher: strict fand 1 Kerbe und brach ab → rechte Einbuchtung blieb als große Konturgeometrie.
+    const withDup = [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 5, y: 2 },
+      { x: 6, y: 0 },
+      { x: 20, y: 0 },
+      { x: 20, y: 7 },
+      { x: 15, y: 10 },
+      { x: 20, y: 13 },
+      { x: 20, y: 20 },
+      { x: 0, y: 20 },
+      { x: 0, y: 0 },
+    ]
+    const strictOnly = detectNotchesInPolyline(withDup)
+    expect(strictOnly.notches.length).toBe(1)
+
+    const { notches, notchTier, cleanedVertices } = detectNotchesWithToleranceFallback(withDup, true)
+    expect(notches.length).toBe(2)
+    expect(notchTier).not.toBe('strict')
+    expect(notchTier).not.toBeNull()
+    // Beide Spitzen entfernt (+ Schließpunkt bleibt)
+    expect(cleanedVertices.length).toBe(withDup.length - 2)
   })
 })

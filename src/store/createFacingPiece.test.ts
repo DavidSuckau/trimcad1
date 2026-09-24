@@ -174,17 +174,16 @@ describe('createFacingPiece', () => {
     expect(useStore.getState().toastMessage).toMatch(/synchronisiert/)
   })
 
-  it('übernimmt Material von der Mutter und sperrt es am Kind', () => {
+  it('übernimmt Material von der Mutter als Startwert, Kind bleibt danach unabhängig', () => {
     useStore.getState().updatePiece('parent', { material: 'Leder' })
     const childId = useStore.getState().createFacingPiece('parent')!
     expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Leder')
 
     useStore.getState().updatePiece(childId, { material: 'Futterstoff' })
-    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Leder')
-    expect(useStore.getState().toastMessage).toMatch(/Material/)
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Futterstoff')
 
     useStore.getState().updatePiece('parent', { material: 'Canvas' })
-    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Canvas')
+    expect(useStore.getState().workspace.pieces.find((p) => p.id === childId)!.material).toBe('Futterstoff')
   })
 
   it('erlaubt Laufrichtung an der Kaschierung und behält sie beim Sync', () => {

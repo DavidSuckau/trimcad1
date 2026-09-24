@@ -281,9 +281,6 @@ function cloneCurvesArray(curves: Curve[]): Curve[] {
 const FACING_GEOMETRY_LOCKED_TOAST =
   'info:Abhängige Teile (Kaschierung/Spiegelkopie/Dickenkorrektur) werden nur von der Mutter synchronisiert – Geometrie hier nicht editierbar.'
 
-const LINKED_MATERIAL_LOCKED_TOAST =
-  'info:Material folgt dem Mutterteil und kann bei abhängigen Teilen nicht geändert werden.'
-
 const FACING_GEOMETRY_UPDATE_KEYS: (keyof PatternPiece)[] = [
   'cutLine',
   'seamLine',
@@ -1221,14 +1218,6 @@ export const useStore = create<Store>()(
       }
       let patch: Partial<PatternPiece> = upd
       let toastMessage: string | null = null
-      if (isLinkedDerivedPiece(target) && Object.prototype.hasOwnProperty.call(upd, 'material')) {
-        const { material: _lockedMaterial, ...rest } = upd
-        if (Object.keys(rest).length === 0) {
-          return { toastMessage: LINKED_MATERIAL_LOCKED_TOAST }
-        }
-        patch = rest
-        toastMessage = LINKED_MATERIAL_LOCKED_TOAST
-      }
       let didDeriveCutLineFromSeam = false
       const pieces = s.workspace.pieces.map((p) => {
         if (p.id !== id) return p

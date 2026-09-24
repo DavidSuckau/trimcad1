@@ -67,8 +67,9 @@ export function pieceGeomEpoch(piece: {
 function cheapCurveEndpointsHash(curves: unknown): string {
   if (!Array.isArray(curves) || curves.length === 0) return '0'
   let h = curves.length * 10007
-  const n = Math.min(curves.length, 12)
-  for (let i = 0; i < n; i++) {
+  // Alle Segmente hashen — sonst bleibt der Path-Cache stehen, wenn ein Eckpunkt
+  // jenseits der alten 12er-Grenze gezogen wird (roter Punkt bewegt sich, Linie nicht).
+  for (let i = 0; i < curves.length; i++) {
     const c = curves[i] as {
       type?: string
       start?: { x: number; y: number }
@@ -77,7 +78,13 @@ function cheapCurveEndpointsHash(curves: unknown): string {
       cp2?: { x: number; y: number }
     } | null
     if (!c?.start || !c?.end) continue
-    h = (h + Math.round(c.start.x * 10) * 31 + Math.round(c.start.y * 10) * 17 + Math.round(c.end.x * 10)) | 0
+    h =
+      (h +
+        Math.round(c.start.x * 10) * 31 +
+        Math.round(c.start.y * 10) * 17 +
+        Math.round(c.end.x * 10) * 13 +
+        Math.round(c.end.y * 10) * 11) |
+      0
     // Bézier: cp1/cp2 müssen in den Hash — sonst bleibt der Path-Cache beim Kurvenpunkt-Ziehen stehen.
     if (c.type === 'bezier' && c.cp1 && c.cp2) {
       h =
@@ -88,16 +95,6 @@ function cheapCurveEndpointsHash(curves: unknown): string {
           Math.round(c.cp2.y * 10) * 23) |
         0
     }
-  }
-  const last = curves[curves.length - 1] as {
-    type?: string
-    end?: { x: number; y: number }
-    cp1?: { x: number; y: number }
-    cp2?: { x: number; y: number }
-  } | null
-  if (last?.end) h = (h + Math.round(last.end.x * 10) * 13 + Math.round(last.end.y * 10)) | 0
-  if (last?.type === 'bezier' && last.cp1 && last.cp2) {
-    h = (h + Math.round(last.cp1.x * 5) * 19 + Math.round(last.cp2.y * 5) * 11) | 0
   }
   return String(h)
 }

@@ -28,7 +28,6 @@ import { computeMaterialAreaShares } from '../bom/materialAreaShare'
 import { aggregateProfileBom } from '../bom/profileBomStats'
 import { StuecklisteMaterialPie } from './StuecklisteMaterialPie'
 import { WorkspaceOverviewPreview } from './WorkspaceOverviewPreview'
-import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 
 function fmtAreaM2(mm2: number): string {
   return (mm2 / 1_000_000).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
@@ -73,6 +72,8 @@ export function StuecklisteModal() {
   )
   const { pieces } = workspace
   const [pdfExporting, setPdfExporting] = useState(false)
+  /** Stückliste / PDF: Nähplan (Nahtschritte) mit ausgeben. */
+  const [includeNaehplan, setIncludeNaehplan] = useState(true)
 
   const docDateLabel = useMemo(() => {
     if (!showStuecklisteModal) return ''
@@ -188,6 +189,17 @@ export function StuecklisteModal() {
                 autoComplete="off"
               />
             </label>
+            <label className="stueckliste-doc-field stueckliste-doc-check">
+              <span>Nähplan</span>
+              <span className="stueckliste-doc-check-row">
+                <input
+                  type="checkbox"
+                  checked={includeNaehplan}
+                  onChange={(e) => setIncludeNaehplan(e.target.checked)}
+                />
+                mit Nähplan (Anzeige & PDF)
+              </span>
+            </label>
           </div>
 
           <div className="settings-notches">
@@ -215,7 +227,6 @@ export function StuecklisteModal() {
                   const rowCatalog = findCatalogRowByMaterialKey(catalogRows, matKey)
                   const lineEuro = pieceMaterialCostEuro(p, rowCatalog)
                   const matDesc = catalogMaterialDescription(catalogRows, matKey)
-                  const materialLocked = isLinkedDerivedPiece(p)
                   return (
                     <tr key={p.id}>
                       <td className="notch-nr">{i + 1}</td>
@@ -257,12 +268,6 @@ export function StuecklisteModal() {
                           onChange={(e) => updatePiece(p.id, { material: e.target.value })}
                           placeholder="—"
                           autoComplete="off"
-                          disabled={materialLocked}
-                          title={
-                            materialLocked
-                              ? 'Material folgt dem Mutterteil und kann hier nicht geändert werden'
-                              : undefined
-                          }
                           aria-label={`Materialnummer ${p.name}`}
                         />
                       </td>
@@ -339,7 +344,7 @@ export function StuecklisteModal() {
               />
             </div>
 
-            {naehplanRows.length > 0 ? (
+            {includeNaehplan && naehplanRows.length > 0 ? (
               <div className="stueckliste-naehplan-section">
                 <h4>Nähplan</h4>
                 <p className="stueckliste-overview-hint">
@@ -437,6 +442,7 @@ export function StuecklisteModal() {
                   docDateLabel,
                   imageSession: imageDigitizeSession,
                   imageDataUrl: imageDigitizeSession?.imageDataUrl ?? null,
+                  includeNaehplan,
                 })
               } catch {
                 setToastMessage('error:PDF konnte nicht erstellt werden.')

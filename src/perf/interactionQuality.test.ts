@@ -113,6 +113,25 @@ describe('pieceGeomEpoch', () => {
     })
     expect(a).not.toBe(b)
   })
+
+  it('ändert sich wenn ein Eckpunkt jenseits Index 12 nur in Y bewegt wird', () => {
+    const line = (x0: number, y0: number, x1: number, y1: number) => ({
+      type: 'line' as const,
+      start: { x: x0, y: y0 },
+      end: { x: x1, y: y1 },
+    })
+    // 16 Segmente: früher wurden nur die ersten 12 gehasht → Vertex 14 blieb unsichtbar für den Cache.
+    const cutA = Array.from({ length: 16 }, (_, i) => line(i * 10, 0, (i + 1) * 10, 0))
+    const cutB = cutA.map((c, i) =>
+      i === 14
+        ? { ...c, start: { x: c.start.x, y: 25 }, end: { ...c.end } }
+        : i === 13
+          ? { ...c, end: { x: c.end.x, y: 25 } }
+          : c,
+    )
+    const base = { id: 'p1', seamLine: [], notches: { length: 0 } }
+    expect(pieceGeomEpoch({ ...base, cutLine: cutA })).not.toBe(pieceGeomEpoch({ ...base, cutLine: cutB }))
+  })
 })
 
 describe('curveBoundsPad', () => {

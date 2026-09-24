@@ -100,6 +100,8 @@ export type StuecklistePdfParams = {
   docDateLabel: string
   imageSession: OverviewImageSession | null
   imageDataUrl: string | null
+  /** Nähplan (Nahtschritte + Summen je Nahtart) in PDF aufnehmen. Standard: true. */
+  includeNaehplan?: boolean
 }
 
 type TechnicalPreviewPageParams = {
@@ -229,6 +231,7 @@ function drawWorkspacePreviewTechnicalPage(doc: jsPDF, p: TechnicalPreviewPagePa
  */
 export async function downloadStuecklistePdf(params: StuecklistePdfParams): Promise<void> {
   const { workspace, docDateLabel, imageSession, imageDataUrl } = params
+  const includeNaehplan = params.includeNaehplan !== false
   const { pieces } = workspace
   const catalogRows = loadMaterialCatalog().rows
   const aggregate = aggregateBomByMaterial(
@@ -399,47 +402,49 @@ export async function downloadStuecklistePdf(params: StuecklistePdfParams): Prom
   )
   y += 12
 
-  const naehplanRows = buildNaehplanRows(workspace)
-  if (naehplanRows.length > 0) {
-    if (y > pageH - margin - 40) {
-      doc.addPage()
-      y = margin
-    }
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(11)
-    doc.text('Nähplan', margin, y)
-    y += 6
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(9)
-    for (const row of naehplanRows) {
-      const lines = doc.splitTextToSize(row.line, contentW)
-      if (y + lines.length * 4.5 > pageH - margin) {
+  if (includeNaehplan) {
+    const naehplanRows = buildNaehplanRows(workspace)
+    if (naehplanRows.length > 0) {
+      if (y > pageH - margin - 40) {
         doc.addPage()
         y = margin
       }
-      doc.text(lines, margin, y)
-      y += lines.length * 4.5 + 1
-    }
-    const seamKindTotals = buildNaehplanSeamKindTotals(workspace)
-    if (seamKindTotals.length > 0) {
-      y += 3
       doc.setFont('helvetica', 'bold')
-      doc.setFontSize(9)
-      if (y > pageH - margin - 12) {
-        doc.addPage()
-        y = margin
-      }
-      doc.text('Summen je Nahtart', margin, y)
-      y += 5
+      doc.setFontSize(11)
+      doc.text('Nähplan', margin, y)
+      y += 6
       doc.setFont('helvetica', 'normal')
-      for (const t of seamKindTotals) {
-        const line = `Σ ${t.kindLabel}: ${t.totalLengthMm.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`
-        if (y > pageH - margin - 8) {
+      doc.setFontSize(9)
+      for (const row of naehplanRows) {
+        const lines = doc.splitTextToSize(row.line, contentW)
+        if (y + lines.length * 4.5 > pageH - margin) {
           doc.addPage()
           y = margin
         }
-        doc.text(line, margin, y)
-        y += 4.5
+        doc.text(lines, margin, y)
+        y += lines.length * 4.5 + 1
+      }
+      const seamKindTotals = buildNaehplanSeamKindTotals(workspace)
+      if (seamKindTotals.length > 0) {
+        y += 3
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(9)
+        if (y > pageH - margin - 12) {
+          doc.addPage()
+          y = margin
+        }
+        doc.text('Summen je Nahtart', margin, y)
+        y += 5
+        doc.setFont('helvetica', 'normal')
+        for (const t of seamKindTotals) {
+          const line = `Σ ${t.kindLabel}: ${t.totalLengthMm.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} mm`
+          if (y > pageH - margin - 8) {
+            doc.addPage()
+            y = margin
+          }
+          doc.text(line, margin, y)
+          y += 4.5
+        }
       }
     }
   }
