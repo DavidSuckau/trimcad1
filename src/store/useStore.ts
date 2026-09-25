@@ -871,8 +871,8 @@ type Store = {
   rotatePiece90: (pieceId: string) => void
   /**
    * Rotation eines Teils setzen (Grad), Pivot bleibt fest.
-   * Standard: Laufrichtung (und damit Teilename am Pfeil) bleibt in Weltkoordinaten stehen.
-   * `keepGrainWorldFixed: false` für „An Laufrichtung/Kante ausrichten“.
+   * Standard: Laufrichtung dreht mit dem Teil (lokale Grain bleibt).
+   * `keepGrainWorldFixed: true` nur wenn die Welt-Laufrichtung stehen bleiben soll.
    */
   setPieceRotation: (
     pieceId: string,
@@ -4723,7 +4723,7 @@ export const useStore = create<Store>()(
     set((s) => {
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
-      const keepGrain = opts?.keepGrainWorldFixed !== false
+      const keepGrain = opts?.keepGrainWorldFixed === true
       const pivot = getPiecePivotLocal(piece)
       const t = piece.transform
       const worldCenter = pieceLocalToWorld(pivot, t)
@@ -4784,7 +4784,6 @@ export const useStore = create<Store>()(
     get().setPieceRotation(
       pieceId,
       (get().workspace.pieces.find((p) => p.id === pieceId)?.transform.rotation ?? 0) + 90,
-      { keepGrainWorldFixed: true },
     ),
 
   setGrainLine: (pieceId, line) =>

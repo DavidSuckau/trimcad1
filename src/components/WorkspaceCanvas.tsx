@@ -44,7 +44,7 @@ import {
   notchCutoutPoints,
   type NotchCutoutGeom,
 } from '../geometry/notchOnCurve'
-import { isNotchSpacingValid, isInternalNotchSpacingValid, NOTCH_MIN_SPACING_MM } from '../geometry/notchMinSpacing'
+import { isNotchSpacingValid, isInternalNotchSpacingValid, isNotchSpacingValidForCandidate, NOTCH_MIN_SPACING_MM } from '../geometry/notchMinSpacing'
 import {
   isNotchOnInternalLine,
   getNotchPositionAndAngleOnInternalLine,
@@ -315,7 +315,7 @@ function distanceToNotchHoverMm(local: Point, notch: Notch, piece: PatternPiece)
 function pieceLikelyVisible(
   piece: PatternPiece,
   view: { zoom: number; panX: number; panY: number },
-  padMm = 80,
+  padMm = 50,
 ): boolean {
   const b = boundsForPieceCutLineWorld(piece)
   if (!b) return true
@@ -723,11 +723,17 @@ function isPointInsidePiece(local: Point, piece: PatternPiece): boolean {
   if (piece.seamLine.length >= 3 && isPointInClosedCurves(local, piece.seamLine)) return true
   if (piece.cutLine.length >= 3 && isPointInClosedCurves(local, piece.cutLine)) return true
   if (piece.cutLine.length > 0) {
-    const nr = nearestCurveIndexAndPoint(local, piece.cutLine)
+    const nr = nearestCurveIndexAndPoint(local, piece.cutLine, {
+      quality: 'coarse',
+      maxDistMm: CONTOUR_HIT_MM,
+    })
     if (nr && nr.distance <= CONTOUR_HIT_MM) return true
   }
   if (piece.seamLine.length > 0) {
-    const nr = nearestCurveIndexAndPoint(local, piece.seamLine)
+    const nr = nearestCurveIndexAndPoint(local, piece.seamLine, {
+      quality: 'coarse',
+      maxDistMm: CONTOUR_HIT_MM,
+    })
     if (nr && nr.distance <= CONTOUR_HIT_MM) return true
   }
   return false
@@ -1243,6 +1249,40 @@ function buildNotchMovePreview(
     distanceMmRight: dist.distanceMmRight,
     storePos,
     storeAngle,
+  }
+}
+
+/** Live-Store-Update beim Kerben-Verschieben: Schnitt- und Naht-Cutout aus demselben Modell. */
+function notchUpdateFromMovePreview(
+  piece: PatternPiece,
+  preview: NotchMovePreviewState,
+): {
+  position: Point
+  angle: number
+  sNormalized?: number
+  arcLengthMm?: number
+  internalLineIndex?: number
+  internalSNormalized?: number
+  internalArcLengthMm?: number
+} {
+  if (preview.onInternalLine && piece.internalLines.length > 0) {
+    const L = internalLineSegmentPathLength(piece.internalLines, preview.curveIndex, preview.t)
+    const segLen = internalLineSegmentTotalLength(piece.internalLines, preview.curveIndex)
+    return {
+      internalLineIndex: preview.curveIndex,
+      internalSNormalized: segLen > 0 ? L / segLen : undefined,
+      internalArcLengthMm: segLen > 0 ? L : undefined,
+      position: preview.storePos,
+      angle: preview.storeAngle,
+    }
+  }
+  const L = pathLengthAt(piece.cutLine, preview.curveIndex, preview.t)
+  const total = totalPathLength(piece.cutLine)
+  return {
+    sNormalized: total > 0 ? L / total : undefined,
+    arcLengthMm: total > 0 ? L : undefined,
+    position: preview.storePos,
+    angle: preview.storeAngle,
   }
 }
 
@@ -2998,6 +3038,9 @@ export function WorkspaceCanvas() {
   const pieceDragLatestWorldRef = useRef<Point | null>(null)
   const pieceDragStartRef = useRef<Point | null>(null)
   const pieceDragPieceIdRef = useRef<string | null>(null)
+  /** Pan: View-Updates max. 1× pro Frame (weniger Parent-Re-Renders). */
+  const panRafRef = useRef<number | null>(null)
+  const panLatestClientRef = useRef<{ x: number; y: number } | null>(null)
   const [hoveredWorkspaceImage, setHoveredWorkspaceImageRaw] = useState(false)
   const setHoveredWorkspaceImage = useMemo(() => withStableSetState(setHoveredWorkspaceImageRaw), [])
   const [workspaceImageQuickMenu, setWorkspaceImageQuickMenu] = useState<{ clientX: number; clientY: number } | null>(
@@ -3317,7 +3360,9 @@ export function WorkspaceCanvas() {
     showContourMeasurements,
     performanceMode,
   )
-  const simplifyNotchesLive = shouldSimplifyNotchRender(interactionQuality, performanceMode)
+  const simplifyNotchesLive =
+    shouldSimplifyNotchRender(interactionQuality, performanceMode) &&
+    dragging?.kind !== 'notchMove'
   const nearestCurveQuality = nearestCurveQualityFor(interactionQuality, performanceMode)
 
   /** Naht-Prüfanzeige: teure Metriken cachen (Transform-only Moves invalidieren nicht). */
@@ -3433,6 +3478,10 @@ export function WorkspaceCanvas() {
       if (pieceDragRafRef.current != null) {
         cancelAnimationFrame(pieceDragRafRef.current)
         pieceDragRafRef.current = null
+      }
+      if (panRafRef.current != null) {
+        cancelAnimationFrame(panRafRef.current)
+        panRafRef.current = null
       }
     }
   }, [])
@@ -5221,6 +5270,7 @@ export function WorkspaceCanvas() {
         if (isWorldInsideWorkspaceImage(worldImg, imageDigitizeSession)) {
           imgHover = true
           for (const p of pieces) {
+            if (!pieceLikelyVisible(p, view)) continue
             if (p.cutLine.length >= 3 && isPointInsidePiece(worldToPieceLocal(worldImg, p), p)) {
               imgHover = false
               break
@@ -5508,6 +5558,7 @@ export function WorkspaceCanvas() {
         for (const p of pieces) {
           const sc = p.symmetryConstraint
           if (!sc || p.cutLine.length < 3) continue
+          if (!pieceLikelyVisible(p, view)) continue
           const local = worldToPieceLocal(worldImg, p)
           const clipped = symmetryAxisClippedToPieceBounds(sc.axisA, sc.axisB, p.cutLine)
           if (!clipped) continue
@@ -5699,13 +5750,21 @@ export function WorkspaceCanvas() {
           ? pieces.filter((p) => selectedPieceIds.includes(p.id))
           : []
         const piecesForNotchHover =
-          selectedPiecesForNotch.some((p) => p.notches.length > 0) ? selectedPiecesForNotch : pieces
+          selectedPiecesForNotch.some((p) => p.notches.length > 0)
+            ? selectedPiecesForNotch
+            : pieces.filter((p) => p.notches.length > 0 && pieceLikelyVisible(p, view))
+        const piecesForInternalHover =
+          selectedPiecesForNotch.length > 0
+            ? selectedPiecesForNotch
+            : pieces.filter((p) => pieceLikelyVisible(p, view))
         let bestNotch: { dist: number; pieceId: string; notchId: string } = {
           dist: NOTCH_HOVER_HIT + 1,
           pieceId: '',
           notchId: '',
         }
         for (const p of piecesForNotchHover) {
+          if (p.notches.length === 0) continue
+          if (!selectedPieceIds.includes(p.id) && !pieceLikelyVisible(p, view)) continue
           const local = worldToPieceLocal(worldForNotch, p)
           for (const notch of p.notches) {
             const d = distanceToNotchHoverMm(local, notch, p)
@@ -5725,7 +5784,7 @@ export function WorkspaceCanvas() {
             const INTERNAL_LINE_HOVER_HIT_ELSE = 10
             let bestInternalLine: { dist: number; pieceId: string; curveIndex: number } | null = null
             let bestInternalCircle: { dist: number; pieceId: string; circleId: string } | null = null
-            for (const p of piecesForNotchHover) {
+            for (const p of piecesForInternalHover) {
               const local = worldToPieceLocal(worldForNotch, p)
               for (const ic of p.internalCircles) {
                 const distCenter = Math.hypot(local.x - ic.center.x, local.y - ic.center.y)
@@ -5771,7 +5830,9 @@ export function WorkspaceCanvas() {
       if (hoverHitAllowed(hitKinds, 'notch') && tool === 'notch') {
         const world = toWorld(clientX, clientY)
         const piecesToCheck =
-          selectedPieceIds.length === 1 ? pieces.filter((p) => p.id === selectedPieceIds[0]) : pieces
+          selectedPieceIds.length === 1
+            ? pieces.filter((p) => p.id === selectedPieceIds[0])
+            : pieces.filter((p) => pieceLikelyVisible(p, view))
         let best: {
           distance: number
           piece: PatternPiece
@@ -5954,6 +6015,7 @@ export function WorkspaceCanvas() {
         const world = toWorld(clientX, clientY)
         for (let i = pieces.length - 1; i >= 0; i--) {
           const p = pieces[i]
+          if (!pieceLikelyVisible(p, view) && !selectedPieceIds.includes(p.id)) continue
           const local = worldToPieceLocal(world, p)
           if (isPointInsidePiece(local, p)) {
             setHoveredPieceId(p.id)
@@ -6096,9 +6158,17 @@ export function WorkspaceCanvas() {
         return
       }
       if (dragging.kind === 'pan') {
-        setView({
-          panX: dragging.startPan.x + (e.clientX - dragging.startClient.x),
-          panY: dragging.startPan.y + (e.clientY - dragging.startClient.y),
+        panLatestClientRef.current = { x: e.clientX, y: e.clientY }
+        if (panRafRef.current != null) return
+        panRafRef.current = requestAnimationFrame(() => {
+          panRafRef.current = null
+          const d = draggingRef.current
+          const latest = panLatestClientRef.current
+          if (!d || d.kind !== 'pan' || !latest) return
+          setView({
+            panX: d.startPan.x + (latest.x - d.startClient.x),
+            panY: d.startPan.y + (latest.y - d.startClient.y),
+          })
         })
       } else if (dragging.kind === 'piece') {
         const world = toWorld(e.clientX, e.clientY)
@@ -6307,11 +6377,21 @@ export function WorkspaceCanvas() {
           placementCurves,
           snapHits,
         })
+        const applyLive = (preview: NotchMovePreviewState | null) => {
+          setNotchPreview(preview)
+          if (!preview) return
+          const upd = notchUpdateFromMovePreview(piece, preview)
+          const candidate = { ...moveNotch, ...upd }
+          // Kein Toast-Spam: ungültigen Abstand nur in der Vorschau zeigen, Store bleibt.
+          if (!isNotchSpacingValidForCandidate(piece, candidate, dragging.notchId)) return
+          // Sofort ins Modell → Schnitt- und Naht-Cutout wandern parallel (eine Wahrheit).
+          updateNotch(dragging.pieceId, dragging.notchId, upd)
+        }
         if (isNotchOnInternalLine(moveNotch)) {
           if (piece.internalLines.length === 0) return
           const nearest = nearestCurveIndexAndPoint(local, piece.internalLines)
           if (nearest && nearest.distance < 25) {
-            setNotchPreview(buildNotchMovePreview(piece, dragging.notchId, movePreviewOpts(piece.internalLines)))
+            applyLive(buildNotchMovePreview(piece, dragging.notchId, movePreviewOpts(piece.internalLines)))
           } else {
             setNotchPreview(null)
           }
@@ -6324,8 +6404,7 @@ export function WorkspaceCanvas() {
         const curves = useSeam ? piece.seamLine : piece.cutLine
         const nearest = nearestCurveIndexAndPoint(local, curves)
         if (nearest && nearest.distance < 25) {
-          const preview = buildNotchMovePreview(piece, dragging.notchId, movePreviewOpts(curves))
-          setNotchPreview(preview)
+          applyLive(buildNotchMovePreview(piece, dragging.notchId, movePreviewOpts(curves)))
         } else {
           setNotchPreview(null)
         }
@@ -7332,6 +7411,18 @@ export function WorkspaceCanvas() {
       activeTouchPointsRef.current.delete(_e.pointerId)
       if (activeTouchPointsRef.current.size < 2) pinchStartRef.current = null
       if (dragging?.kind === 'pan' && touchPanPointerIdRef.current === _e.pointerId) {
+        if (panRafRef.current != null) {
+          cancelAnimationFrame(panRafRef.current)
+          panRafRef.current = null
+        }
+        const latest = panLatestClientRef.current
+        if (latest) {
+          setView({
+            panX: dragging.startPan.x + (latest.x - dragging.startClient.x),
+            panY: dragging.startPan.y + (latest.y - dragging.startClient.y),
+          })
+        }
+        panLatestClientRef.current = null
         setDragging(null)
         touchPanPointerIdRef.current = null
       }
@@ -7447,29 +7538,12 @@ export function WorkspaceCanvas() {
       }
       if (notchPreview && notchPreview.pieceId === dragging.pieceId) {
         const movePiece = pieces.find((p) => p.id === dragging.pieceId)
-        if (movePiece && notchPreview.onInternalLine && movePiece.internalLines.length > 0) {
-          const L = internalLineSegmentPathLength(
-            movePiece.internalLines,
-            notchPreview.curveIndex,
-            notchPreview.t,
+        if (movePiece) {
+          updateNotch(
+            dragging.pieceId,
+            dragging.notchId,
+            notchUpdateFromMovePreview(movePiece, notchPreview),
           )
-          const segLen = internalLineSegmentTotalLength(movePiece.internalLines, notchPreview.curveIndex)
-          updateNotch(dragging.pieceId, dragging.notchId, {
-            internalLineIndex: notchPreview.curveIndex,
-            internalSNormalized: segLen > 0 ? L / segLen : undefined,
-            internalArcLengthMm: segLen > 0 ? L : undefined,
-            position: notchPreview.storePos,
-            angle: notchPreview.storeAngle,
-          })
-        } else if (movePiece && movePiece.cutLine.length > 0) {
-          const L = pathLengthAt(movePiece.cutLine, notchPreview.curveIndex, notchPreview.t)
-          const total = totalPathLength(movePiece.cutLine)
-          updateNotch(dragging.pieceId, dragging.notchId, {
-            sNormalized: total > 0 ? L / total : undefined,
-            arcLengthMm: total > 0 ? L : undefined,
-            position: notchPreview.storePos,
-            angle: notchPreview.storeAngle,
-          })
         }
       }
       setNotchPreview(null)
@@ -7732,6 +7806,21 @@ export function WorkspaceCanvas() {
       pieceDragPieceIdRef.current = null
       pieceDragStartRef.current = null
       pieceDragLatestWorldRef.current = null
+    }
+    // Letzten Pan-Frame noch anwenden (rAF konnte ausstehen)
+    if (dragging?.kind === 'pan') {
+      if (panRafRef.current != null) {
+        cancelAnimationFrame(panRafRef.current)
+        panRafRef.current = null
+      }
+      const latest = panLatestClientRef.current
+      if (latest) {
+        setView({
+          panX: dragging.startPan.x + (latest.x - dragging.startClient.x),
+          panY: dragging.startPan.y + (latest.y - dragging.startClient.y),
+        })
+      }
+      panLatestClientRef.current = null
     }
     setDragging(null)
     setHoveredPieceId(null)
@@ -8925,7 +9014,7 @@ export function WorkspaceCanvas() {
               </g>
             )}
           {pieces.map((piece) => {
-            if (pieces.length > 8 && !pieceLikelyVisible(piece, view) && !selectedPieceIds.includes(piece.id)) {
+            if (!pieceLikelyVisible(piece, view) && !selectedPieceIds.includes(piece.id)) {
               return (
                 <g
                   key={piece.id}

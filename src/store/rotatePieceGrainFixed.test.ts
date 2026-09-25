@@ -31,7 +31,7 @@ function rectPiece(): PatternPiece {
   }
 }
 
-describe('rotatePiece90 keepGrainWorldFixed', () => {
+describe('rotatePiece90 / alignPieceToGrain Laufrichtung', () => {
   beforeEach(() => {
     useStore.setState({
       workspace: {
@@ -45,41 +45,40 @@ describe('rotatePiece90 keepGrainWorldFixed', () => {
     })
   })
 
-  it('lässt Laufrichtung in Weltkoordinaten stehen wenn Teil mit R gedreht wird', () => {
+  it('R: Laufrichtungspfeil dreht mit dem Teil (lokale Grain bleibt)', () => {
     const before = useStore.getState().workspace.pieces[0]
     const g0 = getPieceGrainLine(before)
-    const wStart0 = pieceLocalToWorld(g0.start, before.transform)
-    const wEnd0 = pieceLocalToWorld(g0.end, before.transform)
 
     useStore.getState().rotatePiece90('p1')
 
     const after = useStore.getState().workspace.pieces[0]
     expect(after.transform.rotation).toBe(90)
     const g1 = getPieceGrainLine(after)
+    // Lokal unverändert → Pfeil dreht mit der Teil-Rotation in der Welt
+    expect(g1.start.x).toBeCloseTo(g0.start.x, 5)
+    expect(g1.start.y).toBeCloseTo(g0.start.y, 5)
+    expect(g1.end.x).toBeCloseTo(g0.end.x, 5)
+    expect(g1.end.y).toBeCloseTo(g0.end.y, 5)
+    const wStart0 = pieceLocalToWorld(g0.start, before.transform)
     const wStart1 = pieceLocalToWorld(g1.start, after.transform)
-    const wEnd1 = pieceLocalToWorld(g1.end, after.transform)
-    expect(wStart1.x).toBeCloseTo(wStart0.x, 5)
-    expect(wStart1.y).toBeCloseTo(wStart0.y, 5)
-    expect(wEnd1.x).toBeCloseTo(wEnd0.x, 5)
-    expect(wEnd1.y).toBeCloseTo(wEnd0.y, 5)
+    expect(Math.hypot(wStart1.x - wStart0.x, wStart1.y - wStart0.y)).toBeGreaterThan(1)
   })
 
-  it('alignPieceToGrain dreht Laufrichtung mit dem Teil mit', () => {
-    useStore.getState().setPieceRotation('p1', 45, { keepGrainWorldFixed: false })
-    // Grain lokal vertikal; nach 45° Rotation zeigt sie schräg in der Welt
+  it('A: alignPieceToGrain richtet Teil an Laufrichtung aus', () => {
+    useStore.getState().setPieceRotation('p1', 45)
     useStore.getState().setGrainLine('p1', { start: { x: 50, y: 10 }, end: { x: 50, y: 50 } })
-    useStore.getState().setPieceRotation('p1', 45, { keepGrainWorldFixed: false })
-
-    const before = useStore.getState().workspace.pieces[0]
-    const g0 = getPieceGrainLine(before)
-    const wStart0 = pieceLocalToWorld(g0.start, before.transform)
 
     useStore.getState().alignPieceToGrain('p1')
 
     const after = useStore.getState().workspace.pieces[0]
-    const g1 = getPieceGrainLine(after)
-    const wStart1 = pieceLocalToWorld(g1.start, after.transform)
-    // Mit keepGrainWorldFixed false: Grain-Endpunkte bewegen sich mit der Drehung
-    expect(Math.hypot(wStart1.x - wStart0.x, wStart1.y - wStart0.y)).toBeGreaterThan(1)
+    const g = getPieceGrainLine(after)
+    const wStart = pieceLocalToWorld(g.start, after.transform)
+    const wEnd = pieceLocalToWorld(g.end, after.transform)
+    const worldAngleDeg = (Math.atan2(wEnd.y - wStart.y, wEnd.x - wStart.x) * 180) / Math.PI
+    // Ziel in alignPieceToGrain: 90° (nach „oben“ in Welt)
+    let delta = worldAngleDeg - 90
+    while (delta > 180) delta -= 360
+    while (delta < -180) delta += 360
+    expect(Math.abs(delta)).toBeLessThan(1)
   })
 })

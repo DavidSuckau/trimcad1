@@ -1,8 +1,21 @@
 import type { Curve, Drill, Notch, PatternPiece, Point } from '../types/model'
-import { bezierAt, curvesBounds, pointAtPathLength, signedAreaCurves, totalPathLength } from './curveToPath'
+import {
+  bezierAt,
+  curvesBounds,
+  outwardNormalAngleAt,
+  pathLengthAt,
+  pointAtPathLength,
+  signedAreaCurves,
+  totalPathLength,
+} from './curveToPath'
 import { deriveCutLineForPiece } from './deriveCutLineForPiece'
 import { chamferCutLineCornersInSeamAllowance } from './facingChamfer'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
+import { getNotchPositionAndAngle, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
+import {
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+} from './notchOnInternalLine'
 import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
 
 function cloneCurves(curves: Curve[]): Curve[] {
@@ -37,6 +50,70 @@ function cloneGrain(grain: PatternPiece['grainLine']): PatternPiece['grainLine']
 
 function cloneCircles(circles: PatternPiece['internalCircles']): PatternPiece['internalCircles'] {
   return circles.map((c) => ({ ...c, center: { ...c.center } }))
+}
+
+/**
+ * Kerben von der Mutter-Kontur auf die Kaschier-Schnittkontur legen.
+ * Per relativer Bogenlänge (sNormalized) — robuster als Nearest bei Chamfer/Topologiewechsel.
+ */
+export function transferNotchesToFacingCut(
+  notches: Notch[],
+  fromCut: Curve[],
+  toCut: Curve[],
+  toInternalLines: Curve[],
+): Notch[] {
+  if (toCut.length < 3) return cloneNotches(notches)
+  const fromTotal = totalPathLength(fromCut)
+  const toTotal = totalPathLength(toCut)
+
+  return notches.map((n) => {
+    if (isNotchOnInternalLine(n)) {
+      if (toInternalLines.length === 0) return { ...n, position: { ...n.position } }
+      return (
+        materializeNotchAnchorsOnInternalLine(
+          { ...n, position: { ...n.position } },
+          toInternalLines,
+        ) ?? { ...n, position: { ...n.position } }
+      )
+    }
+
+    if (fromTotal <= 1e-9 || toTotal <= 1e-9) {
+      return resyncNotchesAfterCutLineRebuilt([n], fromCut, toCut)[0] ?? n
+    }
+
+    let s: number | null = null
+    if (n.sNormalized != null && Number.isFinite(n.sNormalized)) {
+      s = Math.max(0, Math.min(1, n.sNormalized))
+    } else if (n.arcLengthMm != null && Number.isFinite(n.arcLengthMm) && fromTotal > 0) {
+      s = Math.max(0, Math.min(1, n.arcLengthMm / fromTotal))
+    } else {
+      const { position } = getNotchPositionAndAngle(n, fromCut)
+      const nearest = nearestCurveIndexAndPoint(position, fromCut)
+      if (nearest) {
+        const L = pathLengthAt(fromCut, nearest.curveIndex, nearest.t ?? 0)
+        s = L / fromTotal
+      }
+    }
+
+    if (s == null) {
+      return resyncNotchesAfterCutLineRebuilt([n], fromCut, toCut)[0] ?? n
+    }
+
+    const pt = pointAtPathLength(toCut, s * toTotal)
+    if (!pt) {
+      return resyncNotchesAfterCutLineRebuilt([n], fromCut, toCut)[0] ?? n
+    }
+
+    const next: Notch = {
+      ...n,
+      position: { ...pt.point },
+      angle: outwardNormalAngleAt(toCut, pt.curveIndex, pt.t) + 180,
+      vertexIndex: undefined,
+      sNormalized: undefined,
+      arcLengthMm: undefined,
+    }
+    return materializeNotchAnchorsOnCutLine(next, toCut) ?? next
+  })
 }
 
 /**
@@ -193,7 +270,14 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
   ) {
     cutLine = cutForChamfer
   }
-  const notches = resyncNotchesAfterCutLineRebuilt(draft.notches, parentCut, cutLine)
+  // Kerben: relative Lage auf der Mutter-Kontur → Kaschier-Schnitt (inkl. Fase).
+  // Nicht nur Nearest-Resync (kann nach Chamfer an der falschen Kante landen).
+  const notches = transferNotchesToFacingCut(
+    draft.notches,
+    parentCut,
+    cutLine,
+    draft.internalLines,
+  )
 
   return {
     cutLine,
