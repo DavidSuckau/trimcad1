@@ -10,6 +10,8 @@ import {
   isThicknessDerivedPiece,
   syncThicknessPiecesFromParents,
 } from './thicknessCorrection'
+import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
+import { pieceLocalToWorld } from './pieceTransform'
 
 function mirrorX(p: Point, cx: number): Point {
   return { x: 2 * cx - p.x, y: p.y }
@@ -207,9 +209,38 @@ export function buildMirrorGeometryFromParent(parent: PatternPiece): {
   }
 }
 
-/** Abstand neben die Mutter (mm) – gleiche Logik wie Kaschierung. */
+/** Abstand neben die Mutter (mm) – Fallback ohne Mittellinie. */
 export function mirrorOffsetBesideParent(parent: PatternPiece): Point {
   return facingOffsetBesideParent(parent)
+}
+
+/**
+ * Platzierung der Spiegelkopie: Welt-Mittelpunkt des Teils an `centerLineXMm` spiegeln.
+ * Geometrie ist bereits lokal geflippt; Transform verschiebt nur auf die Gegenseite
+ * (gleicher Abstand zur Mittellinie, andere Seite).
+ */
+export function mirrorOffsetAcrossCenterLine(
+  parent: PatternPiece,
+  centerLineXMm: number,
+): Point {
+  const bounds = boundsForPieceCutLineWorld(parent)
+  let parentWorldCx: number
+  if (bounds) {
+    parentWorldCx = (bounds.minX + bounds.maxX) / 2
+  } else {
+    const localBounds = curvesBounds(parent.cutLine.length >= 3 ? parent.cutLine : parent.seamLine)
+    const localCx = localBounds ? (localBounds.minX + localBounds.maxX) / 2 : 0
+    const localCy = localBounds ? (localBounds.minY + localBounds.maxY) / 2 : 0
+    parentWorldCx = pieceLocalToWorld({ x: localCx, y: localCy }, parent.transform).x
+  }
+  // Kind hat nach lokalem Flip dieselbe lokale BBox-Mitte → Δtx = ΔWelt-Mitte.x
+  const deltaX = 2 * (centerLineXMm - parentWorldCx)
+  return { x: deltaX, y: 0 }
+}
+
+/** Effektive Mittellinie (fehlend = 0). */
+export function effectiveMirrorCenterLineXMm(centerLineXMm: number | undefined | null): number {
+  return centerLineXMm != null && Number.isFinite(centerLineXMm) ? centerLineXMm : 0
 }
 
 /**

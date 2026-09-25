@@ -208,7 +208,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Spiegelkopie erzeugen',
     description:
-      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie neben dem Mutterteil. Kontur, Kerben und Internals folgen der Mutter bei jeder Änderung; Position/Drehung und Laufrichtung bleiben lokal editierbar. Material wird beim Anlegen übernommen, ist am Tochterteil aber separat änderbar. Hat die Mutter bereits eine Kaschierung, wird für die Spiegelkopie automatisch ebenfalls eine Kaschierung angelegt (auch nachträglich, wenn die Mutter später eine Kaschierung bekommt). Optisch: Materialfarbe bleibt erhalten, darüber liegen eine leichte Graufüllung und eine Schraffur in Gegenrichtung zur Kaschierung. Aus einer Kaschierung oder Spiegelkopie kann keine weitere Spiegelkopie erzeugt werden; Löschen der Mutter entfernt auch die Spiegelkopie und deren Kaschierung.',
+      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie. Platzierung an der Workspace-Mittellinie (gleicher Abstand, andere Seite; Linie unter Anzeigen → Mittellinie, per Ziehen verschiebbar). Kontur, Kerben und Internals folgen der Mutter; Position/Drehung und Laufrichtung bleiben lokal editierbar. Material wird beim Anlegen übernommen, ist am Tochterteil aber separat änderbar. Hat die Mutter bereits eine Kaschierung, wird für die Spiegelkopie automatisch ebenfalls eine Kaschierung angelegt. Optisch: Materialfarbe bleibt, darüber Graufüllung und Schraffur in Gegenrichtung zur Kaschierung.',
     access: 'Laufrichtungspfeil anfahren → Leertaste → Spiegelkopie erzeugen',
     shortcut: 'Leertaste',
   },

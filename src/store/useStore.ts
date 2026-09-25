@@ -128,11 +128,12 @@ import {
 } from '../geometry/facingPiece'
 import {
   buildMirrorGeometryFromParent,
+  effectiveMirrorCenterLineXMm,
   isLinkedDerivedPiece,
   isMirrorDerivedPiece,
   linkedChildIds,
   mirrorChildIds,
-  mirrorOffsetBesideParent,
+  mirrorOffsetAcrossCenterLine,
   syncLinkedPiecesFromParents,
 } from '../geometry/mirrorPiece'
 import {
@@ -497,6 +498,8 @@ type Store = {
   showInternalLines: boolean
   showPieceNames: boolean
   showProfiles: boolean
+  /** Vertikale Workspace-Mittellinie für Spiegelkopie-Platzierung anzeigen. */
+  showMirrorCenterLine: boolean
   /** Bogenlängen entlang der Schnittkontur (Ecke↔Ecke, Kerbe↔Kerbe, …) auf allen Teilen. */
   showContourMeasurements: boolean
   /** Workspace-Notizzettel ein-/ausblenden (Daten bleiben erhalten). */
@@ -653,6 +656,9 @@ type Store = {
   setShowInternalLines: (v: boolean) => void
   setShowPieceNames: (v: boolean) => void
   setShowProfiles: (v: boolean) => void
+  setShowMirrorCenterLine: (v: boolean) => void
+  /** Workspace-Mittellinie (Welt-X in mm) für Spiegelkopie-Platzierung. */
+  setMirrorCenterLineXMm: (xMm: number) => void
   setShowContourMeasurements: (v: boolean) => void
   setShowWorkspaceNotes: (v: boolean) => void
   setShowContourChangePreview: (v: boolean) => void
@@ -1120,6 +1126,7 @@ export const useStore = create<Store>()(
     autoAdjustSeamAssignmentCorners: true,
     notes: [],
     profileAssignments: [],
+    mirrorCenterLineXMm: 0,
   },
   selectedPieceIds: [],
   selectedPoint: null,
@@ -1134,6 +1141,7 @@ export const useStore = create<Store>()(
   showInternalLines: true,
   showPieceNames: true,
   showProfiles: true,
+  showMirrorCenterLine: true,
   showContourMeasurements: false,
   showWorkspaceNotes: true,
   showContourChangePreview: false,
@@ -1416,7 +1424,8 @@ export const useStore = create<Store>()(
       return null
     }
     const geom = buildMirrorGeometryFromParent(parent)
-    const offset = mirrorOffsetBesideParent(parent)
+    const centerX = effectiveMirrorCenterLineXMm(get().workspace.mirrorCenterLineXMm)
+    const offset = mirrorOffsetAcrossCenterLine(parent, centerX)
     const nameBase = parent.name?.trim() || `Teil ${parent.number}`
     const id = get().addPiece({
       ...geom,
@@ -1434,6 +1443,9 @@ export const useStore = create<Store>()(
       },
       symmetryConstraint: undefined,
       facingParentId: undefined,
+    })
+    set({
+      toastMessage: `success:Spiegelkopie an Mittellinie platziert (x=${centerX.toFixed(0)} mm).`,
     })
     const wanted = facingChildIds(get().workspace.pieces, parent.id).length
     if (wanted > 0) {
@@ -1744,6 +1756,14 @@ export const useStore = create<Store>()(
   setShowInternalLines: (v) => set({ showInternalLines: v }),
   setShowPieceNames: (v) => set({ showPieceNames: v }),
   setShowProfiles: (v) => set({ showProfiles: v }),
+  setShowMirrorCenterLine: (v) => set({ showMirrorCenterLine: v }),
+  setMirrorCenterLineXMm: (xMm) =>
+    set((s) => ({
+      workspace: {
+        ...s.workspace,
+        mirrorCenterLineXMm: Number.isFinite(xMm) ? xMm : 0,
+      },
+    })),
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
   setShowContourChangePreview: (v) => set({ showContourChangePreview: v }),

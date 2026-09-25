@@ -550,6 +550,10 @@ export function normalizeWorkspaceForLoad(w: Workspace): Workspace {
       (w as { autoAdjustSeamAssignmentCorners?: unknown }).autoAdjustSeamAssignmentCorners === false ? false : true,
     notes: normalizeWorkspaceNotes((w as { notes?: unknown }).notes, pieces),
     profileAssignments: normalizeProfileAssignments((w as { profileAssignments?: unknown }).profileAssignments, pieces),
+    mirrorCenterLineXMm: (() => {
+      const raw = (w as { mirrorCenterLineXMm?: unknown }).mirrorCenterLineXMm
+      return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
+    })(),
     ...(typeof w.projectFileName === 'string' ? { projectFileName: w.projectFileName } : {}),
     ...(typeof w.bomDocumentVersion === 'string' ? { bomDocumentVersion: w.bomDocumentVersion } : {}),
     ...(typeof w.bomDeveloperName === 'string' ? { bomDeveloperName: w.bomDeveloperName } : {}),

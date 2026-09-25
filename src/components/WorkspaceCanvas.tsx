@@ -135,7 +135,7 @@ import { strokeColorForProfileKey } from '../profile/profileKeyColor'
 import { getPieceContourDisplayPaths, pieceGroupTransformAttr, pieceSolidContourPathD } from './pieceSolidContourPath'
 import { isInternalCircleHole, pathWithInternalCircleHoles } from '../geometry/internalCirclePath'
 import { sortPiecesFacingBehind } from '../geometry/facingPiece'
-import { isLinkedDerivedPiece } from '../geometry/mirrorPiece'
+import { effectiveMirrorCenterLineXMm, isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 import { isThicknessDerivedPiece } from '../geometry/thicknessCorrection'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
 import { perfMark, perfMeasure } from '../perf/perfMarks'
@@ -2363,6 +2363,7 @@ export function WorkspaceCanvas() {
     showInternalLines,
     showPieceNames,
     showProfiles,
+    showMirrorCenterLine,
     showContourMeasurements,
     showWorkspaceNotes,
     showContourChangePreview,
@@ -2375,6 +2376,7 @@ export function WorkspaceCanvas() {
     rulerLine,
     setView,
     setRulerLine,
+    setMirrorCenterLineXMm,
     pendingNahtzugabeClick,
     setPendingNahtzugabeClick,
     setNahtzugabeDialogPieceId,
@@ -2512,6 +2514,7 @@ export function WorkspaceCanvas() {
       showInternalLines: s.showInternalLines,
       showPieceNames: s.showPieceNames,
       showProfiles: s.showProfiles,
+      showMirrorCenterLine: s.showMirrorCenterLine,
       showContourMeasurements: s.showContourMeasurements,
       showWorkspaceNotes: s.showWorkspaceNotes,
       showContourChangePreview: s.showContourChangePreview,
@@ -2522,6 +2525,7 @@ export function WorkspaceCanvas() {
       setRulerMode: s.setRulerMode,
       rulerLine: s.rulerLine,
       setView: s.setView,
+      setMirrorCenterLineXMm: s.setMirrorCenterLineXMm,
       setRulerLine: s.setRulerLine,
       pendingNahtzugabeClick: s.pendingNahtzugabeClick,
       setPendingNahtzugabeClick: s.setPendingNahtzugabeClick,
@@ -2776,6 +2780,7 @@ export function WorkspaceCanvas() {
         centerAtDown: Point
       }
     | { kind: 'ruler'; start: Point; current: Point }
+    | { kind: 'mirrorCenterLine'; startClientX: number; startLineX: number }
     | { kind: 'image-move'; startWorld: Point; startImagePos: Point }
     | {
         kind: 'image-resize'
@@ -3589,6 +3594,19 @@ export function WorkspaceCanvas() {
       setWorkspaceImageQuickMenu(null)
       setInternalCircleSpaceMenu(null)
       const world = toWorld(e.clientX, e.clientY)
+      if (showMirrorCenterLine && tool === 'select' && e.button === 0) {
+        const cx = effectiveMirrorCenterLineXMm(workspace.mirrorCenterLineXMm)
+        const hitMm = 6 / Math.max(view.zoom, 1e-6)
+        if (Math.abs(world.x - cx) <= hitMm) {
+          setDragging({
+            kind: 'mirrorCenterLine',
+            startClientX: e.clientX,
+            startLineX: cx,
+          })
+          ;(e.target as HTMLElement)?.setPointerCapture?.(e.pointerId)
+          return
+        }
+      }
       if (tool === 'pan') {
         setDragging({
           kind: 'pan',
@@ -6178,6 +6196,9 @@ export function WorkspaceCanvas() {
             panY: d.startPan.y + (latest.y - d.startClient.y),
           })
         })
+      } else if (dragging.kind === 'mirrorCenterLine') {
+        const worldNow = toWorld(e.clientX, e.clientY)
+        setMirrorCenterLineXMm(worldNow.x)
       } else if (dragging.kind === 'piece') {
         const world = toWorld(e.clientX, e.clientY)
         if (!piecesById.get(dragging.pieceId)) return
@@ -8883,6 +8904,37 @@ export function WorkspaceCanvas() {
           </pattern>
         </defs>
         <g transform={`translate(${view.panX},${view.panY}) scale(${view.zoom})`}>
+          {showMirrorCenterLine && (() => {
+            const cx = effectiveMirrorCenterLineXMm(workspace.mirrorCenterLineXMm)
+            const worldTop = -view.panY / view.zoom
+            const worldBottom = (VIEWBOX_HEIGHT - view.panY) / view.zoom
+            const pad = 2000
+            const strokeW = 1.1 / Math.max(view.zoom, 1e-6)
+            return (
+              <g pointerEvents="stroke" data-mirror-center-line="1">
+                <line
+                  x1={cx}
+                  y1={worldTop - pad}
+                  x2={cx}
+                  y2={worldBottom + pad}
+                  stroke={canvasThemeMode === 'dark' ? '#38bdf8' : '#0284c7'}
+                  strokeWidth={strokeW}
+                  strokeOpacity={0.85}
+                  strokeDasharray={`${8 / Math.max(view.zoom, 1e-6)} ${5 / Math.max(view.zoom, 1e-6)}`}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <line
+                  x1={cx}
+                  y1={worldTop - pad}
+                  x2={cx}
+                  y2={worldBottom + pad}
+                  stroke="transparent"
+                  strokeWidth={12 / Math.max(view.zoom, 1e-6)}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            )
+          })()}
           {imageDigitizeSession &&
             imageDigitizeSession.imageDataUrl &&
             imageDigitizeSession.imageSizePx && (

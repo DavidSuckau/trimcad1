@@ -375,6 +375,12 @@ export type Workspace = {
   autoAdjustSeamAssignmentCorners?: boolean
   /** Freie Notizzettel (nur Editor, nicht DXF-Export). */
   notes?: WorkspaceNote[]
+  /**
+   * Vertikale Workspace-Mittellinie in Welt-mm (X). Unabhängig von Teilen.
+   * Spiegelkopien werden daran gespiegelt platziert (gleicher Abstand, andere Seite).
+   * Fehlend / undefined = 0.
+   */
+  mirrorCenterLineXMm?: number
   /** Profilzuordnungen an Kanten (nur Visualisierung/Stückliste, nicht DXF-Export). */
   profileAssignments?: ProfileAssignment[]
   /** Zuletzt gespeicherter oder geladener Projektdateiname (Anzeige Stückliste). */

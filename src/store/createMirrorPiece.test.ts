@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
 import type { Workspace } from '../types/model'
+import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
 
 const square = [
   { type: 'line' as const, start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
@@ -45,6 +46,7 @@ describe('createMirrorPiece', () => {
       seamAssignments: [],
       notes: [],
       profileAssignments: [],
+      mirrorCenterLineXMm: 0,
     }
     useStore.setState({
       workspace,
@@ -53,20 +55,26 @@ describe('createMirrorPiece', () => {
     })
   })
 
-  it('legt eine Spiegelkopie mit mirrorParentId und Offset an', () => {
+  it('legt eine Spiegelkopie mit mirrorParentId und an der Mittellinie gespiegelt an', () => {
     const id = useStore.getState().createMirrorPiece('parent')
     expect(id).toBeTruthy()
     const pieces = useStore.getState().workspace.pieces
     expect(pieces).toHaveLength(2)
+    const parent = pieces.find((p) => p.id === 'parent')!
     const child = pieces.find((p) => p.id === id)!
     expect(child.mirrorParentId).toBe('parent')
     expect(child.kind).toBe('mirror')
     expect(child.name).toBe('Vorderteil Spiegel')
-    expect(child.transform.x).toBeGreaterThan(20)
-    expect(child.transform.y).toBe(30)
+    expect(child.transform.y).toBe(parent.transform.y)
     expect(child.transform.rotation).toBe(15)
     expect(child.cutLine).toHaveLength(4)
     expect(child.seamLine).toHaveLength(4)
+    // Gleicher Abstand zur Mittellinie (x=0), andere Seite
+    const pb = boundsForPieceCutLineWorld(parent)!
+    const cb = boundsForPieceCutLineWorld(child)!
+    const parentCx = (pb.minX + pb.maxX) / 2
+    const childCx = (cb.minX + cb.maxX) / 2
+    expect(childCx).toBeCloseTo(-parentCx, 1)
   })
 
   it('spiegelt die Kontur horizontal um die BBox-Mitte', () => {
