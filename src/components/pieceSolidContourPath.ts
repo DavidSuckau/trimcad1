@@ -47,9 +47,11 @@ export function getPieceContourDisplayPaths(
   cutSeamSwapped: boolean,
   excludeNotchId?: string | null,
   simplifyNotches?: boolean,
+  options?: { forceSolidCut?: boolean },
 ): PieceContourDisplayPaths {
+  const forceSolidCut = !!options?.forceSolidCut
   const geomEpoch = pieceGeomEpoch(piece)
-  const cacheKey = `${piece.id}|${geomEpoch}|${cutSeamSwapped}|${excludeNotchId ?? ''}|${simplifyNotches ? 1 : 0}`
+  const cacheKey = `${piece.id}|${geomEpoch}|${cutSeamSwapped}|${excludeNotchId ?? ''}|${simplifyNotches ? 1 : 0}|${forceSolidCut ? 1 : 0}`
   const cached = pathCacheGet(cacheKey)
   if (cached) return cached
 
@@ -77,7 +79,8 @@ export function getPieceContourDisplayPaths(
         : curveToPathD(mergedSeamLine, { closed: false })
 
   const hasSeam = !!(seamPathRaw && String(seamPathRaw).trim() && displayedSeamLine.length >= 3)
-  const solidIsCut = !hasSeam || cutSeamSwapped
+  // Kaschierung: Schnitt (außen) als Hauptkontur — Fase/NZ-Band klar erkennbar.
+  const solidIsCut = forceSolidCut || !hasSeam || cutSeamSwapped
   const solidPath = solidIsCut ? cutPathRaw : seamPathRaw
   const dashedPath = solidIsCut ? seamPathRaw : cutPathRaw
   const solidOk = solidPath && String(solidPath).trim()

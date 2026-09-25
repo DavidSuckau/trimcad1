@@ -1504,11 +1504,16 @@ const PieceGroup = memo(function PieceGroup({
   const { cutLine, seamLine, notches, drills, internalLines, internalCircles } = piece
   const ptPs = 1 / Math.max(viewZoom, 1e-6)
   const tx = pieceGroupTransformAttr(piece)
+  const isFacing = piece.kind === 'facing' || !!piece.facingParentId
+  const isMirror = piece.kind === 'mirror' || !!piece.mirrorParentId
+  const isThickness = piece.kind === 'thickness' || !!piece.thicknessParentId
   const { solidPath, dashedPath, hasSeam, solidStrokeOnly, dashedStrokeOnly } = getPieceContourDisplayPaths(
     piece,
     !!cutSeamSwapped,
     notchIdBeingDragged ?? undefined,
     simplifyNotches,
+    // Kaschierung: Schnitt außen als Hauptlinie (wie man schneidet), Naht sekundär.
+    { forceSolidCut: isFacing },
   )
   /** Nur Anzeige: Detail-Kerben-Overlay am aktiven/hovered Teil — Kontur bleibt voll. */
   const detailNotchOverlay = shouldRenderDetailNotchOverlay({
@@ -1520,9 +1525,6 @@ const PieceGroup = memo(function PieceGroup({
   })
   const materialFill = pieceInteriorFillFromMaterial(piece.material, _themeMode === 'dark')
   const isDialogHighlightActive = isDialogHovered
-  const isFacing = piece.kind === 'facing' || !!piece.facingParentId
-  const isMirror = piece.kind === 'mirror' || !!piece.mirrorParentId
-  const isThickness = piece.kind === 'thickness' || !!piece.thicknessParentId
   const facingHatchFill =
     _themeMode === 'dark' ? 'url(#facing-hatch-dark)' : 'url(#facing-hatch-light)'
   const mirrorLinkHatchFill =
@@ -1548,10 +1550,18 @@ const PieceGroup = memo(function PieceGroup({
         : isSelected && T.piece.fill === 'none'
           ? 1
           : 0.82
-  const dashedFill = dashedStrokeOnly ? 'none' : interiorFill
-  const dashedFillOpacity = dashedStrokeOnly ? undefined : interiorFillOpacity
-  const solidFill = solidStrokeOnly ? 'none' : interiorFill
-  const solidFillOpacity = solidStrokeOnly ? undefined : interiorFillOpacity
+  /** Kaschierung: Schraffur nur im NZ-Band (Cut∖Seam), nicht die ganze Innenfläche. */
+  const facingSaRingOnly =
+    isFacing &&
+    hasSeam &&
+    !!solidPath &&
+    !!dashedPath &&
+    !solidStrokeOnly &&
+    !dashedStrokeOnly
+  const dashedFill = facingSaRingOnly || dashedStrokeOnly ? 'none' : interiorFill
+  const dashedFillOpacity = dashedFill === 'none' ? undefined : interiorFillOpacity
+  const solidFill = facingSaRingOnly || solidStrokeOnly ? 'none' : interiorFill
+  const solidFillOpacity = solidFill === 'none' ? undefined : interiorFillOpacity
   const mirrorWash = _themeMode === 'dark' ? '#9ca3af' : '#6b7280'
   const thicknessWash = _themeMode === 'dark' ? '#93c5fd' : '#3b82f6'
 
@@ -1702,6 +1712,16 @@ const PieceGroup = memo(function PieceGroup({
             <polygon points={symmetryClipPolygonPointsAttr(symClips.mirror)} />
           </clipPath>
         </defs>
+      )}
+      {facingSaRingOnly && solidPath && dashedPath && (
+        <path
+          d={`${solidPath} ${dashedPath}`}
+          fill={isDialogHighlightActive ? T.piece.fillDialogHover : facingHatchFill}
+          fillOpacity={isDialogHighlightActive ? interiorFillOpacity : 1}
+          fillRule="evenodd"
+          stroke="none"
+          pointerEvents="none"
+        />
       )}
       {hasSeam && dashedPath && (
         <>

@@ -89,4 +89,22 @@ describe('facing SA after parent-like rebuild', () => {
     expect(chamferCollapsesSeamAllowance(seam, cutOk, cutBad, 10)).toBe(true)
     expect(chamferCollapsesSeamAllowance(seam, cutOk, cutOk, 10)).toBe(false)
   })
+
+  it('übernimmt Mutter-cutLine als Chamfer-Basis (NZ nicht neu „verrechnet“)', () => {
+    const draft = base(seam, [])
+    const derived = deriveCutLineForPiece(draft, seam, 10)
+    expect(derived.ok).toBe(true)
+    if (!derived.ok) return
+    const trimmedCut = derived.cutLine.map((c, i) => {
+      if (i !== 0 || c.type !== 'line') return c
+      return {
+        type: 'line' as const,
+        start: { x: c.start.x - 2, y: c.start.y },
+        end: { ...c.end },
+      }
+    })
+    const parent = { ...draft, cutLine: trimmedCut, cutLineDeviatesFromSeamAllowanceOffset: true as const }
+    const facing = buildFacingGeometryFromParent(parent)
+    expect(facing.cutLine[0]!.start.x).toBeLessThan(derived.cutLine[0]!.start.x - 0.5)
+  })
 })

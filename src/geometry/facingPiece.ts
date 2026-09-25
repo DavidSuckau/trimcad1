@@ -213,11 +213,12 @@ export function buildFacingGeometryFromParent(parent: PatternPiece): {
 } {
   const seamLine = cloneCurves(parent.seamLine)
   const parentCut = cloneCurves(parent.cutLine)
-  // Nach Flip/Edit kann die Mutter-cutLine topologisch unzuverlässig sein.
-  // Kaschierung immer aus der Naht (+ NZ) neu ableiten, dann erst chamfern.
+  // Schnittkontur der Mutter bevorzugen (inkl. Trims / abweichende NZ), dann chamfern.
+  // Nur neu aus Naht ableiten, wenn die Mutter keine brauchbare cutLine hat —
+  // sonst wirkt die Kaschierungs-NZ optisch „anders gerechnet“ als die Mutter.
   let cutForChamfer = parentCut
   const sa = parent.seamAllowanceMm
-  if (sa != null && sa > 0 && seamLine.length >= 3) {
+  if (sa != null && sa > 0 && seamLine.length >= 3 && parentCut.length < 3) {
     const derived = deriveCutLineForPiece(
       {
         ...parent,
