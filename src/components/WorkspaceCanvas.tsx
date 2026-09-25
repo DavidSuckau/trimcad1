@@ -142,9 +142,14 @@ import { perfMark, perfMeasure } from '../perf/perfMarks'
 import {
   shouldShowSeamPruefLive,
   shouldShowContourMeasurementsLive,
+  shouldShowPieceNamesLive,
+  shouldShowProfileOverlaysLive,
+  shouldShowProfileLabels,
+  shouldShowDenseAnnotationLabels,
   shouldSimplifyNotchRender,
   shouldRenderDetailNotchOverlay,
   nearestCurveQualityFor,
+  DENSE_ANNOTATION_PIECE_THRESHOLD,
   type InteractionQuality,
 } from '../perf/interactionQuality'
 import { hoverHitKindsAllowed, hoverHitAllowed } from '../perf/hoverHitGate'
@@ -3340,6 +3345,7 @@ export function WorkspaceCanvas() {
   const interactionQuality: InteractionQuality =
     dragging &&
     [
+      'pan',
       'piece',
       'vertex',
       'pointOnCurve',
@@ -3360,6 +3366,8 @@ export function WorkspaceCanvas() {
     showContourMeasurements,
     performanceMode,
   )
+  const livePieceNamesBase = shouldShowPieceNamesLive(interactionQuality, showPieceNames, performanceMode)
+  const liveProfiles = shouldShowProfileOverlaysLive(interactionQuality, showProfiles, performanceMode)
   const simplifyNotchesLive =
     shouldSimplifyNotchRender(interactionQuality, performanceMode) &&
     dragging?.kind !== 'notchMove'
@@ -9060,8 +9068,22 @@ export function WorkspaceCanvas() {
               showEaseNotches={showEaseNotches}
               showDrills={showDrills}
               showInternalLines={showInternalLines}
-              showPieceNames={showPieceNames}
-              showContourMeasurements={liveContourMeasurements}
+              showPieceNames={
+                livePieceNamesBase &&
+                shouldShowDenseAnnotationLabels({
+                  pieceCount: pieces.length,
+                  isSelected: selectedPieceIds.includes(piece.id),
+                  isHovered: hoveredPieceId === piece.id,
+                })
+              }
+              showContourMeasurements={
+                liveContourMeasurements &&
+                shouldShowDenseAnnotationLabels({
+                  pieceCount: pieces.length,
+                  isSelected: selectedPieceIds.includes(piece.id),
+                  isHovered: hoveredPieceId === piece.id,
+                })
+              }
               showPivotRotationUi={showPivotRotationUi}
               simplifyNotches={simplifyNotchesLive}
               showRotationRing={
@@ -9109,10 +9131,13 @@ export function WorkspaceCanvas() {
             />
             )
           })}
-          {showWorkspaceNotes &&
+          {interactionQuality !== 'dragging' &&
+            !performanceMode &&
+            showWorkspaceNotes &&
             (workspaceNotesList ?? []).map((wn) => {
               const piece = pieces.find((p) => p.id === wn.pieceId)
               if (!piece) return null
+              if (!pieceLikelyVisible(piece, view) && !selectedPieceIds.includes(piece.id)) return null
               const worldPos = pieceLocalToWorld(wn.position, piece)
               const z = 1 / Math.max(view.zoom, 1e-6)
               return (
@@ -10497,9 +10522,14 @@ export function WorkspaceCanvas() {
               </g>
             )
           })()}
-          {showProfiles && profileAssignments.length > 0 && profileAssignments.map((pa) => {
+          {liveProfiles && profileAssignments.length > 0 && profileAssignments.map((pa) => {
             const piece = pieces.find((p) => p.id === pa.pieceId)
             if (!piece) return null
+            const isFocus =
+              selectedPieceIds.includes(piece.id) || hoveredPieceId === piece.id
+            if (!pieceLikelyVisible(piece, view) && !selectedPieceIds.includes(piece.id)) return null
+            // Viele Teile: Profil-SVG nur am Fokus (Selected/Hovered) — großer Render-Gewinn.
+            if (pieces.length > DENSE_ANNOTATION_PIECE_THRESHOLD && !isFocus) return null
             const masterK = getCurvesForSeamEdge(piece)
             const curves = getProfileAssignmentDisplayCurves(piece, pa)
             if (curves.length === 0) return null
@@ -10540,6 +10570,31 @@ export function WorkspaceCanvas() {
             }
             if (!d) return null
 
+            const profileStroke = strokeColorForProfileKey(pa.profileKey, canvasThemeMode === 'dark')
+            const showLabels = shouldShowProfileLabels({
+              showProfiles: true,
+              iq: interactionQuality,
+              performanceMode,
+              pieceCount: pieces.length,
+              isSelected: selectedPieceIds.includes(piece.id),
+              isHovered: hoveredPieceId === piece.id,
+            })
+
+            if (!showLabels) {
+              return (
+                <g key={`profile-${pa.id}`} pointerEvents="none">
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={profileStroke}
+                    strokeWidth={1.2}
+                    strokeOpacity={0.7}
+                    strokeDasharray="4 3"
+                  />
+                </g>
+              )
+            }
+
             const firstSeg = curves[0]
             const lastSeg = curves[curves.length - 1]
             const startL = firstSeg.start
@@ -10572,7 +10627,6 @@ export function WorkspaceCanvas() {
             if (pa.internalArticleNumber) labelParts.push(pa.internalArticleNumber)
             labelParts.push(`${lengthMm.toFixed(1)} mm`)
             const detailText = labelParts.join(' · ')
-            const profileStroke = strokeColorForProfileKey(pa.profileKey, canvasThemeMode === 'dark')
 
             return (
               <g key={`profile-${pa.id}`} pointerEvents="none">

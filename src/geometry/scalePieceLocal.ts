@@ -1,6 +1,11 @@
 import type { Curve, Drill, Line, Notch, PatternPiece, Point } from '../types/model'
 import { deriveCutLineFromSeamWithValidation, offsetCurvesInwardForSeam } from './offset'
-import { resyncNotchesAfterCutLineRebuilt } from './notchResyncCutLine'
+import { getNotchPositionAndAngle, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
+import {
+  getNotchPositionAndAngleOnInternalLine,
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+} from './notchOnInternalLine'
 import { applySharpCornerPromotion } from './softVertexPromotion'
 import { getCurvesForSeamEdge } from './seamUtils'
 
@@ -57,12 +62,63 @@ function scaleDrillsLocal(drills: Drill[], pivot: Point, s: number): Drill[] {
   }))
 }
 
-function scaleNotchDimensions(notches: Notch[], s: number): Notch[] {
-  return notches.map((n) => ({
-    ...n,
-    depth: n.depth * s,
-    ...(n.width != null ? { width: n.width * s } : {}),
-  }))
+/**
+ * Kerben mit demselben Pivot/Faktor wie die Kontur skalieren.
+ * Nicht `resyncNotchesAfterCutLineRebuilt`: dessen Sprunglimit verwirft große Maßstab-Verschiebungen.
+ *
+ * - `sNormalized` / `internalSNormalized` bleiben (maßstabsinvariant)
+ * - `arcLengthMm` / `internalArcLengthMm` × s
+ * - Position um Pivot skalieren, dann auf neue Kontur/Internals rematerialisieren
+ * - depth/width × s
+ */
+export function scaleNotchesWithPiece(
+  notches: Notch[],
+  pivot: Point,
+  s: number,
+  oldCutLine: Curve[],
+  newCutLine: Curve[],
+  oldInternalLines: Curve[],
+  newInternalLines: Curve[],
+): Notch[] {
+  return notches.map((n) => {
+    const depth = n.depth * s
+    const width = n.width != null ? n.width * s : undefined
+
+    if (isNotchOnInternalLine(n)) {
+      const oldPos =
+        getNotchPositionAndAngleOnInternalLine(n, oldInternalLines)?.position ?? n.position
+      const draft: Notch = {
+        ...n,
+        depth,
+        ...(width != null ? { width } : {}),
+        position: scalePointAbout(oldPos, pivot, s),
+        // sNormalized auf Internals: invariant; Bogenlänge skaliert
+        internalSNormalized: n.internalSNormalized,
+        internalArcLengthMm:
+          n.internalArcLengthMm != null && Number.isFinite(n.internalArcLengthMm)
+            ? n.internalArcLengthMm * s
+            : undefined,
+        sNormalized: undefined,
+        arcLengthMm: undefined,
+        vertexIndex: undefined,
+      }
+      return materializeNotchAnchorsOnInternalLine(draft, newInternalLines) ?? draft
+    }
+
+    const oldPos = getNotchPositionAndAngle(n, oldCutLine).position
+    const draft: Notch = {
+      ...n,
+      depth,
+      ...(width != null ? { width } : {}),
+      position: scalePointAbout(oldPos, pivot, s),
+      // Relativer Konturanteil bleibt; absolute Bogenlänge skaliert
+      sNormalized: n.sNormalized,
+      arcLengthMm:
+        n.arcLengthMm != null && Number.isFinite(n.arcLengthMm) ? n.arcLengthMm * s : undefined,
+      vertexIndex: undefined,
+    }
+    return materializeNotchAnchorsOnCutLine(draft, newCutLine) ?? draft
+  })
 }
 
 /**
@@ -79,6 +135,7 @@ export function applyUniformScaleToPiece(
   }
 
   const seamMaster = piece.seamAllowanceMm != null && piece.seamLine.length >= 3
+  const oldInternal = piece.internalLines
 
   if (seamMaster) {
     const scaledSeam = scaleCurvesLocal(piece.seamLine, pivot, s)
@@ -86,15 +143,23 @@ export function applyUniformScaleToPiece(
     if (!derived.ok) {
       return { ok: false, message: derived.message }
     }
-    let notches = resyncNotchesAfterCutLineRebuilt(piece.notches, piece.cutLine, derived.cutLine)
-    notches = scaleNotchDimensions(notches, s)
+    const scaledInternal = scaleCurvesLocal(oldInternal, pivot, s)
+    const notches = scaleNotchesWithPiece(
+      piece.notches,
+      pivot,
+      s,
+      piece.cutLine,
+      derived.cutLine,
+      oldInternal,
+      scaledInternal,
+    )
     const next: PatternPiece = {
       ...piece,
       seamLine: scaledSeam,
       cutLine: derived.cutLine,
       notches,
       grainLine: scaleGrainLine(piece.grainLine, pivot, s),
-      internalLines: scaleCurvesLocal(piece.internalLines, pivot, s),
+      internalLines: scaledInternal,
       internalCircles: scaleInternalCirclesLocal(piece.internalCircles, pivot, s),
       drills: scaleDrillsLocal(piece.drills, pivot, s),
     }
@@ -109,10 +174,19 @@ export function applyUniformScaleToPiece(
   const seamLine =
     piece.seamAllowanceMm != null && scaledCut.length >= 3
       ? offsetCurvesInwardForSeam(scaledCut, piece.seamAllowanceMm)
-      : piece.seamLine
-
-  let notches = resyncNotchesAfterCutLineRebuilt(piece.notches, piece.cutLine, scaledCut)
-  notches = scaleNotchDimensions(notches, s)
+      : piece.seamLine.length >= 3
+        ? scaleCurvesLocal(piece.seamLine, pivot, s)
+        : piece.seamLine
+  const scaledInternal = scaleCurvesLocal(oldInternal, pivot, s)
+  const notches = scaleNotchesWithPiece(
+    piece.notches,
+    pivot,
+    s,
+    piece.cutLine,
+    scaledCut,
+    oldInternal,
+    scaledInternal,
+  )
 
   const next: PatternPiece = {
     ...piece,
@@ -120,7 +194,7 @@ export function applyUniformScaleToPiece(
     seamLine,
     notches,
     grainLine: scaleGrainLine(piece.grainLine, pivot, s),
-    internalLines: scaleCurvesLocal(piece.internalLines, pivot, s),
+    internalLines: scaledInternal,
     internalCircles: scaleInternalCirclesLocal(piece.internalCircles, pivot, s),
     drills: scaleDrillsLocal(piece.drills, pivot, s),
   }

@@ -27,6 +27,61 @@ export function shouldShowContourMeasurementsLive(
   return showFlag
 }
 
+/** Teilnamen: SVG-Text ist teuer — während Drag/Pan/PerformanceMode aus. */
+export function shouldShowPieceNamesLive(
+  iq: InteractionQuality,
+  showFlag: boolean,
+  performanceMode: boolean,
+): boolean {
+  if (iq === 'dragging' || performanceMode) return false
+  return showFlag
+}
+
+/**
+ * Profil-Linien (ohne Labels): während Drag/Pan aus, sonst Flag.
+ * Labels separat via shouldShowProfileLabels.
+ */
+export function shouldShowProfileOverlaysLive(
+  iq: InteractionQuality,
+  showFlag: boolean,
+  performanceMode: boolean,
+): boolean {
+  if (iq === 'dragging' || performanceMode) return false
+  return showFlag
+}
+
+/** Ab so vielen Teilen: Annotation-Texte nur am Fokus-Teil (Selected/Hovered). */
+export const DENSE_ANNOTATION_PIECE_THRESHOLD = 12
+
+/**
+ * SVG-Text-Labels (Profil-Keys, Längen, Teilnamen) nur am Fokus,
+ * sobald viele Teile sichtbar sind — Linien können weiter laufen.
+ */
+export function shouldShowDenseAnnotationLabels(opts: {
+  pieceCount: number
+  isSelected: boolean
+  isHovered: boolean
+}): boolean {
+  if (opts.pieceCount <= DENSE_ANNOTATION_PIECE_THRESHOLD) return true
+  return opts.isSelected || opts.isHovered
+}
+
+export function shouldShowProfileLabels(opts: {
+  showProfiles: boolean
+  iq: InteractionQuality
+  performanceMode: boolean
+  pieceCount: number
+  isSelected: boolean
+  isHovered: boolean
+}): boolean {
+  if (!shouldShowProfileOverlaysLive(opts.iq, opts.showProfiles, opts.performanceMode)) return false
+  return shouldShowDenseAnnotationLabels({
+    pieceCount: opts.pieceCount,
+    isSelected: opts.isSelected,
+    isHovered: opts.isHovered,
+  })
+}
+
 export function shouldSimplifyNotchRender(
   iq: InteractionQuality,
   performanceMode: boolean,

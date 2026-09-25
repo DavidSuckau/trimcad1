@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   curveBoundsPad,
+  DENSE_ANNOTATION_PIECE_THRESHOLD,
   nearestCurveQualityFor,
   pieceGeomEpoch,
   shouldRenderDetailNotchOverlay,
   shouldShowContourMeasurementsLive,
+  shouldShowDenseAnnotationLabels,
+  shouldShowPieceNamesLive,
+  shouldShowProfileLabels,
+  shouldShowProfileOverlaysLive,
   shouldShowSeamPruefLive,
   shouldSimplifyNotchRender,
 } from './interactionQuality'
@@ -33,6 +38,58 @@ describe('live overlay gates', () => {
   it('hides contour measurements the same way', () => {
     expect(shouldShowContourMeasurementsLive('dragging', true, false)).toBe(false)
     expect(shouldShowContourMeasurementsLive('idle', true, false)).toBe(true)
+  })
+
+  it('hides piece names and profile overlays during drag or performance mode', () => {
+    expect(shouldShowPieceNamesLive('dragging', true, false)).toBe(false)
+    expect(shouldShowPieceNamesLive('normal', true, false)).toBe(true)
+    expect(shouldShowProfileOverlaysLive('dragging', true, false)).toBe(false)
+    expect(shouldShowProfileOverlaysLive('normal', true, true)).toBe(false)
+    expect(shouldShowProfileOverlaysLive('normal', true, false)).toBe(true)
+  })
+
+  it('limits dense annotation labels to focus when many pieces', () => {
+    expect(
+      shouldShowDenseAnnotationLabels({
+        pieceCount: DENSE_ANNOTATION_PIECE_THRESHOLD,
+        isSelected: false,
+        isHovered: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldShowDenseAnnotationLabels({
+        pieceCount: DENSE_ANNOTATION_PIECE_THRESHOLD + 1,
+        isSelected: false,
+        isHovered: false,
+      }),
+    ).toBe(false)
+    expect(
+      shouldShowDenseAnnotationLabels({
+        pieceCount: 40,
+        isSelected: true,
+        isHovered: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldShowProfileLabels({
+        showProfiles: true,
+        iq: 'normal',
+        performanceMode: false,
+        pieceCount: 40,
+        isSelected: false,
+        isHovered: true,
+      }),
+    ).toBe(true)
+    expect(
+      shouldShowProfileLabels({
+        showProfiles: true,
+        iq: 'dragging',
+        performanceMode: false,
+        pieceCount: 5,
+        isSelected: true,
+        isHovered: true,
+      }),
+    ).toBe(false)
   })
 
   it('simplifies notches when dragging or performanceMode', () => {
