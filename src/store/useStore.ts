@@ -135,6 +135,7 @@ import {
   linkedChildIds,
   mirrorChildIds,
   mirrorOffsetAcrossCenterLine,
+  syncMirrorFacingTransformsFromParentFacings,
   syncLinkedPiecesFromParents as syncLinkedPiecesFromParentsRaw,
 } from '../geometry/mirrorPiece'
 import {
@@ -1415,7 +1416,13 @@ export const useStore = create<Store>()(
           addFacing(mirror)
         }
       }
-      set({ selectedPieceIds: [id] })
+      set((s) => ({
+        selectedPieceIds: [id],
+        workspace: {
+          ...s.workspace,
+          pieces: syncMirrorFacingTransformsFromParentFacings(s.workspace.pieces),
+        },
+      }))
     }
     return id
   },
@@ -1463,7 +1470,13 @@ export const useStore = create<Store>()(
       for (let i = 0; i < wanted; i++) {
         get().createFacingPiece(id)
       }
-      set({ selectedPieceIds: [id] })
+      set((s) => ({
+        selectedPieceIds: [id],
+        workspace: {
+          ...s.workspace,
+          pieces: syncMirrorFacingTransformsFromParentFacings(s.workspace.pieces),
+        },
+      }))
     }
     return id
   },
@@ -3200,6 +3213,49 @@ export const useStore = create<Store>()(
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece) return s
       const centerX = effectiveMirrorCenterLineXMm(s.workspace.mirrorCenterLineXMm)
+      const byId = new Map(s.workspace.pieces.map((p) => [p.id, p]))
+
+      // Kaschierung einer Spiegelkopie ziehen → gepaarte Mutter-Kaschierung (X gespiegelt)
+      if (piece.facingParentId) {
+        const host = byId.get(piece.facingParentId)
+        if (host && isMirrorDerivedPiece(host) && host.mirrorParentId) {
+          const parent = byId.get(host.mirrorParentId)
+          if (parent) {
+            const parentFacings = s.workspace.pieces.filter((p) => p.facingParentId === parent.id)
+            const mirrorFacings = s.workspace.pieces.filter((p) => p.facingParentId === host.id)
+            const idx = mirrorFacings.findIndex((p) => p.id === pieceId)
+            const paired = idx >= 0 ? parentFacings[idx] : undefined
+            if (paired) {
+              let pieces = s.workspace.pieces.map((p) =>
+                p.id === paired.id
+                  ? {
+                      ...p,
+                      transform: {
+                        ...p.transform,
+                        x: p.transform.x - dx,
+                        y: p.transform.y + dy,
+                      },
+                    }
+                  : p
+              )
+              pieces = applyMirrorPlacementAcrossCenterLine(pieces, centerX)
+              return { workspace: { ...s.workspace, pieces } }
+            }
+          }
+        }
+        // Mutter-Kaschierung (oder ungepaarte Spiegel-Kaschierung): normal verschieben, dann Sync
+        let pieces = s.workspace.pieces.map((p) =>
+          p.id === pieceId
+            ? {
+                ...p,
+                transform: { ...p.transform, x: p.transform.x + dx, y: p.transform.y + dy },
+              }
+            : p
+        )
+        pieces = syncMirrorFacingTransformsFromParentFacings(pieces)
+        return { workspace: { ...s.workspace, pieces } }
+      }
+
       let pieces = s.workspace.pieces.map((p) => {
         if (p.id === pieceId) {
           return {

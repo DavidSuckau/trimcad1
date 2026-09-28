@@ -245,14 +245,13 @@ export function effectiveMirrorCenterLineXMm(centerLineXMm: number | undefined |
 
 /**
  * Platziert alle Spiegelkopien an der Mittellinie (gleicher Abstand, andere Seite).
- * Kaschierungen an Spiegelkopien folgen dem Positions-Delta der Spiegelkopie.
+ * Kaschierungen an Spiegelkopien folgen dem gespiegelten Relativversatz der Mutter-Kaschierung.
  */
 export function applyMirrorPlacementAcrossCenterLine(
   pieces: PatternPiece[],
   centerLineXMm: number,
 ): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
-  const deltas = new Map<string, Point>()
   let anyMirror = false
   const withMirrors = pieces.map((p) => {
     const parentId = p.mirrorParentId
@@ -263,19 +262,49 @@ export function applyMirrorPlacementAcrossCenterLine(
     const nx = parent.transform.x + offset.x
     const ny = parent.transform.y + offset.y
     if (Math.abs(nx - p.transform.x) < 1e-9 && Math.abs(ny - p.transform.y) < 1e-9) return p
-    deltas.set(p.id, { x: nx - p.transform.x, y: ny - p.transform.y })
     anyMirror = true
     return { ...p, transform: { ...p.transform, x: nx, y: ny } }
   })
-  if (!anyMirror) return pieces
-  return withMirrors.map((p) => {
-    if (!p.facingParentId) return p
-    const d = deltas.get(p.facingParentId)
-    if (!d) return p
-    return {
-      ...p,
-      transform: { ...p.transform, x: p.transform.x + d.x, y: p.transform.y + d.y },
+  const base = anyMirror ? withMirrors : pieces
+  return syncMirrorFacingTransformsFromParentFacings(base)
+}
+
+/**
+ * Kaschierung der Spiegelkopie: gleicher Relativversatz zur Spiegelkopie wie
+ * Mutter-Kaschierung zur Mutter — X-Komponente gespiegelt (vertikale Achse).
+ * Reihenfolge der Kaschierungen pro Host = Paarung.
+ */
+export function syncMirrorFacingTransformsFromParentFacings(
+  pieces: PatternPiece[],
+): PatternPiece[] {
+  const byId = new Map(pieces.map((p) => [p.id, p]))
+  const updates = new Map<string, Point>()
+
+  for (const mirror of pieces) {
+    const parentId = mirror.mirrorParentId
+    if (!parentId) continue
+    const parent = byId.get(parentId)
+    if (!parent || isLinkedDerivedPiece(parent)) continue
+    const parentFacings = pieces.filter((p) => p.facingParentId === parent.id)
+    const mirrorFacings = pieces.filter((p) => p.facingParentId === mirror.id)
+    const n = Math.min(parentFacings.length, mirrorFacings.length)
+    for (let i = 0; i < n; i++) {
+      const f = parentFacings[i]!
+      const mf = mirrorFacings[i]!
+      const relX = f.transform.x - parent.transform.x
+      const relY = f.transform.y - parent.transform.y
+      const nx = mirror.transform.x - relX
+      const ny = mirror.transform.y + relY
+      if (Math.abs(nx - mf.transform.x) < 1e-9 && Math.abs(ny - mf.transform.y) < 1e-9) continue
+      updates.set(mf.id, { x: nx, y: ny })
     }
+  }
+
+  if (updates.size === 0) return pieces
+  return pieces.map((p) => {
+    const u = updates.get(p.id)
+    if (!u) return p
+    return { ...p, transform: { ...p.transform, x: u.x, y: u.y } }
   })
 }
 
@@ -289,7 +318,6 @@ export function syncMirrorPiecesFromParents(
   centerLineXMm: number = 0,
 ): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
-  const mirrorDeltas = new Map<string, Point>()
   let changed = false
   const next = pieces.map((p) => {
     const parentId = p.mirrorParentId
@@ -300,9 +328,6 @@ export function syncMirrorPiecesFromParents(
     const offset = mirrorOffsetAcrossCenterLine(parent, centerLineXMm)
     const nx = parent.transform.x + offset.x
     const ny = parent.transform.y + offset.y
-    if (Math.abs(nx - p.transform.x) >= 1e-9 || Math.abs(ny - p.transform.y) >= 1e-9) {
-      mirrorDeltas.set(p.id, { x: nx - p.transform.x, y: ny - p.transform.y })
-    }
     const synced: PatternPiece = {
       ...p,
       ...geom,
@@ -323,16 +348,7 @@ export function syncMirrorPiecesFromParents(
     return synced
   })
   if (!changed) return pieces
-  if (mirrorDeltas.size === 0) return next
-  return next.map((p) => {
-    if (!p.facingParentId) return p
-    const d = mirrorDeltas.get(p.facingParentId)
-    if (!d) return p
-    return {
-      ...p,
-      transform: { ...p.transform, x: p.transform.x + d.x, y: p.transform.y + d.y },
-    }
-  })
+  return syncMirrorFacingTransformsFromParentFacings(next)
 }
 
 /** Kaschierungen + Spiegelkopien + Dickenkorrekturen nach Mutter-Änderung aktualisieren. */

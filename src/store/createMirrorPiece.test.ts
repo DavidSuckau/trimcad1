@@ -166,6 +166,34 @@ describe('createMirrorPiece', () => {
     expect(pieces.find((p) => p.id === facingId)!.facingParentId).toBe('parent')
   })
 
+  it('Kaschierung der Spiegelkopie folgt Relativversatz der Mutter-Kaschierung (X gespiegelt)', () => {
+    const facingId = useStore.getState().createFacingPiece('parent')!
+    useStore.getState().movePiece(facingId, 25, -8)
+    const mirrorId = useStore.getState().createMirrorPiece('parent')!
+    const parent = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
+    const facing = useStore.getState().workspace.pieces.find((p) => p.id === facingId)!
+    const mirror = useStore.getState().workspace.pieces.find((p) => p.id === mirrorId)!
+    const mirrorFacing = useStore.getState().workspace.pieces.find((p) => p.facingParentId === mirrorId)!
+
+    const relX = facing.transform.x - parent.transform.x
+    const relY = facing.transform.y - parent.transform.y
+    expect(mirrorFacing.transform.x).toBeCloseTo(mirror.transform.x - relX, 5)
+    expect(mirrorFacing.transform.y).toBeCloseTo(mirror.transform.y + relY, 5)
+
+    useStore.getState().movePiece(facingId, 10, 5)
+    const facing2 = useStore.getState().workspace.pieces.find((p) => p.id === facingId)!
+    const mirror2 = useStore.getState().workspace.pieces.find((p) => p.id === mirrorId)!
+    const mirrorFacing2 = useStore.getState().workspace.pieces.find((p) => p.facingParentId === mirrorId)!
+    expect(mirrorFacing2.transform.x).toBeCloseTo(
+      mirror2.transform.x - (facing2.transform.x - parent.transform.x),
+      5,
+    )
+    expect(mirrorFacing2.transform.y).toBeCloseTo(
+      mirror2.transform.y + (facing2.transform.y - parent.transform.y),
+      5,
+    )
+  })
+
   it('legt nachträglich Kaschierungen für bestehende Spiegelkopien an', () => {
     const mirrorId = useStore.getState().createMirrorPiece('parent')!
     expect(useStore.getState().workspace.pieces.filter((p) => p.facingParentId === mirrorId)).toHaveLength(0)
