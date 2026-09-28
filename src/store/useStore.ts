@@ -74,7 +74,7 @@ import {
   remapNotchesAfterInternalLineRemove,
   remapNotchesAfterInternalLineSplit,
 } from '../geometry/notchOnInternalLine'
-import { pieceLocalToWorld, getPiecePivotLocal } from '../geometry/pieceTransform'
+import { pieceLocalToWorld, getPiecePivotLocal, transformWithRotationAroundOwnPivot } from '../geometry/pieceTransform'
 import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { useSeamLineForVertexEditing, useSeamLineForPointCurveEditing } from '../geometry/vertexMaster'
 import { isNotchSpacingValidForCandidate } from '../geometry/notchMinSpacing'
@@ -136,6 +136,7 @@ import {
   mirrorChildIds,
   mirrorOffsetAcrossCenterLine,
   syncMirrorFacingTransformsFromParentFacings,
+  syncMirrorRotationFromParents,
   syncLinkedPiecesFromParents as syncLinkedPiecesFromParentsRaw,
 } from '../geometry/mirrorPiece'
 import {
@@ -774,6 +775,11 @@ type Store = {
     vertexIndex: number,
     options?: { notchResyncBaseline?: { notches: Notch[]; cutLine: Curve[]; seamLine?: Curve[] } }
   ) => void
+  /**
+   * Nahtzuordnung: eine Seite (nicht `keepSide`) auf exakt die Kantenlänge der anderen setzen.
+   * Bewegt den Endpunkt mit dem kleinsten Versatz (nur gerade Endsegmente).
+   */
+  equalizeSeamAssignmentLength: (assignmentId: string, keepSide: 'A' | 'B') => void
 
   addProfileAssignment: (assignment: Omit<ProfileAssignment, 'id'>) => string
   updateProfileAssignment: (id: string, updates: Partial<Omit<ProfileAssignment, 'id'>>) => void
@@ -2630,6 +2636,74 @@ export const useStore = create<Store>()(
     })
     const best = candidates[0]
     get().updateVertex(pieceId, vertexIndex, best.snapPt, false, options)
+  },
+
+  equalizeSeamAssignmentLength: (assignmentId, keepSide) => {
+    const s = get()
+    const a = s.workspace.seamAssignments.find((x) => x.id === assignmentId)
+    if (!a || isInternalSeamAssignment(a)) {
+      set({ toastMessage: 'warn:Keine passende Nahtzuordnung zum Angleichen.' })
+      return
+    }
+    const keepPieceId = keepSide === 'A' ? a.pieceIdA : a.pieceIdB
+    const adjPieceId = keepSide === 'A' ? a.pieceIdB : a.pieceIdA
+    const keepRaw = keepSide === 'A' ? a.curveIndicesA : a.curveIndicesB
+    const adjRaw = keepSide === 'A' ? a.curveIndicesB : a.curveIndicesA
+    const keepPiece = s.workspace.pieces.find((p) => p.id === keepPieceId)
+    const adjPiece = s.workspace.pieces.find((p) => p.id === adjPieceId)
+    if (!keepPiece || !adjPiece) {
+      set({ toastMessage: 'warn:Teil der Nahtzuordnung fehlt.' })
+      return
+    }
+    if (isLinkedDerivedPiece(adjPiece)) {
+      set({
+        toastMessage:
+          'warn:Abhängiges Teil (Kaschierung/Spiegelkopie) — bitte die Mutterseite angleichen.',
+      })
+      return
+    }
+    const keepIdx = resolvedSeamAssignmentCurveIndices(keepPiece, keepRaw)
+    const adjIdx = resolvedSeamAssignmentCurveIndices(adjPiece, adjRaw)
+    if (keepIdx.length === 0 || adjIdx.length === 0) {
+      set({ toastMessage: 'warn:Nahtkante ungültig.' })
+      return
+    }
+    const targetLen = edgeTotalLength(keepPiece, keepIdx)
+    const currLen = edgeTotalLength(adjPiece, adjIdx)
+    const diff = Math.abs(currLen - targetLen)
+    if (diff < 0.05) {
+      set({ toastMessage: 'info:Nahtlängen sind bereits gleich.' })
+      return
+    }
+    const master = getCurvesForSeamEdge(adjPiece)
+    const n = master.length
+    if (n < 1) return
+    const firstCi = adjIdx[0]!
+    const lastCi = adjIdx[adjIdx.length - 1]!
+    const startVi = firstCi
+    const endVi = (lastCi + 1) % n
+    type Cand = { vi: number; pt: Point; move: number }
+    const cands: Cand[] = []
+    for (const vi of [startVi, endVi]) {
+      const pt = snapVertexToEdgeLength(adjPiece, adjIdx, vi, targetLen)
+      if (!pt) continue
+      const cur = master[vi]?.start
+      if (!cur) continue
+      cands.push({ vi, pt, move: Math.hypot(pt.x - cur.x, pt.y - cur.y) })
+    }
+    cands.sort((x, y) => x.move - y.move)
+    const best = cands[0]
+    if (!best) {
+      set({
+        toastMessage:
+          'warn:Automatisches Angleichen nur bei geraden Endsegmenten der Nahtkante möglich.',
+      })
+      return
+    }
+    get().updateVertex(adjPieceId, best.vi, best.pt, false)
+    set({
+      toastMessage: `success:Nahtlänge angeglichen (Δ ${diff.toFixed(1)} mm → 0).`,
+    })
   },
 
   setSelectedPoint: (v) => set({ selectedPoint: v }),
@@ -4830,42 +4904,31 @@ export const useStore = create<Store>()(
       const piece = s.workspace.pieces.find((p) => p.id === pieceId)
       if (!piece || piece.cutLine.length < 3) return s
       const keepGrain = opts?.keepGrainWorldFixed === true
-      const pivot = getPiecePivotLocal(piece)
-      const t = piece.transform
-      const worldCenter = pieceLocalToWorld(pivot, t)
-      const lx = t.mirrored ? -pivot.x : pivot.x
-      const ly = pivot.y
-      const rad = (rotationDeg * Math.PI) / 180
-      const cos = Math.cos(rad)
-      const sin = Math.sin(rad)
-      const txNew = worldCenter.x - (lx * cos - ly * sin)
-      const tyNew = worldCenter.y - (lx * sin + ly * cos)
-      const persistPivot = piece.transform.pivotLocal == null ? pivot : piece.transform.pivotLocal
-      const newTransform = {
-        ...piece.transform,
-        x: txNew,
-        y: tyNew,
-        rotation: rotationDeg,
-        pivotLocal: persistPivot,
+
+      // Spiegelkopie drehen → zuerst die Mutter mit derselben Winkelvorgabe
+      const rootId =
+        piece.mirrorParentId && !isLinkedDerivedPiece(
+          s.workspace.pieces.find((p) => p.id === piece.mirrorParentId),
+        )
+          ? piece.mirrorParentId
+          : pieceId
+      const root = s.workspace.pieces.find((p) => p.id === rootId)
+      if (!root || root.cutLine.length < 3) return s
+
+      const applyRot = (p: PatternPiece): PatternPiece => {
+        const newTransform = transformWithRotationAroundOwnPivot(p, rotationDeg)
+        if (!keepGrain) return { ...p, transform: newTransform }
+        const src = getPieceGrainLine(p)
+        return {
+          ...p,
+          transform: newTransform,
+          grainLine: grainLineKeepingWorldFixed(src, p.transform, newTransform),
+        }
       }
-      let grainLine = piece.grainLine
-      if (keepGrain) {
-        const src = getPieceGrainLine(piece)
-        grainLine = grainLineKeepingWorldFixed(src, t, newTransform)
-      }
-      let pieces = s.workspace.pieces.map((p) =>
-        p.id === pieceId
-          ? {
-              ...p,
-              transform: newTransform,
-              ...(keepGrain ? { grainLine } : {}),
-            }
-          : p
-      )
-      pieces = applyMirrorPlacementAcrossCenterLine(
-        pieces,
-        effectiveMirrorCenterLineXMm(s.workspace.mirrorCenterLineXMm),
-      )
+
+      let pieces = s.workspace.pieces.map((p) => (p.id === root.id ? applyRot(p) : p))
+      // Spiegelkopien: gleiche Drehung um den jeweils eigenen Pivot (nicht Mittellinie)
+      pieces = syncMirrorRotationFromParents(pieces)
       return {
         workspace: {
           ...s.workspace,

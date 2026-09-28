@@ -176,8 +176,8 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Nahtkante exakt auf Längengleichheit (0 mm Differenz)',
     description:
-      'Bei zugeordneter Naht: Wenn die Kantenlänge zum Gegenstück schon unter 5 mm abweicht, während des Ziehens Alt, ⌘ (Mac) oder Strg (Windows) halten bzw. drücken — der Eckpunkt springt dann auf exakt dieselbe Gesamtlänge wie die andere Seite (nur bei geraden Nahtsegmenten). Funktioniert auch, wenn du die Taste drückst, ohne die Maus zu bewegen.',
-    access: 'Eckpunkt auf Nahtkante ziehen + Alt / ⌘ / Strg',
+      'Bei zugeordneter Naht: Δ-Anzeige bleibt beim Bearbeiten sichtbar. Klick auf „Δ … mm · angleichen“ setzt die Länge automatisch gleich (ausgewähltes Teil wird angepasst, sonst die kürzere Seite). Alternativ: Nahtverbinder anfahren → Leertaste → im Dialog „… an … anpassen“. Beim Ziehen eines Eckpunkts: wenn die Differenz schon unter 5 mm liegt, Alt / ⌘ / Strg halten — der Punkt springt dann auf exakt dieselbe Länge (nur gerade Endsegmente).',
+    access: 'Δ-Label anklicken · oder Leertaste an Nahtverbinder · oder Eckpunkt ziehen + Alt/⌘/Strg',
     shortcut: 'Alt, ⌘, Strg',
   },
   {
@@ -208,7 +208,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Spiegelkopie erzeugen',
     description:
-      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie. Platzierung an der Workspace-Mittellinie (gleicher Abstand, andere Seite; Linie unter Anzeigen → Mittellinie, per Ziehen verschiebbar). Kontur, Kerben und Internals folgen der Mutter; die Position bleibt an der Mittellinie gespiegelt (Mutter oder Spiegelkopie verschieben hält den Abstand). Drehung und Laufrichtung bleiben lokal editierbar. Material wird beim Anlegen übernommen, ist am Tochterteil aber separat änderbar. Hat die Mutter bereits eine Kaschierung, wird für die Spiegelkopie automatisch ebenfalls eine Kaschierung angelegt — deren Position folgt dem Relativversatz der Mutter-Kaschierung (X gespiegelt). Optisch: Materialfarbe bleibt, darüber Graufüllung und Schraffur in Gegenrichtung zur Kaschierung.',
+      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie. Platzierung an der Workspace-Mittellinie (gleicher Abstand, andere Seite; Linie unter Anzeigen → Mittellinie, per Ziehen verschiebbar). Kontur, Kerben und Internals folgen der Mutter; die Position bleibt an der Mittellinie gespiegelt (Verschieben). Drehung folgt der Mutter um den jeweils eigenen Drehpunkt (nicht um die Mittellinie). Laufrichtung bleibt lokal editierbar. Material wird beim Anlegen übernommen, ist am Tochterteil aber separat änderbar. Hat die Mutter bereits eine Kaschierung, wird für die Spiegelkopie automatisch ebenfalls eine Kaschierung angelegt — deren Position folgt dem Relativversatz der Mutter-Kaschierung (X gespiegelt). Optisch: Materialfarbe bleibt, darüber Graufüllung und Schraffur in Gegenrichtung zur Kaschierung.',
     access: 'Laufrichtungspfeil anfahren → Leertaste → Spiegelkopie erzeugen',
     shortcut: 'Leertaste',
   },
@@ -464,7 +464,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Ansicht',
     name: 'Naht-Prüfanzeigen',
     description:
-      'Zeigt bei Nahtzuordnungen Verbinder zwischen Teilen, Längenabweichungen (Δ mm), Kerben-Warnungen und grüne Häkchen (✓), wenn Teilabschnitte übereinstimmen. Ausblenden für eine ruhigere Arbeitsfläche — die Zuordnungen bleiben gespeichert.',
+      'Zeigt bei Nahtzuordnungen Verbinder zwischen Teilen, Längenabweichungen (Δ mm), Kerben-Warnungen und grüne Häkchen (✓), wenn Teilabschnitte übereinstimmen. Die Anzeige bleibt auch beim Verschieben von Punkten sichtbar. Klick auf Δ gleicht die Länge an. Ausblenden für eine ruhigere Arbeitsfläche — die Zuordnungen bleiben gespeichert.',
     access: 'Unten → Anzeige → Naht-Prüfanzeigen',
     shortcut: undefined,
   },

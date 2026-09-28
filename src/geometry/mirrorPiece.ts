@@ -11,7 +11,7 @@ import {
   syncThicknessPiecesFromParents,
 } from './thicknessCorrection'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
-import { pieceLocalToWorld } from './pieceTransform'
+import { pieceLocalToWorld, transformWithRotationAroundOwnPivot } from './pieceTransform'
 
 function mirrorX(p: Point, cx: number): Point {
   return { x: 2 * cx - p.x, y: p.y }
@@ -244,6 +244,29 @@ export function effectiveMirrorCenterLineXMm(centerLineXMm: number | undefined |
 }
 
 /**
+ * Drehung der Spiegelkopien = Drehung der Mutter, jeweils um den eigenen Pivot
+ * (nicht um die Mittellinie). Anschließend Kaschierungs-Relativversatz.
+ */
+export function syncMirrorRotationFromParents(pieces: PatternPiece[]): PatternPiece[] {
+  const byId = new Map(pieces.map((p) => [p.id, p]))
+  let any = false
+  const next = pieces.map((p) => {
+    const parentId = p.mirrorParentId
+    if (!parentId) return p
+    const parent = byId.get(parentId)
+    if (!parent || isLinkedDerivedPiece(parent)) return p
+    if (Math.abs(p.transform.rotation - parent.transform.rotation) < 1e-9) return p
+    any = true
+    return {
+      ...p,
+      transform: transformWithRotationAroundOwnPivot(p, parent.transform.rotation),
+    }
+  })
+  if (!any) return pieces
+  return syncMirrorFacingTransformsFromParentFacings(next)
+}
+
+/**
  * Platziert alle Spiegelkopien an der Mittellinie (gleicher Abstand, andere Seite).
  * Kaschierungen an Spiegelkopien folgen dem gespiegelten Relativversatz der Mutter-Kaschierung.
  */
@@ -311,7 +334,7 @@ export function syncMirrorFacingTransformsFromParentFacings(
 /**
  * Synchronisiert alle Spiegelkopien aus ihren Mutterteilen.
  * Geometrie folgt der Mutter; Position bleibt an der Workspace-Mittellinie gespiegelt.
- * Drehung, Laufrichtung, Material und id/name bleiben lokal am Kind.
+ * Drehung folgt der Mutter (gleicher Winkel); Laufrichtung und Material bleiben lokal am Kind.
  */
 export function syncMirrorPiecesFromParents(
   pieces: PatternPiece[],
@@ -338,7 +361,7 @@ export function syncMirrorPiecesFromParents(
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,
-      transform: { ...p.transform, x: nx, y: ny },
+      transform: { ...p.transform, x: nx, y: ny, rotation: parent.transform.rotation },
       mirrorParentId: parentId,
       kind: 'mirror',
       symmetryConstraint: undefined,

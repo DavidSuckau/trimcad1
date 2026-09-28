@@ -28,8 +28,8 @@ describe('nearestCurveQualityFor', () => {
 })
 
 describe('live overlay gates', () => {
-  it('hides seam prüf during drag or performance mode', () => {
-    expect(shouldShowSeamPruefLive('dragging', true, false)).toBe(false)
+  it('keeps seam prüf visible during drag; hides only in performance mode', () => {
+    expect(shouldShowSeamPruefLive('dragging', true, false)).toBe(true)
     expect(shouldShowSeamPruefLive('normal', true, true)).toBe(false)
     expect(shouldShowSeamPruefLive('normal', true, false)).toBe(true)
     expect(shouldShowSeamPruefLive('normal', false, false)).toBe(false)

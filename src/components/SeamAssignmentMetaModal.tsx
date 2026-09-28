@@ -26,6 +26,7 @@ export function SeamAssignmentMetaModal() {
     clearEasePreview,
     applyEasePreview,
     clearEaseForAssignment,
+    equalizeSeamAssignmentLength,
   } =
     useStore(
       useShallow((s) => ({
@@ -40,6 +41,7 @@ export function SeamAssignmentMetaModal() {
         clearEasePreview: s.clearEasePreview,
         applyEasePreview: s.applyEasePreview,
         clearEaseForAssignment: s.clearEaseForAssignment,
+        equalizeSeamAssignmentLength: s.equalizeSeamAssignmentLength,
       })),
     )
   const assignment = workspace.seamAssignments.find((a) => a.id === seamAssignmentMetaDialogId)
@@ -175,6 +177,34 @@ export function SeamAssignmentMetaModal() {
             />
             <span>Ecken bei Nahtzuordnung automatisch anpassen</span>
           </label>
+        ) : null}
+
+        {!internal && pieceA && pieceB ? (
+          <div style={{ marginTop: '0.75rem', marginBottom: '0.5rem' }}>
+            <div className="nahtzugabe-dialog-label" style={{ marginBottom: 6 }}>
+              Kantenlänge angleichen (gerade Endsegmente)
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <button
+                type="button"
+                className="menubar-dropdown-btn"
+                onClick={() => {
+                  equalizeSeamAssignmentLength(assignment.id, 'B')
+                }}
+              >
+                {nameA} an {nameB} anpassen
+              </button>
+              <button
+                type="button"
+                className="menubar-dropdown-btn"
+                onClick={() => {
+                  equalizeSeamAssignmentLength(assignment.id, 'A')
+                }}
+              >
+                {nameB} an {nameA} anpassen
+              </button>
+            </div>
+          </div>
         ) : null}
 
         {!internal ? (

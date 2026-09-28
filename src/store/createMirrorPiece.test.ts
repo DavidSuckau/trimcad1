@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
 import type { Workspace } from '../types/model'
 import { boundsForPieceCutLineWorld } from '../workspace/workspaceOverviewBounds'
+import { getPiecePivotLocal, pieceLocalToWorld } from '../geometry/pieceTransform'
+import { mirrorOffsetAcrossCenterLine } from '../geometry/mirrorPiece'
 
 const square = [
   { type: 'line' as const, start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
@@ -192,6 +194,57 @@ describe('createMirrorPiece', () => {
       mirror2.transform.y + (facing2.transform.y - parent.transform.y),
       5,
     )
+  })
+
+  it('Drehung der Mutter dreht Spiegelkopie um deren eigenen Pivot (nicht Mittellinie)', () => {
+    // Pivot bewusst nicht in der BBox-Mitte → Eigendrehung ≠ Mittellinien-Snap
+    useStore.setState((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === 'parent'
+            ? { ...p, transform: { ...p.transform, pivotLocal: { x: 10, y: 20 } } }
+            : p
+        ),
+      },
+    }))
+    const mirrorId = useStore.getState().createMirrorPiece('parent')!
+    // Gleichen lokalen Pivot an der Spiegelkopie setzen
+    useStore.setState((s) => ({
+      workspace: {
+        ...s.workspace,
+        pieces: s.workspace.pieces.map((p) =>
+          p.id === mirrorId
+            ? { ...p, transform: { ...p.transform, pivotLocal: { x: 10, y: 20 } } }
+            : p
+        ),
+      },
+    }))
+
+    const parentBefore = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
+    const mirrorBefore = useStore.getState().workspace.pieces.find((p) => p.id === mirrorId)!
+    const parentPivot = getPiecePivotLocal(parentBefore)
+    const mirrorPivot = getPiecePivotLocal(mirrorBefore)
+    const parentPivotWorld0 = pieceLocalToWorld(parentPivot, parentBefore.transform)
+    const mirrorPivotWorld0 = pieceLocalToWorld(mirrorPivot, mirrorBefore.transform)
+
+    useStore.getState().setPieceRotation('parent', 40)
+
+    const parentAfter = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
+    const mirrorAfter = useStore.getState().workspace.pieces.find((p) => p.id === mirrorId)!
+    expect(parentAfter.transform.rotation).toBe(40)
+    expect(mirrorAfter.transform.rotation).toBe(40)
+
+    const parentPivotWorld1 = pieceLocalToWorld(parentPivot, parentAfter.transform)
+    const mirrorPivotWorld1 = pieceLocalToWorld(mirrorPivot, mirrorAfter.transform)
+    expect(parentPivotWorld1.x).toBeCloseTo(parentPivotWorld0.x, 4)
+    expect(parentPivotWorld1.y).toBeCloseTo(parentPivotWorld0.y, 4)
+    expect(mirrorPivotWorld1.x).toBeCloseTo(mirrorPivotWorld0.x, 4)
+    expect(mirrorPivotWorld1.y).toBeCloseTo(mirrorPivotWorld0.y, 4)
+
+    // Reiner Mittellinien-Snap der Transform würde eine andere Spiegel-tx ergeben
+    const centerlineTx = parentAfter.transform.x + mirrorOffsetAcrossCenterLine(parentAfter, 0).x
+    expect(Math.abs(mirrorAfter.transform.x - centerlineTx)).toBeGreaterThan(0.5)
   })
 
   it('legt nachträglich Kaschierungen für bestehende Spiegelkopien an', () => {

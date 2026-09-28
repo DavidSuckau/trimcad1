@@ -2470,6 +2470,7 @@ export function WorkspaceCanvas() {
     setToastMessage,
     checkSeamAdjustment,
     snapSeamEdgeToMatch,
+    equalizeSeamAssignmentLength,
     recomputeSeamLine,
     applyProfileLengthFitPreviews,
     digitizeState,
@@ -2620,6 +2621,7 @@ export function WorkspaceCanvas() {
       setToastMessage: s.setToastMessage,
       checkSeamAdjustment: s.checkSeamAdjustment,
       snapSeamEdgeToMatch: s.snapSeamEdgeToMatch,
+      equalizeSeamAssignmentLength: s.equalizeSeamAssignmentLength,
       recomputeSeamLine: s.recomputeSeamLine,
       applyProfileLengthFitPreviews: s.applyProfileLengthFitPreviews,
       digitizeState: s.digitizeState,
@@ -10841,7 +10843,8 @@ export function WorkspaceCanvas() {
                   style={{ cursor: hoveredSeamAssignmentId === a.id ? 'pointer' : 'default' }}
                 >
                   <title>
-                    Leertaste: Nummer, Nahtart, Entspannung · Backspace/Entf: Zuordnung löschen
+                    Leertaste: Nummer, Nahtart, Länge angleichen · Klick auf Δ: Länge angleichen ·
+                    Backspace/Entf: Zuordnung löschen
                   </title>
                   {/* Unsichtbare breite Linie für Hover-/Trefferfläche */}
                   <line x1={midA.x} y1={midA.y} x2={midB.x} y2={midB.y} stroke="transparent" strokeWidth={14} />
@@ -10871,9 +10874,31 @@ export function WorkspaceCanvas() {
                       fill={T.accent.error}
                       fontWeight="600"
                       fontFamily="sans-serif"
-                      pointerEvents="none"
+                      pointerEvents="auto"
+                      style={{ cursor: 'pointer' }}
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        const selA = selectedPieceIds.includes(a.pieceIdA)
+                        const selB = selectedPieceIds.includes(a.pieceIdB)
+                        let keep: 'A' | 'B'
+                        if (selA && !selB) keep = 'B' // ausgewähltes A anpassen → B behalten
+                        else if (selB && !selA) keep = 'A'
+                        else keep = entry.metrics.lenA >= entry.metrics.lenB ? 'A' : 'B'
+                        equalizeSeamAssignmentLength(a.id, keep)
+                      }}
                     >
-                      Δ {diffMm.toFixed(1)} mm
+                      <title>
+                        Klick: Länge angleichen
+                        {selectedPieceIds.includes(a.pieceIdA) !== selectedPieceIds.includes(a.pieceIdB)
+                          ? ' (ausgewähltes Teil wird angepasst)'
+                          : ' (kürzere Seite wird verlängert/verkürzt)'}
+                      </title>
+                      Δ {diffMm.toFixed(1)} mm · angleichen
                     </text>
                   )}
                   {notchMismatch && (

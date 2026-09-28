@@ -14,7 +14,10 @@ export function shouldShowSeamPruefLive(
   showFlag: boolean,
   performanceMode: boolean,
 ): boolean {
-  if (iq === 'dragging' || performanceMode) return false
+  // Während Vertex-/Teil-Drag bewusst an lassen — Live-Δ wird zum Angleichen gebraucht.
+  // Nur Performance-Modus blendet aus (iq bleibt für API-Kompatibilität).
+  void iq
+  if (performanceMode) return false
   return showFlag
 }
 

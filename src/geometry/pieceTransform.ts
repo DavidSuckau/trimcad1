@@ -12,6 +12,31 @@ export function getPiecePivotLocal(piece: PatternPiece): Point {
   }
 }
 
+/**
+ * Dreht das Teil um seinen eigenen Pivot auf `rotationDeg`.
+ * Welt-Pivot bleibt stehen; tx/ty werden angepasst (wie setPieceRotation).
+ */
+export function transformWithRotationAroundOwnPivot(
+  piece: PatternPiece,
+  rotationDeg: number,
+): PatternPieceTransform {
+  const pivot = getPiecePivotLocal(piece)
+  const t = piece.transform
+  const worldCenter = pieceLocalToWorld(pivot, t)
+  const lx = t.mirrored ? -pivot.x : pivot.x
+  const ly = pivot.y
+  const rad = (rotationDeg * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  return {
+    ...t,
+    x: worldCenter.x - (lx * cos - ly * sin),
+    y: worldCenter.y - (lx * sin + ly * cos),
+    rotation: rotationDeg,
+    pivotLocal: t.pivotLocal == null ? pivot : t.pivotLocal,
+  }
+}
+
 export type RotationUiLayout = {
   pivot: Point
   /** Rotationsring-Radius; passt in die Schnitt-BBox um den Pivot. */
