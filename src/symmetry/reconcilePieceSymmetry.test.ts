@@ -174,4 +174,44 @@ describe('reconcilePieceSymmetry', () => {
     }
     expect(found).toBe(true)
   })
+
+  it('finalizePieceContourEdit zieht Kerbe und interne Linie auf die Gegenseite mit', () => {
+    const piece = basePiece(square(100))
+    const sc = symmetryConstraintFromAxis({ x: 50, y: -10 }, { x: 50, y: 110 }, 'left')
+    const sym = applyPieceSymmetryToPiece(piece, sc.axisA, sc.axisB, sc.keepSide)
+    expect(sym.ok).toBe(true)
+    if (!sym.ok) return
+    let withSc: PatternPiece = {
+      ...sym.piece,
+      symmetryConstraint: sc,
+      notches: [
+        {
+          id: 'nKeep',
+          position: { x: 20, y: 0 },
+          angle: 90,
+          type: 'single',
+          depth: 4,
+          width: 6,
+        },
+      ],
+      internalLines: [{ type: 'line', start: { x: 15, y: 20 }, end: { x: 35, y: 40 } }],
+      drills: [{ id: 'd1', center: { x: 25, y: 30 }, radius: 2.5 }],
+    }
+    // Nur Keep-Seite gesetzt — Sync muss Spiegel erzeugen
+    const fin = finalizePieceContourEdit(withSc)
+    expect(fin.ok).toBe(true)
+    if (!fin.ok) return
+    expect(fin.piece.notches.length).toBeGreaterThanOrEqual(2)
+    const mirrorNotch = fin.piece.notches.find((n) => Math.abs(n.position.x - 80) < 3)
+    expect(mirrorNotch).toBeTruthy()
+    expect(fin.piece.internalLines.length).toBeGreaterThanOrEqual(2)
+    const mirrorInternal = fin.piece.internalLines.find((c) => {
+      const mx = (c.start.x + c.end.x) / 2
+      return mx > 55
+    })
+    expect(mirrorInternal).toBeTruthy()
+    expect(fin.piece.drills.length).toBeGreaterThanOrEqual(2)
+    const mirrorDrill = fin.piece.drills.find((d) => Math.abs(d.center.x - 75) < 3)
+    expect(mirrorDrill).toBeTruthy()
+  })
 })

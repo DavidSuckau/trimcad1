@@ -17,6 +17,7 @@ export {
   syncPieceSymmetryGeometry,
   syncMasterCurvesByMirroring,
   syncRoundedCornersForSymmetry,
+  syncSymmetryAncillaryFromKeepSide,
   symmetryConstraintFromAxis,
   vertexHalfPlane,
 } from './reconcilePieceSymmetry'

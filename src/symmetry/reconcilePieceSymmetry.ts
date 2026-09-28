@@ -1,4 +1,4 @@
-import type { Curve, Notch, PatternPiece, Point, RoundedCorner } from '../types/model'
+import type { Curve, Notch, PatternPiece, Point, RoundedCorner, Drill, InternalCircle } from '../types/model'
 import { useSeamLineForVertexEditing, getSharpMasterCurves } from '../geometry/vertexMaster'
 import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import { preferStableCutAfterGeometricMirror } from '../geometry/seamAllowanceInvariants'
@@ -7,8 +7,13 @@ import { applySharpCornerPromotion } from '../geometry/softVertexPromotion'
 import { splitBezierAt } from '../geometry/curveToPath'
 import { nearestCurveIndexAndPoint } from '../geometry/nearestOnCurve'
 import { materializeNotchAnchorsOnCutLine } from '../geometry/notchOnCurve'
-import { isNotchOnInternalLine } from '../geometry/notchOnInternalLine'
 import {
+  isNotchOnInternalLine,
+  materializeNotchAnchorsOnInternalLine,
+} from '../geometry/notchOnInternalLine'
+import {
+  buildSymmetricContour,
+  buildSymmetricContourPreservingCurves,
   crossZ,
   curveReferencePoint,
   mirrorAngleDegrees,
@@ -377,6 +382,192 @@ function applyMasterContourToPiece(piece: PatternPiece, masterCurves: Curve[]): 
   return { ...piece, cutLine, seamLine }
 }
 
+/** Prüft, ob jeder Keep-Vertex einen Spiegel-Partner nahe der Idealposition hat. */
+function isSymmetryVertexSyncComplete(
+  curves: Curve[],
+  axisA: Point,
+  axisB: Point,
+  keepSide: PieceSymmetryKeepSide,
+  tolMm = 1.25,
+): boolean {
+  const n = curves.length
+  for (let i = 0; i < n; i++) {
+    const pos = getContourVertexPosition(curves, i)
+    if (vertexHalfPlane(pos, axisA, axisB, keepSide) !== 'keep') continue
+    const ideal = mirrorPointAcrossLine(pos, axisA, axisB)
+    let ok = false
+    for (let j = 0; j < n; j++) {
+      const pj = getContourVertexPosition(curves, j)
+      if (vertexHalfPlane(pj, axisA, axisB, keepSide) !== 'mirror') continue
+      if (Math.hypot(pj.x - ideal.x, pj.y - ideal.y) <= tolMm) {
+        ok = true
+        break
+      }
+    }
+    if (!ok) return false
+  }
+  return true
+}
+
+function newSymFeatureId(prefix: string): string {
+  return `${prefix}${Math.random().toString(36).slice(2, 10)}`
+}
+
+/**
+ * Kerben, Bohrungen, interne Linien/Kreise: Keep-Seite behalten, Gegenseite
+ * neu aus der Keep-Seite spiegeln (vollständig, nicht nur partiell).
+ */
+export function syncSymmetryAncillaryFromKeepSide(piece: PatternPiece): PatternPiece {
+  const sc = piece.symmetryConstraint
+  if (!sc) return piece
+  const { axisA, axisB, keepSide } = sc
+
+  const contourNotches: Notch[] = []
+  const internalNotches: Notch[] = []
+  for (const n of piece.notches) {
+    if (isNotchOnInternalLine(n)) internalNotches.push(n)
+    else contourNotches.push(n)
+  }
+
+  const nextContourNotches: Notch[] = []
+  for (const n of contourNotches) {
+    const onAxis = Math.abs(crossZ(axisA, axisB, n.position)) < AXIS_CROSS_EPS
+    const onKeep = onAxis || pointInKeepHalfPlane(n.position, axisA, axisB, keepSide)
+    if (!onKeep) continue
+    const primary = materializeNotchAnchorsOnCutLine(n, piece.cutLine) ?? n
+    nextContourNotches.push(primary)
+    if (onAxis) continue
+    const ideal = mirrorPointAcrossLine(primary.position, axisA, axisB)
+    const existing = contourNotches.find(
+      (o) =>
+        o.id !== primary.id &&
+        Math.hypot(o.position.x - ideal.x, o.position.y - ideal.y) < 4,
+    )
+    const mirroredRaw: Notch = {
+      ...primary,
+      id: existing?.id ?? newSymFeatureId('n'),
+      position: ideal,
+      angle: mirrorAngleDegrees(primary.angle, axisA, axisB),
+      sNormalized: undefined,
+      arcLengthMm: undefined,
+    }
+    nextContourNotches.push(materializeNotchAnchorsOnCutLine(mirroredRaw, piece.cutLine) ?? mirroredRaw)
+  }
+
+  const keepInternals = piece.internalLines.filter((c) =>
+    pointInKeepHalfPlane(curveReferencePoint(c), axisA, axisB, keepSide),
+  )
+  const nextInternals: Curve[] = []
+  for (const c of keepInternals) {
+    nextInternals.push(c)
+    const ref = curveReferencePoint(c)
+    if (Math.abs(crossZ(axisA, axisB, ref)) < AXIS_CROSS_EPS) continue
+    nextInternals.push(mirrorCurveAcrossLine(c, axisA, axisB))
+  }
+
+  const nextInternalNotches: Notch[] = []
+  for (const n of internalNotches) {
+    const onAxis = Math.abs(crossZ(axisA, axisB, n.position)) < AXIS_CROSS_EPS
+    const onKeep = onAxis || pointInKeepHalfPlane(n.position, axisA, axisB, keepSide)
+    if (!onKeep) continue
+    const primary = materializeNotchAnchorsOnInternalLine(n, nextInternals) ?? n
+    nextInternalNotches.push(primary)
+    if (onAxis) continue
+    const ideal = mirrorPointAcrossLine(primary.position, axisA, axisB)
+    const existing = internalNotches.find(
+      (o) =>
+        o.id !== primary.id &&
+        Math.hypot(o.position.x - ideal.x, o.position.y - ideal.y) < 4,
+    )
+    const mirroredRaw: Notch = {
+      ...primary,
+      id: existing?.id ?? newSymFeatureId('n'),
+      position: ideal,
+      angle: mirrorAngleDegrees(primary.angle, axisA, axisB),
+      sNormalized: undefined,
+      arcLengthMm: undefined,
+      internalSNormalized: undefined,
+      internalArcLengthMm: undefined,
+    }
+    nextInternalNotches.push(
+      materializeNotchAnchorsOnInternalLine(mirroredRaw, nextInternals) ?? mirroredRaw,
+    )
+  }
+
+  const keepDrills = piece.drills.filter((d) =>
+    pointInKeepHalfPlane(d.center, axisA, axisB, keepSide),
+  )
+  const nextDrills: Drill[] = []
+  for (const d of keepDrills) {
+    nextDrills.push(d)
+    if (Math.abs(crossZ(axisA, axisB, d.center)) < AXIS_CROSS_EPS) continue
+    const ideal = mirrorPointAcrossLine(d.center, axisA, axisB)
+    const existing = piece.drills.find(
+      (o) => o.id !== d.id && Math.hypot(o.center.x - ideal.x, o.center.y - ideal.y) < 4,
+    )
+    nextDrills.push({
+      ...d,
+      id: existing?.id ?? newSymFeatureId('d'),
+      center: ideal,
+    })
+  }
+
+  const keepCircles = piece.internalCircles.filter((ic) =>
+    pointInKeepHalfPlane(ic.center, axisA, axisB, keepSide),
+  )
+  const nextCircles: InternalCircle[] = []
+  for (const ic of keepCircles) {
+    nextCircles.push(ic)
+    if (Math.abs(crossZ(axisA, axisB, ic.center)) < AXIS_CROSS_EPS) continue
+    const ideal = mirrorPointAcrossLine(ic.center, axisA, axisB)
+    const existing = piece.internalCircles.find(
+      (o) => o.id !== ic.id && Math.hypot(o.center.x - ideal.x, o.center.y - ideal.y) < 4,
+    )
+    nextCircles.push({
+      ...ic,
+      id: existing?.id ?? newSymFeatureId('ic'),
+      center: ideal,
+    })
+  }
+
+  return {
+    ...piece,
+    notches: [...nextContourNotches, ...nextInternalNotches],
+    drills: nextDrills,
+    internalLines: nextInternals,
+    internalCircles: nextCircles,
+  }
+}
+
+/**
+ * Wählt die Master-Kontur so, dass die Gegenseite vollständig der Vorlagen-Seite entspricht.
+ * 1) Kurven-erhaltender Rebuild (wie beim Anlegen)
+ * 2) Inkrementelle Paarung, falls Rebuild scheitert
+ * 3) Clipper-Rebuild als Fallback, wenn die Paarung unvollständig ist
+ */
+function syncMasterCurvesFully(
+  curves: Curve[],
+  axisA: Point,
+  axisB: Point,
+  keepSide: PieceSymmetryKeepSide,
+): { curves: Curve[]; softFromAxisSplit: number[] } {
+  const preserved = buildSymmetricContourPreservingCurves(curves, axisA, axisB, keepSide)
+  if (preserved && preserved.curves.length >= 3) {
+    return { curves: preserved.curves, softFromAxisSplit: preserved.softFromAxisSplit }
+  }
+
+  const incremental = syncMasterCurvesByMirroring(curves, axisA, axisB, keepSide)
+  if (isSymmetryVertexSyncComplete(incremental, axisA, axisB, keepSide)) {
+    return { curves: incremental, softFromAxisSplit: [] }
+  }
+
+  const rebuilt = buildSymmetricContour(curves, axisA, axisB, keepSide)
+  if (rebuilt.ok && rebuilt.curves.length >= 3) {
+    return { curves: rebuilt.curves, softFromAxisSplit: [] }
+  }
+  return { curves: incremental, softFromAxisSplit: [] }
+}
+
 export function syncPieceSymmetryGeometry(
   piece: PatternPiece
 ): { ok: true; piece: PatternPiece } | { ok: false; toastMessage: string } {
@@ -388,14 +579,37 @@ export function syncPieceSymmetryGeometry(
     return { ok: false, toastMessage: 'warn:Kontur zu kurz für Symmetrie.' }
   }
 
-  const syncedMaster = syncMasterCurvesByMirroring(masterIn, sc.axisA, sc.axisB, sc.keepSide)
+  const { curves: syncedMaster, softFromAxisSplit } = syncMasterCurvesFully(
+    masterIn,
+    sc.axisA,
+    sc.axisB,
+    sc.keepSide,
+  )
   let updated = applyMasterContourToPiece(piece, syncedMaster)
   const masterOut = masterCurvesForPiece(updated)
   const soft = syncSoftVerticesForSymmetry(updated, masterOut, sc)
 
+  if (softFromAxisSplit.length > 0) {
+    const seamMaster = useSeamLineForVertexEditing(updated) && updated.seamLine.length >= 3
+    if (seamMaster) {
+      const merged = [...new Set([...(soft.softVerticesMaster ?? []), ...softFromAxisSplit])].sort(
+        (a, b) => a - b,
+      )
+      updated = { ...updated, softVerticesMaster: merged, softVertices: soft.softVertices }
+    } else {
+      const merged = [...new Set([...(soft.softVertices ?? []), ...softFromAxisSplit])].sort(
+        (a, b) => a - b,
+      )
+      updated = { ...updated, softVertices: merged, softVerticesMaster: soft.softVerticesMaster }
+    }
+  } else {
+    updated = { ...updated, ...soft }
+  }
+
+  updated = syncSymmetryAncillaryFromKeepSide({ ...updated, symmetryConstraint: sc })
+
   const promoted = applySharpCornerPromotion({
     ...updated,
-    ...soft,
     symmetryConstraint: sc,
   })
 

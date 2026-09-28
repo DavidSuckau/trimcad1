@@ -213,9 +213,12 @@ export function resyncNotchesAfterCutLineRebuilt(
 }
 
 /**
- * Nach geometrischem Spiegeln der Kontur: Kerben per Segmentindex+t auf die gespiegelte CutLine legen,
- * danach ggf. auf eine neu abgeleitete CutLine resyncen (Sprungbegrenzung).
- * Verhindert willkürliche Nearest-Point-Sprünge beim Flip.
+ * Nach geometrischem Spiegeln/Skalieren der Kontur: Kerben auf die Ziel-CutLine legen.
+ *
+ * - Bei gleicher Topologie (mirroredCutLine ≡ finalCutLine): Segmentindex+t (kein Nearest-Sprung).
+ * - Wenn die finale CutLine abweicht (Naht→Schnitt neu abgeleitet): Position per `mapPoint`
+ *   direkt auf `finalCutLine` materialisieren — kein Sprunglimit-Resync, der Kerben verlieren kann.
+ * Typ/Tiefe/Breite/Rolle bleiben erhalten; Winkel wird neu aus der Zielkontur berechnet.
  */
 export function rematerializeNotchesAfterGeometricMirror(args: {
   notches: Notch[]
@@ -236,7 +239,21 @@ export function rematerializeNotchesAfterGeometricMirror(args: {
     mapPoint,
   } = args
 
-  const onMirrored = notches.map((notch) => {
+  const targetCut =
+    finalCutLine.length >= 3 ? finalCutLine : mirroredCutLine.length >= 3 ? mirroredCutLine : oldCutLine
+
+  const finalMatchesMirrored =
+    targetCut === mirroredCutLine ||
+    (finalCutLine.length === mirroredCutLine.length &&
+      finalCutLine.length > 0 &&
+      finalCutLine.every((c, i) => segmentsSameLogicalEdge(c, mirroredCutLine[i]!).ok))
+
+  const useIndexT =
+    finalMatchesMirrored &&
+    mirroredCutLine.length === oldCutLine.length &&
+    mirroredCutLine.every((c, i) => oldCutLine[i]?.type === c.type)
+
+  return notches.map((notch) => {
     if (isNotchOnInternalLine(notch)) {
       const anchor = resolveNotchInternalLineAnchor(notch, oldInternalLines)
       if (
@@ -272,42 +289,37 @@ export function rematerializeNotchesAfterGeometricMirror(args: {
       )
     }
 
-    const param = getNotchCutLineParameter(notch, oldCutLine)
-    if (
-      param &&
-      mirroredCutLine.length === oldCutLine.length &&
-      param.curveIndex < mirroredCutLine.length &&
-      oldCutLine[param.curveIndex]?.type === mirroredCutLine[param.curveIndex]?.type
-    ) {
-      const point = pointOnCurveAt(mirroredCutLine, param.curveIndex, param.t)
-      if (point) {
-        return finalizeNotch(notch, { point, curveIndex: param.curveIndex, t: param.t }, mirroredCutLine)
+    if (useIndexT) {
+      const param = getNotchCutLineParameter(notch, oldCutLine)
+      if (param && param.curveIndex < mirroredCutLine.length) {
+        const point = pointOnCurveAt(mirroredCutLine, param.curveIndex, param.t)
+        if (point) {
+          return finalizeNotch(notch, { point, curveIndex: param.curveIndex, t: param.t }, targetCut)
+        }
       }
     }
 
+    // Abweichende Cut-Topologie oder Index+t nicht möglich: gespiegelte Weltposition → finalCutLine.
     const mappedPos = mapPoint(getNotchPositionAndAngle(notch, oldCutLine).position)
-    return (
-      materializeNotchAnchorsOnCutLine(
-        {
-          ...notch,
-          position: mappedPos,
-          vertexIndex: undefined,
-          sNormalized: undefined,
-          arcLengthMm: undefined,
-        },
-        mirroredCutLine
-      ) ?? { ...notch, position: mappedPos, vertexIndex: undefined, sNormalized: undefined, arcLengthMm: undefined }
-    )
+    const draft: Notch = {
+      ...notch,
+      position: mappedPos,
+      vertexIndex: undefined,
+      sNormalized: undefined,
+      arcLengthMm: undefined,
+    }
+    const placed = materializeNotchAnchorsOnCutLine(draft, targetCut)
+    if (placed) return placed
+    const nearest = nearestCurveIndexAndPoint(mappedPos, targetCut)
+    if (nearest) {
+      return finalizeNotch(
+        notch,
+        { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 },
+        targetCut
+      )
+    }
+    return draft
   })
-
-  if (finalCutLine === mirroredCutLine) return onMirrored
-  if (
-    finalCutLine.length === mirroredCutLine.length &&
-    finalCutLine.every((c, i) => segmentsSameLogicalEdge(c, mirroredCutLine[i]).ok)
-  ) {
-    return onMirrored
-  }
-  return resyncNotchesAfterCutLineRebuilt(onMirrored, mirroredCutLine, finalCutLine)
 }
 
 /**

@@ -184,7 +184,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Teil-Symmetrie (Spiegelachse)',
     description:
-      'Macht ein Teil symmetrisch zu einer Spiegelachse (zeichnen, interne Linie oder gerade Kante). Eine Seite ist Vorlage; die andere folgt bei Konturänderungen mit. Die Achse bleibt als gestrichelte Linie sichtbar. Achse anfahren und Leertaste: „Spiegelung entfernen“ – die aktuelle Form bleibt, beide Seiten sind danach unabhängig editierbar.',
+      'Macht ein Teil symmetrisch zu einer Spiegelachse (zeichnen, interne Linie oder gerade Kante). Eine Seite ist Vorlage; die andere folgt bei Konturänderungen vollständig mit (inkl. Kerben, Bohrungen, interne Linien). Die Achse bleibt als gestrichelte Linie sichtbar. Achse anfahren und Leertaste: „Spiegelung entfernen“ – die aktuelle Form bleibt, beide Seiten sind danach unabhängig editierbar.',
     access: 'Werkzeug Symmetrie · danach Achse anfahren → Leertaste → Spiegelung entfernen',
     shortcut: 'Leertaste',
   },
