@@ -244,12 +244,52 @@ export function effectiveMirrorCenterLineXMm(centerLineXMm: number | undefined |
 }
 
 /**
- * Synchronisiert alle Spiegelkopien aus ihren Mutterteilen.
- * Behält Transform, id, number, name, grainLine, material und mirrorParentId der Kinder.
- * Material bleibt am Kind editierbar (Startwert von der Mutter, danach unabhängig).
+ * Platziert alle Spiegelkopien an der Mittellinie (gleicher Abstand, andere Seite).
+ * Kaschierungen an Spiegelkopien folgen dem Positions-Delta der Spiegelkopie.
  */
-export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
+export function applyMirrorPlacementAcrossCenterLine(
+  pieces: PatternPiece[],
+  centerLineXMm: number,
+): PatternPiece[] {
   const byId = new Map(pieces.map((p) => [p.id, p]))
+  const deltas = new Map<string, Point>()
+  let anyMirror = false
+  const withMirrors = pieces.map((p) => {
+    const parentId = p.mirrorParentId
+    if (!parentId) return p
+    const parent = byId.get(parentId)
+    if (!parent || isLinkedDerivedPiece(parent)) return p
+    const offset = mirrorOffsetAcrossCenterLine(parent, centerLineXMm)
+    const nx = parent.transform.x + offset.x
+    const ny = parent.transform.y + offset.y
+    if (Math.abs(nx - p.transform.x) < 1e-9 && Math.abs(ny - p.transform.y) < 1e-9) return p
+    deltas.set(p.id, { x: nx - p.transform.x, y: ny - p.transform.y })
+    anyMirror = true
+    return { ...p, transform: { ...p.transform, x: nx, y: ny } }
+  })
+  if (!anyMirror) return pieces
+  return withMirrors.map((p) => {
+    if (!p.facingParentId) return p
+    const d = deltas.get(p.facingParentId)
+    if (!d) return p
+    return {
+      ...p,
+      transform: { ...p.transform, x: p.transform.x + d.x, y: p.transform.y + d.y },
+    }
+  })
+}
+
+/**
+ * Synchronisiert alle Spiegelkopien aus ihren Mutterteilen.
+ * Geometrie folgt der Mutter; Position bleibt an der Workspace-Mittellinie gespiegelt.
+ * Drehung, Laufrichtung, Material und id/name bleiben lokal am Kind.
+ */
+export function syncMirrorPiecesFromParents(
+  pieces: PatternPiece[],
+  centerLineXMm: number = 0,
+): PatternPiece[] {
+  const byId = new Map(pieces.map((p) => [p.id, p]))
+  const mirrorDeltas = new Map<string, Point>()
   let changed = false
   const next = pieces.map((p) => {
     const parentId = p.mirrorParentId
@@ -257,6 +297,12 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
     const parent = byId.get(parentId)
     if (!parent || isLinkedDerivedPiece(parent)) return p
     const geom = buildMirrorGeometryFromParent(parent)
+    const offset = mirrorOffsetAcrossCenterLine(parent, centerLineXMm)
+    const nx = parent.transform.x + offset.x
+    const ny = parent.transform.y + offset.y
+    if (Math.abs(nx - p.transform.x) >= 1e-9 || Math.abs(ny - p.transform.y) >= 1e-9) {
+      mirrorDeltas.set(p.id, { x: nx - p.transform.x, y: ny - p.transform.y })
+    }
     const synced: PatternPiece = {
       ...p,
       ...geom,
@@ -267,7 +313,7 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
       grainLine: p.grainLine
         ? { start: { ...p.grainLine.start }, end: { ...p.grainLine.end } }
         : geom.grainLine,
-      transform: { ...p.transform },
+      transform: { ...p.transform, x: nx, y: ny },
       mirrorParentId: parentId,
       kind: 'mirror',
       symmetryConstraint: undefined,
@@ -276,14 +322,27 @@ export function syncMirrorPiecesFromParents(pieces: PatternPiece[]): PatternPiec
     changed = true
     return synced
   })
-  return changed ? next : pieces
+  if (!changed) return pieces
+  if (mirrorDeltas.size === 0) return next
+  return next.map((p) => {
+    if (!p.facingParentId) return p
+    const d = mirrorDeltas.get(p.facingParentId)
+    if (!d) return p
+    return {
+      ...p,
+      transform: { ...p.transform, x: p.transform.x + d.x, y: p.transform.y + d.y },
+    }
+  })
 }
 
 /** Kaschierungen + Spiegelkopien + Dickenkorrekturen nach Mutter-Änderung aktualisieren. */
-export function syncLinkedPiecesFromParents(pieces: PatternPiece[]): PatternPiece[] {
+export function syncLinkedPiecesFromParents(
+  pieces: PatternPiece[],
+  centerLineXMm: number = 0,
+): PatternPiece[] {
   // Spiegel zuerst, dann Dickenkorrektur, danach Kaschierungen.
   return syncFacingPiecesFromParents(
-    syncThicknessPiecesFromParents(syncMirrorPiecesFromParents(pieces)),
+    syncThicknessPiecesFromParents(syncMirrorPiecesFromParents(pieces, centerLineXMm)),
   )
 }
 

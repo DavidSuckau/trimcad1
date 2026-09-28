@@ -208,7 +208,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Werkzeuge',
     name: 'Spiegelkopie erzeugen',
     description:
-      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie. Platzierung an der Workspace-Mittellinie (gleicher Abstand, andere Seite; Linie unter Anzeigen → Mittellinie, per Ziehen verschiebbar). Kontur, Kerben und Internals folgen der Mutter; Position/Drehung und Laufrichtung bleiben lokal editierbar. Material wird beim Anlegen übernommen, ist am Tochterteil aber separat änderbar. Hat die Mutter bereits eine Kaschierung, wird für die Spiegelkopie automatisch ebenfalls eine Kaschierung angelegt. Optisch: Materialfarbe bleibt, darüber Graufüllung und Schraffur in Gegenrichtung zur Kaschierung.',
+      'Aus dem Laufrichtungs-Menü (Leertaste am Fadenlauf): erzeugt eine abhängige, vertikal gespiegelte Kopie. Platzierung an der Workspace-Mittellinie (gleicher Abstand, andere Seite; Linie unter Anzeigen → Mittellinie, per Ziehen verschiebbar). Kontur, Kerben und Internals folgen der Mutter; die Position bleibt an der Mittellinie gespiegelt (Mutter oder Spiegelkopie verschieben hält den Abstand). Drehung und Laufrichtung bleiben lokal editierbar. Material wird beim Anlegen übernommen, ist am Tochterteil aber separat änderbar. Hat die Mutter bereits eine Kaschierung, wird für die Spiegelkopie automatisch ebenfalls eine Kaschierung angelegt. Optisch: Materialfarbe bleibt, darüber Graufüllung und Schraffur in Gegenrichtung zur Kaschierung.',
     access: 'Laufrichtungspfeil anfahren → Leertaste → Spiegelkopie erzeugen',
     shortcut: 'Leertaste',
   },
@@ -474,6 +474,14 @@ export const HELP_ENTRIES: HelpEntry[] = [
     description:
       'Reduziert Hover-Hit-Tests, vereinfacht Kerben-Darstellung und blendet Live-Prüfanzeigen sowie Konturmaße aus — nützlich bei vielen Teilen oder schwächerer Hardware.',
     access: 'Unten → Anzeige → Erweitert → Performance-Modus',
+    shortcut: undefined,
+  },
+  {
+    category: 'Ansicht',
+    name: 'Perf-HUD',
+    description:
+      'Live-Messung auf der Arbeitsfläche (oben links): FPS, Frame-Zeit und zuletzt gemessene Hover-Hit-Dauer. Grün ≤16 ms Frame, Orange ≤33 ms, Rot darüber. Schaltet intern die performance.mark-Messungen ein (auch in Production). Zum Vergleich mit Chrome Performance-Panel nutzbar.',
+    access: 'Unten → Anzeige → Erweitert → Perf-HUD',
     shortcut: undefined,
   },
 

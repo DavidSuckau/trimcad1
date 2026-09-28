@@ -159,14 +159,16 @@ export function buildNestingPartGeometry(
   poly = alignPolygonGrainToPositiveY(poly, worldGrain)
   const halfSpacing = spacingMm / 2
   if (halfSpacing > 0) poly = offsetPolygonOutward(poly, halfSpacing)
-  poly = normalizePolygonToMinOrigin(poly)
-
+  // Laufrichtung mit derselben Ausrichtung; Translation wie normalizePolygonToMinOrigin
+  // (nach Offset, vor Min-Ursprung — sonst bleiben Weltkoordinaten und Pfeile liegen weit außen).
   const grainAligned = grainLineInNestCoords(piece, worldGrain)
-  const b0 = polygonBounds(poly)
+  const bBeforeNorm = polygonBounds(poly)
+  poly = normalizePolygonToMinOrigin(poly)
   const grain0 = {
-    start: { x: grainAligned.start.x - b0.minX, y: grainAligned.start.y - b0.minY },
-    end: { x: grainAligned.end.x - b0.minX, y: grainAligned.end.y - b0.minY },
+    start: { x: grainAligned.start.x - bBeforeNorm.minX, y: grainAligned.start.y - bBeforeNorm.minY },
+    end: { x: grainAligned.end.x - bBeforeNorm.minX, y: grainAligned.end.y - bBeforeNorm.minY },
   }
+  const b0 = polygonBounds(poly)
 
   const w = b0.maxX - b0.minX
   const h = b0.maxY - b0.minY

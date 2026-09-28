@@ -21,7 +21,6 @@ import {
   curveSegmentArcLength,
   curvesBounds,
   outwardNormalAngleAt,
-  signedAreaCurves,
   pointAtPathLength,
   pathLengthAt,
   totalPathLength,
@@ -89,8 +88,10 @@ import {
   internalPathHasProfileBoundaryNotches,
   getInternalProfileCurvesInRange,
   getProfileAssignmentDisplayCurves,
+  getProfileAssignmentLabelPositions,
   hitProfileAssignment,
   profileAssignmentLengthMm,
+  buildProfileOffsetPathD,
   PROFILE_DISPLAY_OFFSET_MM,
 } from '../geometry/internalLineProfile'
 import {
@@ -138,6 +139,7 @@ import { sortPiecesFacingBehind } from '../geometry/facingPiece'
 import { effectiveMirrorCenterLineXMm, isLinkedDerivedPiece } from '../geometry/mirrorPiece'
 import { isThicknessDerivedPiece } from '../geometry/thicknessCorrection'
 import { WorkspaceLiveCostPanel } from './WorkspaceLiveCostPanel'
+import { WorkspacePerfHud } from './WorkspacePerfHud'
 import { perfMark, perfMeasure } from '../perf/perfMarks'
 import {
   shouldShowSeamPruefLive,
@@ -149,6 +151,7 @@ import {
   shouldSimplifyNotchRender,
   shouldRenderDetailNotchOverlay,
   nearestCurveQualityFor,
+  pieceGeomEpoch,
   DENSE_ANNOTATION_PIECE_THRESHOLD,
   type InteractionQuality,
 } from '../perf/interactionQuality'
@@ -3400,6 +3403,8 @@ export function WorkspaceCanvas() {
 
   /** Naht-Prüfanzeige: teure Metriken cachen (Transform-only Moves invalidieren nicht). */
   const seamPruefCacheRef = useRef<Parameters<typeof buildSeamPruefOverlayEntries>[2]>(new Map())
+  /** Profil-Offset-Pfade (Teilkoordinaten): Cache nach Geometrie-Epoch + Assignment. */
+  const profilePathCacheRef = useRef(new Map<string, string>())
   const seamPruefEntries = useMemo(() => {
     if (!liveSeamPruef || seamAssignments.length === 0) {
       seamPruefCacheRef.current.clear()
@@ -8929,7 +8934,7 @@ export function WorkspaceCanvas() {
             const worldTop = -view.panY / view.zoom
             const worldBottom = (VIEWBOX_HEIGHT - view.panY) / view.zoom
             const pad = 2000
-            const strokeW = 1.1 / Math.max(view.zoom, 1e-6)
+            // non-scaling-stroke = Bildschirm-Pixel; Strichstärke bewusst fest (nicht an Zoom koppeln)
             return (
               <g pointerEvents="stroke" data-mirror-center-line="1">
                 <line
@@ -8938,9 +8943,9 @@ export function WorkspaceCanvas() {
                   x2={cx}
                   y2={worldBottom + pad}
                   stroke={canvasThemeMode === 'dark' ? '#38bdf8' : '#0284c7'}
-                  strokeWidth={strokeW}
+                  strokeWidth={1}
                   strokeOpacity={0.85}
-                  strokeDasharray={`${8 / Math.max(view.zoom, 1e-6)} ${5 / Math.max(view.zoom, 1e-6)}`}
+                  strokeDasharray="6 4"
                   vectorEffect="non-scaling-stroke"
                 />
                 <line
@@ -8949,7 +8954,7 @@ export function WorkspaceCanvas() {
                   x2={cx}
                   y2={worldBottom + pad}
                   stroke="transparent"
-                  strokeWidth={12 / Math.max(view.zoom, 1e-6)}
+                  strokeWidth={10}
                   vectorEffect="non-scaling-stroke"
                 />
               </g>
@@ -10600,48 +10605,31 @@ export function WorkspaceCanvas() {
             const isFocus =
               selectedPieceIds.includes(piece.id) || hoveredPieceId === piece.id
             if (!pieceLikelyVisible(piece, view) && !selectedPieceIds.includes(piece.id)) return null
-            // Viele Teile: Profil-SVG nur am Fokus (Selected/Hovered) — großer Render-Gewinn.
-            if (pieces.length > DENSE_ANNOTATION_PIECE_THRESHOLD && !isFocus) return null
+            // Viele Teile oder viele Profile: nur Fokus-Teil — sonst spürbar langsam.
+            const profileDense =
+              pieces.length > DENSE_ANNOTATION_PIECE_THRESHOLD ||
+              profileAssignments.length > DENSE_ANNOTATION_PIECE_THRESHOLD
+            if (profileDense && !isFocus) return null
             const masterK = getCurvesForSeamEdge(piece)
             const curves = getProfileAssignmentDisplayCurves(piece, pa)
             if (curves.length === 0) return null
 
-            const PROFILE_LINE_OFFSET = PROFILE_DISPLAY_OFFSET_MM
-            const outSign = pa.onInternalLine
-              ? 1
-              : signedAreaCurves(masterK) >= 0
-                ? -1
-                : 1
-
-            let d = ''
-            for (const seg of curves) {
-              if (seg.type === 'line') {
-                const tdx = seg.end.x - seg.start.x
-                const tdy = seg.end.y - seg.start.y
-                const tlen = Math.hypot(tdx, tdy) || 1
-                const ox = outSign * (-tdy / tlen) * PROFILE_LINE_OFFSET
-                const oy = outSign * (tdx / tlen) * PROFILE_LINE_OFFSET
-                const ws = pieceLocalToWorld({ x: seg.start.x + ox, y: seg.start.y + oy }, piece)
-                const we = pieceLocalToWorld({ x: seg.end.x + ox, y: seg.end.y + oy }, piece)
-                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
-              } else {
-                const d0 = bezierDerivativeAt(seg, 0)
-                const d1 = bezierDerivativeAt(seg, 1)
-                const len0 = Math.hypot(d0.x, d0.y) || 1
-                const len1 = Math.hypot(d1.x, d1.y) || 1
-                const o0x = outSign * (-d0.y / len0) * PROFILE_LINE_OFFSET
-                const o0y = outSign * (d0.x / len0) * PROFILE_LINE_OFFSET
-                const o1x = outSign * (-d1.y / len1) * PROFILE_LINE_OFFSET
-                const o1y = outSign * (d1.x / len1) * PROFILE_LINE_OFFSET
-                const ws = pieceLocalToWorld({ x: seg.start.x + o0x, y: seg.start.y + o0y }, piece)
-                const wc1 = pieceLocalToWorld({ x: seg.cp1.x + o0x, y: seg.cp1.y + o0y }, piece)
-                const wc2 = pieceLocalToWorld({ x: seg.cp2.x + o1x, y: seg.cp2.y + o1y }, piece)
-                const we = pieceLocalToWorld({ x: seg.end.x + o1x, y: seg.end.y + o1y }, piece)
-                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
-              }
+            const cacheKey = `${pa.id}|${pieceGeomEpoch(piece)}|${pa.edgeIndex ?? ''}|${pa.onInternalLine ? 1 : 0}|${pa.startNotchId ?? ''}|${pa.endNotchId ?? ''}`
+            let d = profilePathCacheRef.current.get(cacheKey)
+            if (d == null) {
+              d = buildProfileOffsetPathD(
+                curves,
+                PROFILE_DISPLAY_OFFSET_MM,
+                pa.onInternalLine ? 'internal-left' : 'contour-outward',
+                masterK,
+              )
+              // Cache klein halten
+              if (profilePathCacheRef.current.size > 400) profilePathCacheRef.current.clear()
+              profilePathCacheRef.current.set(cacheKey, d)
             }
             if (!d) return null
 
+            const pieceTx = `translate(${piece.transform.x},${piece.transform.y}) rotate(${piece.transform.rotation}) scale(${piece.transform.mirrored ? -1 : 1},1)`
             const profileStroke = strokeColorForProfileKey(pa.profileKey, canvasThemeMode === 'dark')
             const showLabels = shouldShowProfileLabels({
               showProfiles: true,
@@ -10654,7 +10642,7 @@ export function WorkspaceCanvas() {
 
             if (!showLabels) {
               return (
-                <g key={`profile-${pa.id}`} pointerEvents="none">
+                <g key={`profile-${pa.id}`} pointerEvents="none" transform={pieceTx}>
                   <path
                     d={d}
                     fill="none"
@@ -10667,30 +10655,27 @@ export function WorkspaceCanvas() {
               )
             }
 
+            const labelPos = getProfileAssignmentLabelPositions(piece, pa)
+            if (!labelPos) {
+              return (
+                <g key={`profile-${pa.id}`} pointerEvents="none" transform={pieceTx}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={profileStroke}
+                    strokeWidth={1.2}
+                    strokeOpacity={0.7}
+                    strokeDasharray="4 3"
+                  />
+                </g>
+              )
+            }
             const firstSeg = curves[0]
             const lastSeg = curves[curves.length - 1]
-            const startL = firstSeg.start
-            const endL = lastSeg.end
-            const edgeDx = endL.x - startL.x
-            const edgeDy = endL.y - startL.y
-            const edgeLen = Math.hypot(edgeDx, edgeDy) || 1
-            const midLocal = { x: (startL.x + endL.x) / 2, y: (startL.y + endL.y) / 2 }
-            const nxLocal = outSign * (-edgeDy / edgeLen)
-            const nyLocal = outSign * (edgeDx / edgeLen)
-            const keyOffsetMm = PROFILE_LINE_OFFSET + 10
-            const detailOffsetMm = PROFILE_LINE_OFFSET + 16
-            const keyLocal = {
-              x: midLocal.x + nxLocal * keyOffsetMm,
-              y: midLocal.y + nyLocal * keyOffsetMm,
-            }
-            const detailLocal = {
-              x: midLocal.x + nxLocal * detailOffsetMm,
-              y: midLocal.y + nyLocal * detailOffsetMm,
-            }
-            const keyW = pieceLocalToWorld(keyLocal, piece)
-            const detailW = pieceLocalToWorld(detailLocal, piece)
-            const startW = pieceLocalToWorld(startL, piece)
-            const endW = pieceLocalToWorld(endL, piece)
+            const startW = pieceLocalToWorld(firstSeg.start, piece)
+            const endW = pieceLocalToWorld(lastSeg.end, piece)
+            const keyW = pieceLocalToWorld(labelPos.key, piece)
+            const detailW = pieceLocalToWorld(labelPos.detail, piece)
             const angleDeg = (Math.atan2(endW.y - startW.y, endW.x - startW.x) * 180) / Math.PI
 
             const lengthMm = pa.targetLengthMm ?? profileAssignmentLengthMm(piece, pa)
@@ -10702,14 +10687,16 @@ export function WorkspaceCanvas() {
 
             return (
               <g key={`profile-${pa.id}`} pointerEvents="none">
-                <path
-                  d={d}
-                  fill="none"
-                  stroke={profileStroke}
-                  strokeWidth={1.2}
-                  strokeOpacity={0.7}
-                  strokeDasharray="4 3"
-                />
+                <g transform={pieceTx}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={profileStroke}
+                    strokeWidth={1.2}
+                    strokeOpacity={0.7}
+                    strokeDasharray="4 3"
+                  />
+                </g>
                 <text
                   x={keyW.x}
                   y={keyW.y}
@@ -12437,6 +12424,7 @@ export function WorkspaceCanvas() {
         }}
       />}
       <WorkspaceLiveCostPanel />
+      <WorkspacePerfHud />
     </div>
   )
 }

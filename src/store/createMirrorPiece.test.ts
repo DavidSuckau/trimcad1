@@ -86,25 +86,33 @@ describe('createMirrorPiece', () => {
     expect(child.seamLine[0].start.y).toBeCloseTo(parent.seamLine[0].start.y, 5)
   })
 
-  it('sync hält Kind-Transform und übernimmt gespiegelte Mutter-Kontur', () => {
+  it('sync hält Kind an Mittellinie gespiegelt und übernimmt gespiegelte Mutter-Kontur', () => {
     const childId = useStore.getState().createMirrorPiece('parent')!
-    const childBefore = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
-    const savedTransform = { ...childBefore.transform }
+    const parentBefore = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
+    useStore.getState().movePiece('parent', 40, 10)
+    const parent = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
+    const child = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
+    expect(parent.transform.x).toBe(parentBefore.transform.x + 40)
+    expect(parent.transform.y).toBe(parentBefore.transform.y + 10)
+    expect(child.transform.y).toBe(parent.transform.y)
+    const pb = boundsForPieceCutLineWorld(parent)!
+    const cb = boundsForPieceCutLineWorld(child)!
+    const parentCx = (pb.minX + pb.maxX) / 2
+    const childCx = (cb.minX + cb.maxX) / 2
+    expect(childCx).toBeCloseTo(-parentCx, 1)
 
     useStore.getState().updateVertex('parent', 0, { x: -20, y: -10 })
 
     const childAfter = useStore.getState().workspace.pieces.find((p) => p.id === childId)!
-    expect(childAfter.transform).toEqual(savedTransform)
     expect(childAfter.mirrorParentId).toBe('parent')
-    // Nach Edit: Mutter-Naht-Start verschoben, Kind bleibt Spiegel davon
-    const parent = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
+    const parentAfter = useStore.getState().workspace.pieces.find((p) => p.id === 'parent')!
     const cx =
-      (Math.min(...parent.cutLine.flatMap((c) => [c.start.x, c.end.x])) +
-        Math.max(...parent.cutLine.flatMap((c) => [c.start.x, c.end.x]))) /
+      (Math.min(...parentAfter.cutLine.flatMap((c) => [c.start.x, c.end.x])) +
+        Math.max(...parentAfter.cutLine.flatMap((c) => [c.start.x, c.end.x]))) /
       2
-    const expectedX = 2 * cx - parent.seamLine[0].start.x
+    const expectedX = 2 * cx - parentAfter.seamLine[0].start.x
     expect(childAfter.seamLine[0].start.x).toBeCloseTo(expectedX, 1)
-    expect(childAfter.seamLine[0].start.y).toBeCloseTo(parent.seamLine[0].start.y, 1)
+    expect(childAfter.seamLine[0].start.y).toBeCloseTo(parentAfter.seamLine[0].start.y, 1)
   })
 
   it('löscht abhängige Spiegelkopien mit der Mutter', () => {

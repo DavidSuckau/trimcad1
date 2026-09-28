@@ -34,9 +34,12 @@ function rectPiece(): PatternPiece {
 }
 
 describe('nestingGeometry', () => {
-  it('aligns grain to +Y (90°)', () => {
+  it('aligns grain to +Y (90°) and keeps grain inside nest bounds', () => {
     const piece = rectPiece()
     piece.transform.rotation = 0
+    // Weltweit weit entfernt — früher landeten Grain-Pfeile deshalb außerhalb des Plans
+    piece.transform.x = 2500
+    piece.transform.y = -1800
     const world = buildWorldContourPolygon(piece)
     const angle = getWorldGrainAngleDeg(piece)
     normalizePolygonToCentroidOrigin(alignPolygonGrainToPositiveY(world, angle))
@@ -45,6 +48,15 @@ describe('nestingGeometry', () => {
     const g = grain!.grain0
     const gAngle = (Math.atan2(g.end.y - g.start.y, g.end.x - g.start.x) * 180) / Math.PI
     expect(Math.abs(gAngle - 90)).toBeLessThan(1)
+    const b = polygonBounds(grain!.polygon0)
+    expect(g.start.x).toBeGreaterThanOrEqual(b.minX - 1)
+    expect(g.start.x).toBeLessThanOrEqual(b.maxX + 1)
+    expect(g.start.y).toBeGreaterThanOrEqual(b.minY - 1)
+    expect(g.start.y).toBeLessThanOrEqual(b.maxY + 1)
+    expect(g.end.x).toBeGreaterThanOrEqual(b.minX - 1)
+    expect(g.end.x).toBeLessThanOrEqual(b.maxX + 1)
+    expect(g.end.y).toBeGreaterThanOrEqual(b.minY - 1)
+    expect(g.end.y).toBeLessThanOrEqual(b.maxY + 1)
   })
 
   it('180° rotation flips bounds height at same width', () => {

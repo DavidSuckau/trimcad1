@@ -232,6 +232,7 @@ export type PatternPiece = {
   /**
    * Wenn gesetzt: dieses Teil ist eine **Spiegelkopie** (Tochter) des Mutterteils mit dieser ID.
    * Geometrie = vertikal gespiegelte Kopie der Mutter; folgt allen Konturänderungen.
+   * Position bleibt an der Workspace-Mittellinie gespiegelt (gleicher Abstand, andere Seite).
    */
   mirrorParentId?: string
   /**

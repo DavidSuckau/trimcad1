@@ -127,6 +127,7 @@ import {
   movePieceJustBefore,
 } from '../geometry/facingPiece'
 import {
+  applyMirrorPlacementAcrossCenterLine,
   buildMirrorGeometryFromParent,
   effectiveMirrorCenterLineXMm,
   isLinkedDerivedPiece,
@@ -134,7 +135,7 @@ import {
   linkedChildIds,
   mirrorChildIds,
   mirrorOffsetAcrossCenterLine,
-  syncLinkedPiecesFromParents,
+  syncLinkedPiecesFromParents as syncLinkedPiecesFromParentsRaw,
 } from '../geometry/mirrorPiece'
 import {
   buildThicknessGeometryFromParent,
@@ -508,6 +509,8 @@ type Store = {
   showContourChangePreview: boolean
   /** Live-Anzeige Stückliste (Fläche, Materialkosten) unten rechts auf der Arbeitsfläche. */
   showLiveBomCost: boolean
+  /** Live-Performance-HUD (FPS, Frame-ms, Hover-Hit) oben links auf der Arbeitsfläche. */
+  showPerfHud: boolean
   /**
    * Nahtzuordnungen auf der Arbeitsfläche: Verbinder, Längen-Δ, Kerben-Warnung, grüne ✓ bei Übereinstimmung.
    */
@@ -663,6 +666,7 @@ type Store = {
   setShowWorkspaceNotes: (v: boolean) => void
   setShowContourChangePreview: (v: boolean) => void
   setShowLiveBomCost: (v: boolean) => void
+  setShowPerfHud: (v: boolean) => void
   setShowSeamPruefanzeigen: (v: boolean) => void
   setPerformanceMode: (v: boolean) => void
   setSidebarCollapsed: (v: boolean) => void
@@ -1116,7 +1120,13 @@ function applyProfileFitTargetInStore(get: StoreGet, pieceId: string, target: Pr
 
 export const useStore = create<Store>()(
   temporal(
-    (set, get) => ({
+    (set, get) => {
+  const syncLinkedPiecesFromParents = (pieces: Parameters<typeof syncLinkedPiecesFromParentsRaw>[0]) =>
+    syncLinkedPiecesFromParentsRaw(
+      pieces,
+      effectiveMirrorCenterLineXMm(get().workspace.mirrorCenterLineXMm),
+    )
+  return {
   workspace: {
     id: 'ws1',
     name: 'Arbeitsfläche 1',
@@ -1140,12 +1150,13 @@ export const useStore = create<Store>()(
   showDrills: true,
   showInternalLines: true,
   showPieceNames: true,
-  showProfiles: true,
+  showProfiles: false,
   showMirrorCenterLine: true,
   showContourMeasurements: false,
   showWorkspaceNotes: true,
   showContourChangePreview: false,
   showLiveBomCost: false,
+  showPerfHud: false,
   showSeamPruefanzeigen: true,
   performanceMode: false,
   easePreview: null,
@@ -1758,16 +1769,21 @@ export const useStore = create<Store>()(
   setShowProfiles: (v) => set({ showProfiles: v }),
   setShowMirrorCenterLine: (v) => set({ showMirrorCenterLine: v }),
   setMirrorCenterLineXMm: (xMm) =>
-    set((s) => ({
-      workspace: {
-        ...s.workspace,
-        mirrorCenterLineXMm: Number.isFinite(xMm) ? xMm : 0,
-      },
-    })),
+    set((s) => {
+      const centerX = Number.isFinite(xMm) ? xMm : 0
+      return {
+        workspace: {
+          ...s.workspace,
+          mirrorCenterLineXMm: centerX,
+          pieces: applyMirrorPlacementAcrossCenterLine(s.workspace.pieces, centerX),
+        },
+      }
+    }),
   setShowContourMeasurements: (v) => set({ showContourMeasurements: v }),
   setShowWorkspaceNotes: (v) => set({ showWorkspaceNotes: v }),
   setShowContourChangePreview: (v) => set({ showContourChangePreview: v }),
   setShowLiveBomCost: (v) => set({ showLiveBomCost: v }),
+  setShowPerfHud: (v) => set({ showPerfHud: v }),
   setShowSeamPruefanzeigen: (v) => set({ showSeamPruefanzeigen: v }),
   setPerformanceMode: (v) => set({ performanceMode: v }),
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
@@ -3179,16 +3195,30 @@ export const useStore = create<Store>()(
     }),
 
   movePiece: (pieceId, dx, dy) =>
-    set((s) => ({
-      workspace: {
-        ...s.workspace,
-        pieces: s.workspace.pieces.map((p) =>
-          p.id === pieceId
-            ? { ...p, transform: { ...p.transform, x: p.transform.x + dx, y: p.transform.y + dy } }
-            : p
-        ),
-      },
-    })),
+    set((s) => {
+      if (dx === 0 && dy === 0) return s
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      if (!piece) return s
+      const centerX = effectiveMirrorCenterLineXMm(s.workspace.mirrorCenterLineXMm)
+      let pieces = s.workspace.pieces.map((p) => {
+        if (p.id === pieceId) {
+          return {
+            ...p,
+            transform: { ...p.transform, x: p.transform.x + dx, y: p.transform.y + dy },
+          }
+        }
+        // Spiegelkopie ziehen → Mutter spiegelsymmetrisch mitbewegen
+        if (piece.mirrorParentId && p.id === piece.mirrorParentId) {
+          return {
+            ...p,
+            transform: { ...p.transform, x: p.transform.x - dx, y: p.transform.y + dy },
+          }
+        }
+        return p
+      })
+      pieces = applyMirrorPlacementAcrossCenterLine(pieces, centerX)
+      return { workspace: { ...s.workspace, pieces } }
+    }),
 
   applyOffset: (pieceId, deltaMm) =>
     set((s) => {
@@ -4767,18 +4797,23 @@ export const useStore = create<Store>()(
         const src = getPieceGrainLine(piece)
         grainLine = grainLineKeepingWorldFixed(src, t, newTransform)
       }
+      let pieces = s.workspace.pieces.map((p) =>
+        p.id === pieceId
+          ? {
+              ...p,
+              transform: newTransform,
+              ...(keepGrain ? { grainLine } : {}),
+            }
+          : p
+      )
+      pieces = applyMirrorPlacementAcrossCenterLine(
+        pieces,
+        effectiveMirrorCenterLineXMm(s.workspace.mirrorCenterLineXMm),
+      )
       return {
         workspace: {
           ...s.workspace,
-          pieces: s.workspace.pieces.map((p) =>
-            p.id === pieceId
-              ? {
-                  ...p,
-                  transform: newTransform,
-                  ...(keepGrain ? { grainLine } : {}),
-                }
-              : p
-          ),
+          pieces,
         },
       }
     }),
@@ -5271,7 +5306,7 @@ export const useStore = create<Store>()(
     })
   },
 
-}),
+}},
     {
       limit: 20,
       partialize: (state) => ({
