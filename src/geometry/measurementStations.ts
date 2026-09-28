@@ -8,7 +8,7 @@ import {
   isNotchOnInternalLine,
   resolveNotchInternalLineAnchor,
 } from './notchOnInternalLine'
-import { masterSoftVertexIndexSet } from './seamUtils'
+import { getEffectiveSoftVerticesCut, masterSoftVertexIndexSet } from './seamUtils'
 
 const STATION_MERGE_MM = 0.4
 
@@ -16,8 +16,14 @@ const STATION_MERGE_MM = 0.4
 export function softVertexIndicesOnContour(piece: PatternPiece, contour: Curve[]): Set<number> {
   const n = contour.length
   if (n === 0) return new Set()
+  // Naht als Master: nur softVerticesMaster (wie Vertex-Anzeige).
   if (contour === piece.seamLine && piece.seamAllowanceMm != null && piece.seamLine.length >= 3) {
     return masterSoftVertexIndexSet(piece)
+  }
+  // Schnittkontur: Cut-Soft + von Master gemappte weiche Ecken — sonst zählen weiche
+  // eingefügte Punkte fälschlich als Maß-Stationen.
+  if (contour === piece.cutLine) {
+    return new Set(getEffectiveSoftVerticesCut(piece).filter((vi) => vi >= 0 && vi < n))
   }
   const out = new Set<number>()
   for (const vi of piece.softVertices ?? []) {
@@ -62,6 +68,8 @@ function collectNotchArcLengthsOnCurves(
   const out: number[] = []
   for (const notch of notches) {
     if (excludeNotchId && notch.id === excludeNotchId) continue
+    // Interne Kerben gehören nicht zur Außenkontur-Maßkette.
+    if (isNotchOnInternalLine(notch)) continue
     if (contour === piece.cutLine) {
       const ct = getNotchCurveIndexAndT(notch, contour)
       if (!ct) continue

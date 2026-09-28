@@ -27,25 +27,21 @@ function tangentDegAtCurve(curves: PatternPiece['cutLine'], curveIndex: number, 
 }
 
 /**
- * Bei Nahtzugabe ist die Schnittkontur (cutLine) oft eine Clipper-Polylinie mit sehr vielen
- * kurzen Segmenten — Konturmaße sollen dann der **bearbeitbaren Nahtlinie** folgen (wie Eckpunkte).
+ * Bei Nahtzugabe: Konturmaße folgen der **bearbeitbaren Nahtlinie** (wie Eckpunkte) —
+ * nicht der oft tessellierten cutLine. Gleiche Regel wie `useSeamLineForVertexEditing`
+ * (kein `seamLine.length < cutLine.length`, sonst bleiben weiche Master-Punkte unberücksichtigt
+ * und es entstehen Mikro-Maße an jedem Schnitt-Segment).
  */
 function useSeamLineForContourMeasurements(piece: PatternPiece): boolean {
-  return (
-    piece.seamAllowanceMm != null &&
-    piece.seamLine.length >= 3 &&
-    piece.cutLine.length >= 3 &&
-    piece.seamLine.length < piece.cutLine.length
-  )
+  return piece.seamAllowanceMm != null && piece.seamLine.length >= 3
 }
 
 /**
  * Alle Teilstrecken entlang der gewählten Außen-/Arbeitskontur zwischen aufeinanderfolgenden
  * „Stationen“: feste Eckpunkte (rot) und Kerben — keine weichen (blauen) Ecken.
- * Maße = Bogenlängen in mm (Geraden exakt, Bézier numerisch).
+ * Maße = Bogenlängen in mm (Geraden exakt, Bézier numerisch): Ecke↔Ecke, Ecke↔Kerbe, Kerbe↔Kerbe.
  *
- * Mit Nahtzugabe und tessellierter cutLine werden die Maße entlang der **seamLine** gebildet,
- * damit nicht jedes Clipper-Segment ein eigenes Label bekommt.
+ * Mit Nahtzugabe werden die Maße entlang der **seamLine** gebildet.
  */
 export function getCutLineContourMeasurements(piece: PatternPiece): ContourMeasurement[] {
   const measureOnSeam = useSeamLineForContourMeasurements(piece)

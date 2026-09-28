@@ -456,7 +456,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Ansicht',
     name: 'Konturmaße',
     description:
-      'Zeigt auf allen Teilen die Bogenlängen entlang der Schnittkontur (Außenkante): zwischen aufeinanderfolgenden Eckpunkten, zwischen Kerben und zwischen Ecke und Kerbe. Ein Klick auf die Checkbox schaltet die Anzeige für die ganze Arbeitsfläche ein oder aus.',
+      'Zeigt auf allen Teilen die Bogenlängen entlang der Kontur: nur zwischen aufeinanderfolgenden Eckpunkten (rot), zwischen Kerbe und Ecke sowie zwischen zwei Kerben. Weiche Punkte (blau) und Clipper-Mikrosegmente erzeugen keine eigenen Maße. Ein Klick auf die Checkbox schaltet die Anzeige für die ganze Arbeitsfläche ein oder aus.',
     access: 'Unten → Anzeige → Konturmaße',
     shortcut: undefined,
   },

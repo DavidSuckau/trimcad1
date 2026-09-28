@@ -88,11 +88,10 @@ Fadenlauf / Bounding
 - grainArrowLayout, pieceTransform (Bounds): cutLine.
 
 Konturmaße (Anzeige)
-- getCutLineContourMeasurements (contourMeasurements.ts): eigener
-  Schalter useSeamLineForContourMeasurements — dort wird zusätzlich
-  seamLine.length < cutLine.length gefordert (tessellierte Außenkontur).
-  Sonst bleiben die Stationen auf cutLine. Das ist NICHT identisch mit
-  vertexMaster (absichtlich für sinnvolle Maßlabels).
+- getCutLineContourMeasurements (contourMeasurements.ts): bei Nahtzugabe
+  immer entlang der seamLine (wie Vertex-Editing), damit weiche Master-
+  Punkte und Clipper-Tessellation keine Mikro-Maße erzeugen. Stationen:
+  nur harte Ecken + Kerben.
 
 
 4) Warum es „nicht überall Seam-as-Master“ wirkt
@@ -104,8 +103,8 @@ Konturmaße (Anzeige)
 - Kerb-Operationen, die Segmente auf cut mergen/splitten, sind
   historisch/geometrisch am Cut orientiert — auch wenn die normale
   Konturbearbeitung seam nutzt.
-- Konturmaße können auf seam umschalten, wenn cut viel feiner tesselliert
-  ist — unabhängig von der reinen Vertex-Logik.
+- Konturmaße bei Nahtzugabe: immer seamLine (wie Vertex-Master), Stationen
+  nur harte Ecken + Kerben.
 
 
 5) Referenzdateien (nicht vollständig)
