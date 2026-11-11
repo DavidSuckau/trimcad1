@@ -1,5 +1,6 @@
 import type { Curve, Notch, Point } from '../types/model'
 import { bezierAt, curveSegmentArcLength, outwardNormalAngleAt } from './curveToPath'
+import { NOTCH_POSITION_LOCK_MM } from './geometryConstants'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 
 export function isNotchOnInternalLine(notch: Notch): boolean {
@@ -71,10 +72,15 @@ export function resolveNotchInternalLineAnchor(
       ? notch.internalLineIndex
       : null
 
+  const posOk = Number.isFinite(notch.position.x) && Number.isFinite(notch.position.y)
   if (idx != null) {
     const seg = internalLines[idx]
     const segLen = seg ? curveSegmentArcLength(seg, 0, 1) : 0
-    if (segLen > 0) {
+    if (posOk && seg) {
+      const r = nearestCurveIndexAndPoint(notch.position, [seg])
+      if (r) return { curveIndex: idx, t: r.t ?? 0 }
+    }
+    if (segLen > 0 && seg) {
       const sn = notch.internalSNormalized
       if (sn != null && Number.isFinite(sn)) {
         const L = Math.max(0, Math.min(1, sn)) * segLen
@@ -86,8 +92,6 @@ export function resolveNotchInternalLineAnchor(
         return { curveIndex: idx, t: tOnInternalLineSegment(seg, L) }
       }
     }
-    const r = nearestCurveIndexAndPoint(notch.position, [seg])
-    if (r) return { curveIndex: idx, t: r.t ?? 0 }
   }
 
   const r = nearestCurveIndexAndPoint(notch.position, internalLines)
@@ -106,10 +110,17 @@ export function getNotchPositionAndAngleOnInternalLine(
   const fallbackAngle = Number.isFinite(notch.angle) ? notch.angle : 0
   const anchor = resolveNotchInternalLineAnchor(notch, internalLines)
   if (!anchor) return { position: fallbackPos, angle: fallbackAngle }
-  const position = pointOnCurveAt(internalLines, anchor.curveIndex, anchor.t)
-  if (!position) return { position: fallbackPos, angle: fallbackAngle }
+  const onLine = pointOnCurveAt(internalLines, anchor.curveIndex, anchor.t)
+  if (!onLine) return { position: fallbackPos, angle: fallbackAngle }
+  if (
+    Number.isFinite(notch.position.x) &&
+    Number.isFinite(notch.position.y) &&
+    Math.hypot(onLine.x - notch.position.x, onLine.y - notch.position.y) > NOTCH_POSITION_LOCK_MM
+  ) {
+    return { position: { ...notch.position }, angle: fallbackAngle }
+  }
   const angle = inwardNormalOnInternalLine(internalLines, anchor.curveIndex, anchor.t)
-  return { position, angle: Number.isFinite(angle) ? angle : fallbackAngle }
+  return { position: onLine, angle: Number.isFinite(angle) ? angle : fallbackAngle }
 }
 
 export function materializeNotchAnchorsOnInternalLine(

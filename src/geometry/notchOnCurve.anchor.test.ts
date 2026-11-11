@@ -18,28 +18,26 @@ function square(size: number): Curve[] {
 }
 
 describe('resolveNotchCutLineAnchor / materialize', () => {
-  it('sNormalized schlägt position (vertexIndex wird ignoriert)', () => {
+  it('gesetzte Position schlägt sNormalized und vertexIndex', () => {
     const cutLine = square(100)
-    const total = totalPathLength(cutLine)
     const notch: Notch = {
       id: 'n1',
       sNormalized: 0.25,
       arcLengthMm: 350,
-      position: { x: 999, y: 999 },
+      position: { x: 50, y: 0 },
       angle: 0,
       type: 'v',
       depth: 4,
+      vertexIndex: 2,
     }
     const a = resolveNotchCutLineAnchor(notch, cutLine)
     expect(a).not.toBeNull()
-    const L = pathLengthAt(cutLine, a!.curveIndex, a!.t)
-    expect(L / total).toBeCloseTo(0.25, 5)
     const g = getNotchPositionAndAngle(notch, cutLine)
-    expect(g.position.x).toBeCloseTo(100, 3)
+    expect(g.position.x).toBeCloseTo(50, 3)
     expect(g.position.y).toBeCloseTo(0, 3)
   })
 
-  it('sNormalized schlägt arcLengthMm wenn beide gesetzt', () => {
+  it('ohne brauchbare Position gilt sNormalized vor arcLengthMm', () => {
     const cutLine = square(100)
     const total = totalPathLength(cutLine)
     const wantS = 0.25
@@ -48,7 +46,7 @@ describe('resolveNotchCutLineAnchor / materialize', () => {
       id: 'n1',
       sNormalized: wantS,
       arcLengthMm: wrongMm,
-      position: { x: 0, y: 0 },
+      position: { x: Number.NaN, y: Number.NaN },
       angle: 0,
       type: 'v',
       depth: 4,
@@ -58,13 +56,13 @@ describe('resolveNotchCutLineAnchor / materialize', () => {
     expect(L / total).toBeCloseTo(wantS, 5)
   })
 
-  it('arcLengthMm wenn kein sNormalized', () => {
+  it('arcLengthMm wenn keine Position und kein sNormalized', () => {
     const cutLine = square(100)
     const Lwant = 150
     const notch: Notch = {
       id: 'n1',
       arcLengthMm: Lwant,
-      position: { x: 0, y: 0 },
+      position: { x: Number.NaN, y: Number.NaN },
       angle: 0,
       type: 'v',
       depth: 4,

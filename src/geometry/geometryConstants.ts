@@ -11,6 +11,13 @@ export const POINT_EPS_MM = 1e-6
 /** Punkt auf gleicher Position: großzügigere Toleranz für Notch-Resync (Clipper-Drift). */
 export const ENDPOINT_EPS_MM = 1.0
 
+/**
+ * Gesetzte Kerbenposition gilt als Ort.
+ * Liegt die Projektion auf die Kontur weiter weg, wird der gespeicherte Punkt gezeigt
+ * und nicht still auf eine andere Station gezogen.
+ */
+export const NOTCH_POSITION_LOCK_MM = ENDPOINT_EPS_MM
+
 /** Parameter t ∈ [0,1] nahe Vertex: Threshold für Notch-Resync (Ecke erkannt). */
 export const CORNER_T_EPS = 0.01
 

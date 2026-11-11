@@ -1,5 +1,5 @@
 import type { Curve, Notch, Point } from '../types/model'
-import { bezierAt, outwardNormalAngleAt, totalPathLength, pointAtPathLength } from './curveToPath'
+import { bezierAt, outwardNormalAngleAt, totalPathLength } from './curveToPath'
 import {
   getNotchPositionAndAngle,
   getNotchCutLineParameter,
@@ -15,10 +15,13 @@ import { ENDPOINT_EPS_MM, CORNER_T_EPS } from './geometryConstants'
 
 type Nr = { point: Point; curveIndex: number; t: number }
 
-/** Maximaler Positions-Sprung einer Kerbe beim Kontur-Resync (mm). */
-export const MAX_NOTCH_RESYNC_JUMP_MM = 10
+/**
+ * Weiter als das darf ein Resync die gesetzte Kerbe nicht von ihrem Punkt wegziehen.
+ * Nahtzugabe und kleine Kantenkorrekturen bleiben darunter; ein Sprung an eine andere Station nicht.
+ */
+export const MAX_NOTCH_RESYNC_JUMP_MM = 40
 /** Zusätzlich: Anteil des Umfangs, höherer Wert bei großen Teilen. */
-export const MAX_NOTCH_RESYNC_JUMP_PERIMETER_FRAC = 0.015
+export const MAX_NOTCH_RESYNC_JUMP_PERIMETER_FRAC = 0.02
 
 function isTopologyCompatibleForIndexT(oldCutLine: Curve[], newCutLine: Curve[]): boolean {
   if (oldCutLine.length !== newCutLine.length) return false
@@ -47,21 +50,6 @@ function segmentsSameLogicalEdge(
     return { ok: true, reversed: true }
   }
   return { ok: false }
-}
-
-/** Lockern: gemeinsamer Endpunkt (nur Seam-Fallback). */
-function segmentsShareEndpoint(a: Curve, b: Curve): boolean {
-  return (
-    endpointsMatch(a.start, b.start) ||
-    endpointsMatch(a.end, b.end) ||
-    endpointsMatch(a.start, b.end) ||
-    endpointsMatch(a.end, b.start)
-  )
-}
-
-/** Gleiche logische Kante: Start- und Endpunkt passen (z. B. Linie → degenerierte Bezier beim Kurvenpunkt-Tool). */
-function segmentsSameEndpoints(a: Curve, b: Curve): boolean {
-  return endpointsMatch(a.start, b.start) && endpointsMatch(a.end, b.end)
 }
 
 function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point | null {
@@ -93,96 +81,65 @@ function maxResyncJumpMm(cutLine: Curve[]): number {
   return Math.max(MAX_NOTCH_RESYNC_JUMP_MM, MAX_NOTCH_RESYNC_JUMP_PERIMETER_FRAC * total)
 }
 
-/** Bogenlänge entlang der neuen Kontur aus gespeichertem Scalar-Anker. */
-export function tryAnchorFromScalar(notch: Notch, cutLine: Curve[]): Nr | null {
-  const total = totalPathLength(cutLine)
-  if (total <= 0) return null
+/** Unter dieser Verschiebung gilt der gesetzte Punkt als unverändert — Kerbe wird nicht umgeschrieben. */
+const NOTCH_RESYNC_STICK_MM = 0.05
+/** Gleiche Kante behalten, wenn sie höchstens so viel weiter weg ist als der globale nächste Punkt. */
+const SAME_EDGE_BIAS_MM = 1
 
-  let L: number | null = null
-  const sn = notch.sNormalized
-  if (sn != null && Number.isFinite(sn)) {
-    L = Math.max(0, Math.min(1, sn)) * total
-  } else {
-    const al = notch.arcLengthMm
-    if (al != null && Number.isFinite(al)) {
-      L = Math.max(0, Math.min(total, al))
-    }
-  }
-  if (L == null) return null
-
-  const pt = pointAtPathLength(cutLine, L)
-  if (!pt) return null
-  return { curveIndex: pt.curveIndex, t: pt.t, point: pt.point }
+function committedPoint(notch: Notch, cutLine: Curve[]): Point {
+  if (Number.isFinite(notch.position.x) && Number.isFinite(notch.position.y)) return notch.position
+  return getNotchPositionAndAngle(notch, cutLine).position
 }
 
-type ResyncCandidate = { nr: Nr; priority: number }
-
-/** Wählt unter `maxJump` den Kandidaten mit kleinstem Abstand zu oldCanon (Priorität nur als Tie-Break). */
-function selectResyncAnchor(
-  candidates: ResyncCandidate[],
-  oldCanon: Point,
-  maxJump: number
-): Nr | null {
-  if (candidates.length === 0) return null
-  const within = candidates
-    .map((c) => ({ c, d: distMm(c.nr.point, oldCanon) }))
-    .filter((x) => x.d <= maxJump)
-  if (within.length > 0) {
-    within.sort((a, b) => a.d - b.d || a.c.priority - b.c.priority)
-    return within[0].c.nr
-  }
-  let best = candidates[0].nr
-  let bestD = distMm(best.point, oldCanon)
-  let bestPri = candidates[0].priority
-  for (let i = 1; i < candidates.length; i++) {
-    const d = distMm(candidates[i].nr.point, oldCanon)
-    if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && candidates[i].priority < bestPri)) {
-      bestD = d
-      best = candidates[i].nr
-      bestPri = candidates[i].priority
-    }
-  }
-  return best
-}
-
-function collectResyncCandidates(
-  notch: Notch,
-  oldCutLine: Curve[],
-  newCutLine: Curve[],
-  oldCanon: Point
-): ResyncCandidate[] {
-  const candidates: ResyncCandidate[] = []
-  const topoCompat = isTopologyCompatibleForIndexT(oldCutLine, newCutLine)
-  const oldParam = getNotchCutLineParameter(notch, oldCutLine)
-
-  if (topoCompat && oldParam != null && oldParam.curveIndex >= 0 && oldParam.curveIndex < newCutLine.length) {
-    const ci = oldParam.curveIndex
-    const edge = segmentsSameLogicalEdge(oldCutLine[ci], newCutLine[ci])
-    if (edge.ok) {
-      const t = edge.reversed ? 1 - oldParam.t : oldParam.t
-      const point = pointOnCurveAt(newCutLine, ci, t)
-      if (point) candidates.push({ nr: { point, curveIndex: ci, t }, priority: 0 })
-    }
-  }
-
-  // sNormalized/arcLength nur bei stabiler Topologie — sonst driftet der Konturstart (Clipper) und Kerben springen.
-  const scalar = tryAnchorFromScalar(notch, newCutLine)
-  if (scalar && topoCompat) candidates.push({ nr: scalar, priority: 1 })
-
-  const nearest = nearestCurveIndexAndPoint(oldCanon, newCutLine)
-  if (nearest) {
-    candidates.push({
-      nr: { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 },
-      priority: topoCompat ? 2 : 0,
-    })
-  }
-
-  return candidates
+function withoutVertexIndex(notch: Notch): Notch {
+  if (notch.vertexIndex === undefined) return notch
+  return { ...notch, vertexIndex: undefined }
 }
 
 /**
- * Nach Änderung der `cutLine`: auf die neue Kontur abbilden.
- * Kerben bleiben frei auf der Kontur; Sprünge sind begrenzt (s. MAX_NOTCH_RESYNC_*).
+ * Nächster Punkt der gesetzten Position auf der neuen Kontur.
+ * `sNormalized` wird nicht gelesen. Liegt kein Punkt nah genug, bleibt die Kerbe exakt stehen.
+ */
+function reseatNotchOnNewCut(notch: Notch, oldCutLine: Curve[], newCutLine: Curve[]): Notch {
+  if (isNotchOnInternalLine(notch)) return notch
+  if (newCutLine.length === 0) return notch
+
+  const oldCanon = committedPoint(notch, oldCutLine)
+  const maxJump = maxResyncJumpMm(newCutLine)
+  const oldHit = oldCutLine.length > 0 ? nearestCurveIndexAndPoint(oldCanon, oldCutLine) : null
+
+  let sameEdge: Nr | null = null
+  if (
+    oldHit &&
+    isTopologyCompatibleForIndexT(oldCutLine, newCutLine) &&
+    oldHit.curveIndex < newCutLine.length &&
+    segmentsSameLogicalEdge(oldCutLine[oldHit.curveIndex], newCutLine[oldHit.curveIndex]).ok
+  ) {
+    sameEdge = projectOntoSingleSegment(oldCanon, newCutLine, oldHit.curveIndex)
+  }
+
+  const nearest = nearestCurveIndexAndPoint(oldCanon, newCutLine)
+  const nearestNr: Nr | null = nearest
+    ? { point: nearest.point, curveIndex: nearest.curveIndex, t: nearest.t ?? 0 }
+    : null
+
+  let pick: Nr | null = null
+  if (sameEdge && nearestNr) {
+    const stay = distMm(sameEdge.point, oldCanon) <= distMm(nearestNr.point, oldCanon) + SAME_EDGE_BIAS_MM
+    pick = stay ? sameEdge : nearestNr
+  } else {
+    pick = sameEdge ?? nearestNr
+  }
+  if (!pick) return withoutVertexIndex(notch)
+  const jump = distMm(pick.point, oldCanon)
+  if (jump > maxJump || jump <= NOTCH_RESYNC_STICK_MM) return withoutVertexIndex(notch)
+  return finalizeNotch(notch, pick, newCutLine)
+}
+
+/**
+ * Nach Änderung der `cutLine`: Kerbe am gesetzten Punkt lassen.
+ * Nur wenn die neue Kontur direkt daneben liegt, wird sie auf diesen nächsten Punkt gesetzt
+ * und der neue Punkt gespeichert. Ein Bogenlängen-Anteil darf sie nicht woanders hinziehen.
  */
 export function resyncNotchesAfterCutLineRebuilt(
   notches: Notch[],
@@ -190,26 +147,7 @@ export function resyncNotchesAfterCutLineRebuilt(
   newCutLine: Curve[]
 ): Notch[] {
   if (newCutLine.length === 0) return notches
-  const maxJump = maxResyncJumpMm(newCutLine)
-
-  return notches.map((notch) => {
-    if (isNotchOnInternalLine(notch)) return notch
-
-    const oldCanon = getNotchPositionAndAngle(notch, oldCutLine).position
-    const candidates = collectResyncCandidates(notch, oldCutLine, newCutLine, oldCanon)
-    const nr = selectResyncAnchor(candidates, oldCanon, maxJump)
-
-    if (!nr) {
-      return {
-        ...notch,
-        vertexIndex: undefined,
-        sNormalized: undefined,
-        arcLengthMm: undefined,
-      }
-    }
-
-    return finalizeNotch(notch, nr, newCutLine)
-  })
+  return notches.map((notch) => reseatNotchOnNewCut(notch, oldCutLine, newCutLine))
 }
 
 /**
@@ -323,8 +261,9 @@ export function rematerializeNotchesAfterGeometricMirror(args: {
 }
 
 /**
- * Seam-as-Master: Nahtlinie als logischer Anker; CutLine oft mit anderer Clipper-Topologie.
- * Bevorzugt gespeichertes sNormalized auf der CutLine, um falsche Segment-Sprünge zu vermeiden.
+ * Seam-as-Master: dieselbe Regel wie `resyncNotchesAfterCutLineRebuilt`.
+ * Die gesetzte Cut-Position bleibt der Anker. Die Nahtlinien werden nicht benutzt,
+ * um die Kerbe über einen Bogenlängen-Anteil an eine andere Station zu schieben.
  */
 export function resyncNotchesViaSeamAnchor(
   notches: Notch[],
@@ -333,82 +272,9 @@ export function resyncNotchesViaSeamAnchor(
   oldSeamLine: Curve[],
   newSeamLine: Curve[]
 ): Notch[] {
-  if (newCutLine.length === 0) return notches
-
-  const seamStable =
-    oldSeamLine.length > 0 &&
-    oldSeamLine.length === newSeamLine.length &&
-    oldSeamLine.every((c, i) => {
-      const d = newSeamLine[i]
-      if (!d) return false
-      if (c.type === d.type) return true
-      return segmentsSameEndpoints(c, d)
-    })
-
-  if (!seamStable) {
-    return resyncNotchesAfterCutLineRebuilt(notches, oldCutLine, newCutLine)
-  }
-
-  const maxJump = maxResyncJumpMm(newCutLine)
-
-  return notches.map((notch) => {
-    if (isNotchOnInternalLine(notch)) return notch
-
-    const oldCanon = getNotchPositionAndAngle(notch, oldCutLine).position
-    const scalarCut = tryAnchorFromScalar(notch, newCutLine)
-
-    const seamProj = nearestCurveIndexAndPoint(oldCanon, oldSeamLine)
-    if (!seamProj) {
-      return scalarCut ? finalizeNotch(notch, scalarCut, newCutLine) : fallbackResync(notch, oldCanon, oldCutLine, newCutLine)
-    }
-
-    const ci = seamProj.curveIndex
-    const seamEdge =
-      ci < newSeamLine.length ? segmentsSameLogicalEdge(oldSeamLine[ci], newSeamLine[ci]) : ({ ok: false } as const)
-    if (!seamEdge.ok && (ci >= newSeamLine.length || !segmentsShareEndpoint(oldSeamLine[ci], newSeamLine[ci]))) {
-      return scalarCut ? finalizeNotch(notch, scalarCut, newCutLine) : fallbackResync(notch, oldCanon, oldCutLine, newCutLine)
-    }
-
-    const lockedSeam = projectOntoSingleSegment(oldCanon, newSeamLine, ci)
-    if (!lockedSeam) {
-      return scalarCut ? finalizeNotch(notch, scalarCut, newCutLine) : fallbackResync(notch, oldCanon, oldCutLine, newCutLine)
-    }
-
-    const cutProj = nearestCurveIndexAndPoint(lockedSeam.point, newCutLine)
-    if (!cutProj) {
-      return scalarCut ? finalizeNotch(notch, scalarCut, newCutLine) : fallbackResync(notch, oldCanon, oldCutLine, newCutLine)
-    }
-
-    const nrSeam: Nr = { point: cutProj.point, curveIndex: cutProj.curveIndex, t: cutProj.t ?? 0 }
-    const jumpSeam = distMm(nrSeam.point, oldCanon)
-
-    if (scalarCut) {
-      const jumpScalar = distMm(scalarCut.point, oldCanon)
-      if (jumpScalar <= maxJump && jumpScalar <= jumpSeam + 1e-6) {
-        return finalizeNotch(notch, scalarCut, newCutLine)
-      }
-      if (jumpSeam > maxJump && jumpScalar < jumpSeam) {
-        return finalizeNotch(notch, scalarCut, newCutLine)
-      }
-    }
-
-    if (jumpSeam > maxJump) {
-      const fallback = resyncNotchesAfterCutLineRebuilt([notch], oldCutLine, newCutLine)[0]
-      return fallback
-    }
-
-    return finalizeNotch(notch, nrSeam, newCutLine)
-  })
-}
-
-function fallbackResync(notch: Notch, oldCanon: Point, oldCutLine: Curve[], newCutLine: Curve[]): Notch {
-  const candidates = collectResyncCandidates(notch, oldCutLine, newCutLine, oldCanon)
-  const maxJump = maxResyncJumpMm(newCutLine)
-  const nr = selectResyncAnchor(candidates, oldCanon, maxJump)
-  if (!nr) {
-    return { ...notch, vertexIndex: undefined, sNormalized: undefined, arcLengthMm: undefined }
-  }
-  return finalizeNotch(notch, nr, newCutLine)
+  void oldSeamLine
+  void newSeamLine
+  return resyncNotchesAfterCutLineRebuilt(notches, oldCutLine, newCutLine)
 }
 
 function finalizeNotch(notch: Notch, nr: Nr, cutLine: Curve[]): Notch {

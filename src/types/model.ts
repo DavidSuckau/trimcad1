@@ -46,8 +46,9 @@ export type EaseNotchSource = 'auto' | 'manual'
 export type Notch = {
   id: string
   /**
-   * Cache für Treffer/UI; kanonische Lage folgt der Anker-Priorität in `resolveNotchCutLineAnchor`
-   * (`sNormalized` > `arcLengthMm` > Projektion von `position`).
+   * Gesetzter Ort der Kerbe (Teilkoordinaten). Das ist der Anker:
+   * Anzeige, Export und Resync gehen von diesem Punkt aus.
+   * `sNormalized` / `arcLengthMm` sind nur abgeleitete Caches und verschieben die Kerbe nicht.
    */
   position: Point
   angle: number
@@ -58,18 +59,18 @@ export type Notch = {
   /** @deprecated Feld bleibt nur für JSON-Kompatibilität; wird im Code ignoriert. */
   vertexIndex?: number
   /**
-   * Kanonischer Anker: Anteil der Bogenlänge entlang der geschlossenen **cutLine** [0, 1].
-   * Hat Vorrang vor `arcLengthMm` und `position`.
+   * Abgeleiteter Cache: Anteil der Bogenlänge entlang der geschlossenen **cutLine** [0, 1].
+   * Wird aus `position` geschrieben. Darf die gesetzte Position nicht überschreiben.
    */
   sNormalized?: number
-  /** Bogenlänge in mm vom selben Startpunkt; Denormalisierung zu `sNormalized` über `totalPathLength(cutLine)`. */
+  /** Abgeleitete Bogenlänge in mm vom Konturstart. Cache zu `position`, kein eigener Anker. */
   arcLengthMm?: number
   /** Semantische Rolle für Naht-/Profil-Grenzen. */
   role?: NotchRole
   /**
    * Kerbe auf interner Linie (Abnäher etc.) – nur Editor/Planung, kein DXF-Schnitt.
-   * Index in `piece.internalLines`. Kanonische Lage: `internalSNormalized` / `internalArcLengthMm`
-   * entlang der offenen internen Polylinie, sonst Projektion von `position`.
+   * Index in `piece.internalLines`. Gesetzter Ort ist `position`.
+   * `internalSNormalized` / `internalArcLengthMm` sind nur Caches entlang dieser Linie.
    */
   internalLineIndex?: number
   /** Anteil der Bogenlänge entlang aller `internalLines` [0, 1] (offene Polylinie). */

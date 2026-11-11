@@ -9,7 +9,7 @@ import {
 } from './curveToPath'
 import { isNotchOnInternalLine } from './notchOnInternalLine'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
-import { VERTEX_T_EPS, lerpPt } from './geometryConstants'
+import { NOTCH_POSITION_LOCK_MM, VERTEX_T_EPS, lerpPt } from './geometryConstants'
 import { isPointInClosedCurves } from './pointInPolygon'
 
 /** Innen-Normalenwinkel (Grad) an (curveIndex, t). An Vertices (t≈0 oder t≈1) Winkelhalbierende der beiden Segmente. */
@@ -97,12 +97,15 @@ function ensureAnglePointsIntoContour(
   return angleDeg
 }
 
+function hasCommittedPosition(notch: Notch): boolean {
+  return Number.isFinite(notch.position.x) && Number.isFinite(notch.position.y)
+}
+
 /**
- * **Primary anchoring auf der Schnittkontur (cutLine)** — Lesepfad:
+ * Lage auf der Schnittkontur.
  *
- * 1. `sNormalized` → Bogenlänge `sNormalized * Umfang` entlang der Kontur.
- * 2. `arcLengthMm` → absolute Bogenlänge vom Konturstart.
- * 3. Sonst Projektion von `position` auf die `cutLine`.
+ * 1. Gesetzte `position` (Projektion auf die cutLine). Das ist der Ort, den der Nutzer gesetzt hat.
+ * 2. Nur ohne brauchbare Position: `sNormalized`, dann `arcLengthMm` (alte Dateien).
  */
 export function resolveNotchCutLineAnchor(
   notch: Notch,
@@ -113,6 +116,11 @@ export function resolveNotchCutLineAnchor(
 
   const total = totalPathLength(cutLine)
   if (total <= 0) return null
+
+  if (hasCommittedPosition(notch)) {
+    const r = nearestCurveIndexAndPoint(notch.position, cutLine)
+    if (r) return { curveIndex: r.curveIndex, t: r.t ?? 0 }
+  }
 
   const sn = notch.sNormalized
   if (sn != null && Number.isFinite(sn)) {
@@ -131,8 +139,7 @@ export function resolveNotchCutLineAnchor(
     return { curveIndex: pt.curveIndex, t: pt.t }
   }
 
-  const r = nearestCurveIndexAndPoint(notch.position, cutLine)
-  return r ? { curveIndex: r.curveIndex, t: r.t ?? 0 } : null
+  return null
 }
 
 function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point | null {
@@ -149,8 +156,8 @@ function pointOnCurveAt(curves: Curve[], curveIndex: number, t: number): Point |
 }
 
 /**
- * Setzt `sNormalized`, `arcLengthMm`, `position`, `angle` konsistent zur aktuellen **cutLine**
- * über `resolveNotchCutLineAnchor` (freie Lage auf der Kontur). `vertexIndex` wird nicht gesetzt.
+ * Schreibt `sNormalized`, `arcLengthMm`, `position`, `angle` aus der gesetzten Position
+ * (Projektion auf die cutLine). `vertexIndex` wird nicht gesetzt.
  */
 export function materializeNotchAnchorsOnCutLine(notch: Notch, cutLine: Curve[]): Notch | null {
   if (isNotchOnInternalLine(notch)) return null
@@ -195,12 +202,18 @@ export function getNotchPositionAndAngle(
   if (!anchor) {
     return { position: fallbackPos, angle: fallbackAngle }
   }
-  const position = pointOnCurveAt(cutLine, anchor.curveIndex, anchor.t)
-  if (!position) {
+  const onCurve = pointOnCurveAt(cutLine, anchor.curveIndex, anchor.t)
+  if (!onCurve) {
     return { position: fallbackPos, angle: fallbackAngle }
   }
+  if (
+    hasCommittedPosition(notch) &&
+    Math.hypot(onCurve.x - notch.position.x, onCurve.y - notch.position.y) > NOTCH_POSITION_LOCK_MM
+  ) {
+    return { position: { ...notch.position }, angle: fallbackAngle }
+  }
   const angle = inwardNormalAngleAt(cutLine, anchor.curveIndex, anchor.t)
-  return { position, angle: Number.isFinite(angle) ? angle : fallbackAngle }
+  return { position: onCurve, angle: Number.isFinite(angle) ? angle : fallbackAngle }
 }
 
 /** Parametrische Lage auf der cutLine; siehe `getNotchCutLineParameter`. */

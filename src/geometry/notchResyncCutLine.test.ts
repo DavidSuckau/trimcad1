@@ -34,11 +34,11 @@ describe('resyncNotchesAfterCutLineRebuilt: position-first', () => {
 
     const next = resyncNotchesAfterCutLineRebuilt([notch], oldCutLine, newCutLine)[0]
     const pos = getNotchPositionAndAngle(next, newCutLine).position
-    // Bei kompatibler Topologie bleibt die lokale Segmentlaenge erhalten (hier 50 mm ab Segmentstart).
+    // Gesetzter Punkt bleibt. sNormalized 0.125 läge auf der längeren Kontur bei x=75.
     expect(pos.x).toBeCloseTo(50, 3)
     expect(pos.y).toBeCloseTo(0, 3)
-    expect(next.sNormalized).toBeCloseTo(50 / 600, 4)
-    expect(next.arcLengthMm).toBeCloseTo(50, 3)
+    expect(next.position.x).toBeCloseTo(50, 3)
+    expect(next.sNormalized).toBeCloseTo(0.125, 4)
   })
 
   it('bei Startpunkt-Rotation bleibt die Kerbe geometrisch an der Ecke (100,0); kein vertexIndex', () => {
@@ -104,31 +104,26 @@ describe('resyncNotchesAfterCutLineRebuilt: position-first', () => {
     expect(resynced.vertexIndex).toBeUndefined()
   })
 
-  it('freie Kerbe: bei kompatibler Topologie wird Segment+t stabil fortgeschrieben', () => {
+  it('freie Kerbe bleibt am gesetzten Punkt, auch wenn sNormalized woanders liegt', () => {
     const size = 100
     const oldCutLine = square(size)
     const newCutLine: Curve[] = [oldCutLine[1], oldCutLine[2], oldCutLine[3], oldCutLine[0]]
-    // 50 mm entlang alter Kontur = Mitte untere Kante (50,0); position absichtlich falsch — sNormalized zählt.
-    const sMidBottom = 50 / 400
     const notch: Notch = {
       id: 'n-sn',
-      position: { x: 999, y: 999 },
+      position: { x: 50, y: 0 },
       angle: 0,
       type: 'single',
       depth: 4,
-      sNormalized: sMidBottom,
-      arcLengthMm: 50,
+      sNormalized: 0.5,
+      arcLengthMm: 200,
     }
-    const oldCanon = getNotchPositionAndAngle(notch, oldCutLine).position
-    expect(oldCanon.x).toBeCloseTo(50, 3)
-    expect(oldCanon.y).toBeCloseTo(0, 3)
 
     const [resynced] = resyncNotchesAfterCutLineRebuilt([notch], oldCutLine, newCutLine)
     const p = getNotchPositionAndAngle(resynced, newCutLine).position
-    // Zyklischer Shift: gleiche physische Kante (unten) bleibt (50,0), nicht (100,50).
     expect(p.x).toBeCloseTo(50, 3)
     expect(p.y).toBeCloseTo(0, 3)
-    expect(resynced.vertexIndex).toBeUndefined()
+    expect(resynced.position.x).toBeCloseTo(50, 3)
+    expect(resynced.sNormalized).toBe(0.5)
   })
 
   it('freie Kerbe ohne Scalar-Anker bleibt per Projektion an physischer Position', () => {
@@ -160,6 +155,38 @@ describe('resyncNotchesAfterCutLineRebuilt: position-first', () => {
     // Projektion von (95,0) auf (0,0)→(140,35): bleibt nahe (95,0) auf der neuen Kante
     expect(pos.x).toBeCloseTo(89.42, 1)
     expect(pos.y).toBeCloseTo(22.36, 1)
+  })
+})
+
+describe('resync: gesetzter Punkt ist fest', () => {
+  it('zieht die Kerbe nicht auf eine weit entfernte neue Kontur und ignoriert sNormalized', () => {
+    const oldCutLine = square(100)
+    const newCutLine: Curve[] = oldCutLine.map((c) =>
+      c.type === 'line'
+        ? {
+            type: 'line' as const,
+            start: { x: c.start.x + 500, y: c.start.y },
+            end: { x: c.end.x + 500, y: c.end.y },
+          }
+        : c
+    )
+    const notch: Notch = {
+      id: 'n-lock',
+      position: { x: 50, y: 0 },
+      angle: 90,
+      type: 'single',
+      depth: 4,
+      width: 6,
+      sNormalized: 0.5,
+      arcLengthMm: 200,
+    }
+    const [out] = resyncNotchesAfterCutLineRebuilt([notch], oldCutLine, newCutLine)
+    expect(out.position).toEqual(notch.position)
+    expect(out.sNormalized).toBe(0.5)
+    expect(out.angle).toBe(90)
+    const shown = getNotchPositionAndAngle(out, newCutLine).position
+    expect(shown.x).toBeCloseTo(50, 3)
+    expect(shown.y).toBeCloseTo(0, 3)
   })
 })
 
