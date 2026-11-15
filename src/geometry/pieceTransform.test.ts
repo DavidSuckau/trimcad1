@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PatternPiece } from '../types/model'
-import { getRotationUiLayout } from './pieceTransform'
+import { getRotationUiLayout, pieceLocalToWorld } from './pieceTransform'
 
 const square100: PatternPiece['cutLine'] = [
   { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
@@ -87,5 +87,28 @@ describe('getRotationUiLayout', () => {
     expect(p.x + r).toBeLessThanOrEqual(bounds.maxX)
     expect(p.y - r).toBeGreaterThanOrEqual(bounds.minY)
     expect(p.y + r).toBeLessThanOrEqual(bounds.maxY)
+  })
+
+  it('bleibt der Drehgriff auf dem Bildschirm über dem Pivot, wenn das Teil gedreht ist', () => {
+    const base = {
+      x: 400,
+      y: 250,
+      mirrored: false,
+      pivotLocal: { x: 50, y: 50 },
+    }
+    const worlds = [0, 90, 180, -35].map((rotation) => {
+      const piece = makePiece({ transform: { ...base, rotation } })
+      const layout = getRotationUiLayout(piece)!
+      const pivotW = pieceLocalToWorld(layout.pivot, piece.transform)
+      const handleW = pieceLocalToWorld(layout.handleLocal, piece.transform)
+      return { pivotW, handleW }
+    })
+    const first = worlds[0]
+    const firstDy = first.handleW.y - first.pivotW.y
+    for (const w of worlds) {
+      expect(w.handleW.x - w.pivotW.x).toBeCloseTo(0, 4)
+      expect(w.handleW.y - w.pivotW.y).toBeCloseTo(firstDy, 4)
+      expect(w.handleW.y).toBeLessThan(w.pivotW.y - 1)
+    }
   })
 })

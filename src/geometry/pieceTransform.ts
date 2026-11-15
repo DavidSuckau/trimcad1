@@ -41,13 +41,29 @@ export type RotationUiLayout = {
   pivot: Point
   /** Rotationsring-Radius; passt in die Schnitt-BBox um den Pivot. */
   rotationRadius: number
-  /** Drehgriff auf dem Ring, immer innerhalb der Schnitt-BBox. */
+  /**
+   * Drehgriff in Teilkoordinaten.
+   * Nach der Teil-Drehung liegt er immer senkrecht über dem Pivot (Bildschirm), nicht mitdrehend.
+   */
   handleLocal: Point
 }
 
 /**
+ * Versatz in Teilkoordinaten, der nach Rotation/Spiegelung in der Welt nach oben zeigt (kleineres Y).
+ */
+function localOffsetForWorldUp(rotationDeg: number, mirrored: boolean, dist: number): Point {
+  const rad = (rotationDeg * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const dlx = -dist * sin
+  const oy = -dist * cos
+  return { x: mirrored ? -dlx : dlx, y: oy }
+}
+
+/**
  * Layout für Pivot + Drehring + Drehgriff.
- * Der Griff liegt immer innerhalb der cutLine-Bounding-Box (nie außerhalb des Teils).
+ * Der Griff bleibt auf dem Bildschirm fest über dem Drehpunkt, auch wenn das Teil gedreht wird.
+ * Abstand so gewählt, dass er in der Schnitt-Bounding-Box liegt.
  */
 export function getRotationUiLayout(piece: PatternPiece, handlePadMm = 6): RotationUiLayout | null {
   const bounds = curvesBounds(piece.cutLine)
@@ -72,21 +88,10 @@ export function getRotationUiLayout(piece: PatternPiece, handlePadMm = 6): Rotat
 
   const baseRadius = Math.max(w, h) * 0.6
   const rotationRadius = Math.max(1, Math.min(baseRadius, maxInscribed * 0.95))
-
-  const dirs = [
-    { dx: 0, dy: -1, inset: insetUp },
-    { dx: 0, dy: 1, inset: insetDown },
-    { dx: 1, dy: 0, inset: insetRight },
-    { dx: -1, dy: 0, inset: insetLeft },
-  ]
-  const pick =
-    (insetUp >= rotationRadius ? dirs.find((d) => d.dy === -1) : undefined) ??
-    dirs.reduce((a, b) => (a.inset > b.inset ? a : b))
-
-  const dist = Math.min(rotationRadius, Math.max(1, pick.inset * 0.98))
+  const off = localOffsetForWorldUp(piece.transform.rotation, piece.transform.mirrored, rotationRadius)
   const handleLocal = {
-    x: pivot.x + pick.dx * dist,
-    y: pivot.y + pick.dy * dist,
+    x: pivot.x + off.x,
+    y: pivot.y + off.y,
   }
 
   return { pivot, rotationRadius, handleLocal }

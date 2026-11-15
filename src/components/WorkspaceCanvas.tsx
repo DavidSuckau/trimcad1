@@ -2253,7 +2253,7 @@ const PieceGroup = memo(function PieceGroup({
         const { pivot, rotationRadius, handleLocal } = layout
         const hx = handleLocal.x
         const hy = handleLocal.y
-        const handleIconRot = (Math.atan2(hy - pivot.y, hx - pivot.x) * 180) / Math.PI + 90
+        const handleIconRot = -piece.transform.rotation
         const ringInteractive = !!isRotationRingHovered || !!isRotationHandleHovered || !!isRotationActive
         const handleScale = isRotationHandleHovered ? 1.1 : 1
         const rs = Math.min(2.5, Math.max(0.5, rotationUiScale))
@@ -2292,7 +2292,7 @@ const PieceGroup = memo(function PieceGroup({
                 pointerEvents="none"
               />
             </g>
-            {showRotationRing && (
+            {showRotationRing && !isRotationActive && (
               <circle
                 cx={pivot.x}
                 cy={pivot.y}
@@ -9167,9 +9167,9 @@ export function WorkspaceCanvas() {
               simplifyNotches={simplifyNotchesLive}
               showRotationRing={
                 selectedPieceIds.includes(piece.id) &&
+                dragging?.kind !== 'rotate' &&
                 (hoveredPivotForRotationPieceId === piece.id ||
-                  rotateAroundPivotPieceId === piece.id ||
-                  (dragging != null && dragging.kind === 'rotate'))
+                  rotateAroundPivotPieceId === piece.id)
               }
               isRotationRingHovered={hoveredRotationRingPieceId === piece.id}
               isRotationHandleHovered={hoveredRotationHandlePieceId === piece.id}
