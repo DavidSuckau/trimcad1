@@ -53,6 +53,7 @@ import {
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
   bestSeamSubSegmentPairing,
+  seamComparisonReverseB,
   buildNotchTargetArcPositionsFromSubLengths,
   materializeNotchAtEdgeArcLengthExact,
   deriveNotchRoleRangeOnEdge,
@@ -2471,7 +2472,15 @@ export const useStore = create<Store>()(
 
     const refSubs = getSubSegments(refPiece, refIndices, undefined, refRange)
     const tgtSubs = getSubSegments(tgtPiece, tgtIndices, undefined, tgtRange)
-    const pairing = bestSeamSubSegmentPairing(refSubs, tgtSubs)
+    const reverseOrientation = seamComparisonReverseB(
+      refPiece,
+      refIndices,
+      refRange,
+      tgtPiece,
+      tgtIndices,
+      tgtRange,
+    )
+    const pairing = bestSeamSubSegmentPairing(refSubs, tgtSubs, reverseOrientation)
     if (!pairing) {
       set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
@@ -2482,9 +2491,6 @@ export const useStore = create<Store>()(
       set({ seamAdjustmentDialog: null, seamAdjustmentHoverPieceId: null })
       return
     }
-
-    // Gleiche Orientierung wie evaluateSeamAdjustment (Längenpaarung), nicht Welt-Endpunkt-Abstand.
-    const reverseOrientation = pairing.reverseB
 
     const allTgtNotches = getNotchesOnEdge(tgtPiece, tgtIndices)
     const tgtRangeStartArc = tgtRange

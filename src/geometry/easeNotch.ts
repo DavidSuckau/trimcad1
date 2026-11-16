@@ -10,14 +10,13 @@ import { pointAtPathLength, totalPathLength } from './curveToPath'
 import { isInternalSeamAssignment } from './internalSeamAssignment'
 import { isEaseNotch, isPassNotch } from './notchPurpose'
 import {
-  bestSeamSubSegmentPairing,
   edgeLengthInNotchRange,
   edgeTotalLength,
   getCurvesForSeamEdge,
   getNotchesOnEdge,
-  getSubSegments,
   materializeNotchAtEdgeArcLength,
   resolvedSeamAssignmentCurveIndices,
+  seamComparisonReverseB,
 } from './seamUtils'
 
 export { isEaseNotch, isPassNotch } from './notchPurpose'
@@ -81,14 +80,11 @@ function rangeBoundsMm(
   const all = getNotchesOnEdge(piece, curveIndices)
   const start = range.startNotchId ? all.find((n) => n.notchId === range.startNotchId)?.arcLength ?? 0 : 0
   const end = range.endNotchId ? all.find((n) => n.notchId === range.endNotchId)?.arcLength ?? total : total
-  if (end > start) return { start, end }
-  // Fallback: volle Kante, wenn Range inkonsistent
+  if (start != null && end != null && Math.abs(end - start) > 1e-9) return { start, end }
   return { start: 0, end: total || len }
 }
 
-/**
- * Orientierung A↔B: bei genug Pass-Subsegmenten wie Nahtanpassung; sonst typisch gegenläufig.
- */
+/** Orientierung A↔B: gleicher Uhrzeigersinn wie der Nahtvergleich (Umlauf bzw. Nahtanfang→Nahtende). */
 export function resolveEaseReverseB(
   assignment: SeamAssignment,
   pieceA: PatternPiece,
@@ -96,11 +92,7 @@ export function resolveEaseReverseB(
 ): boolean {
   const idxA = resolvedSeamAssignmentCurveIndices(pieceA, assignment.curveIndicesA)
   const idxB = resolvedSeamAssignmentCurveIndices(pieceB, assignment.curveIndicesB)
-  const subsA = getSubSegments(pieceA, idxA, undefined, assignment.notchRangeA)
-  const subsB = getSubSegments(pieceB, idxB, undefined, assignment.notchRangeB)
-  const pairing = bestSeamSubSegmentPairing(subsA, subsB)
-  if (pairing && subsA.length >= 2) return pairing.reverseB
-  return true
+  return seamComparisonReverseB(pieceA, idxA, assignment.notchRangeA, pieceB, idxB, assignment.notchRangeB)
 }
 
 /**
@@ -121,7 +113,7 @@ export function suggestEaseRelativeTs(
 
   const boundsA = rangeBoundsMm(pieceA, idxA, assignment.notchRangeA)
   const boundsB = rangeBoundsMm(pieceB, idxB, assignment.notchRangeB)
-  const spanA = boundsA.end - boundsA.start
+  const spanA = Math.abs(boundsA.end - boundsA.start)
   if (spanA < spacingMm * 2) return null
 
   const edgeA = edgeCurvesForIndices(pieceA, idxA)
@@ -134,16 +126,19 @@ export function suggestEaseRelativeTs(
 
   const relativeTs: number[] = []
   const margin = Math.min(EASE_END_MARGIN_MM, spanA * 0.08)
-  const start = boundsA.start + margin
-  const end = boundsA.end - margin
-  if (end - start < spacingMm) return null
+  const dir = boundsA.end >= boundsA.start ? 1 : -1
+  const start = boundsA.start + dir * margin
+  const end = boundsA.end - dir * margin
+  if ((end - start) * dir < spacingMm) return null
 
-  for (let arc = start; arc <= end + 1e-6; arc += spacingMm) {
-    const clamped = Math.min(end, Math.max(start, arc))
+  for (let arc = start; dir > 0 ? arc <= end + 1e-6 : arc >= end - 1e-6; arc += dir * spacingMm) {
+    const lo = Math.min(start, end)
+    const hi = Math.max(start, end)
+    const clamped = Math.min(hi, Math.max(lo, arc))
     if (!isCurvedAt(edgeA, clamped)) continue
     const nearPass = passArcs.some((p) => Math.abs(p - clamped) < EASE_PASS_CLEARANCE_MM)
     if (nearPass) continue
-    const t = (clamped - boundsA.start) / spanA
+    const t = (clamped - boundsA.start) / (boundsA.end - boundsA.start)
     if (relativeTs.length > 0 && Math.abs(t - relativeTs[relativeTs.length - 1]!) * spanA < spacingMm * 0.55) {
       continue
     }

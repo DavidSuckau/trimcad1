@@ -54,4 +54,16 @@ describe('seam notch role ranges', () => {
     const range = deriveNotchRoleRangeOnEdge(piece, [0])
     expect(edgeLengthInNotchRange(piece, [0], range)).toBeCloseTo(60, 4)
   })
+
+  it('zählt und misst gegen den Umlauf, wenn Nahtanfang hinter dem Nahtende liegt', () => {
+    const piece = pieceWithNotches()
+    const anfang = piece.notches.find((n) => n.id === 'e')!
+    const ende = piece.notches.find((n) => n.id === 's')!
+    anfang.role = 'nahtanfang'
+    ende.role = 'nahtende'
+    const range = deriveNotchRoleRangeOnEdge(piece, [0])
+    expect(range).toEqual({ startNotchId: 'e', endNotchId: 's' })
+    expect(getNotchesOnEdgeInRange(piece, [0], range).map((n) => n.notchId)).toEqual(['m'])
+    expect(edgeLengthInNotchRange(piece, [0], range)).toBeCloseTo(60, 4)
+  })
 })

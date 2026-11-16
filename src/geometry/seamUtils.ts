@@ -1,5 +1,5 @@
 import type { PatternPiece, Point, Curve, Notch } from '../types/model'
-import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt } from './curveToPath'
+import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt, signedAreaCurves } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
 import { isEaseNotch } from './notchPurpose'
@@ -299,9 +299,8 @@ export function countNotchesOnEdge(piece: PatternPiece, curveIndices: number[], 
 export type SubSegInfo = { length: number; midpoint: Point }
 
 /**
- * Wählt die bessere Paarung der Subsegmente zwischen zwei Nahtkanten (gleiche vs. gegenläufige
- * Laufrichtung entlang der jeweiligen Kontur). Ohne feste Annahme „immer B umkehren“: nach Spiegeln
- * oder je nach gewählter Kante kann die bessere Übereinstimmung die gleiche Index-Reihenfolge sein.
+ * Paarung der Teilstrecken zweier Nahtkanten in einer fest vorgegebenen Laufrichtung.
+ * Die Richtung kommt vom Umlaufsinn bzw. von Nahtanfang→Nahtende, nicht von der kleineren Längendifferenz.
  */
 export type SeamSubSegmentPairing = {
   /** true: subsA[i] ↔ subsB[n−1−i] (gegenläufig); false: subsA[i] ↔ subsB[i] */
@@ -314,30 +313,27 @@ export type SeamSubSegmentPairing = {
 
 export function bestSeamSubSegmentPairing(
   subsA: SubSegInfo[],
-  subsB: SubSegInfo[]
+  subsB: SubSegInfo[],
+  reverseB: boolean,
 ): SeamSubSegmentPairing | null {
   if (subsA.length === 0 || subsA.length !== subsB.length) return null
   const n = subsA.length
-  let errRev = 0
-  let maxRev = 0
+  let total = 0
+  let max = 0
   for (let i = 0; i < n; i++) {
-    const d = Math.abs(subsA[i].length - subsB[n - 1 - i].length)
-    errRev += d
-    maxRev = Math.max(maxRev, d)
+    const sb = reverseB ? subsB[n - 1 - i] : subsB[i]
+    const d = Math.abs(subsA[i].length - sb.length)
+    total += d
+    max = Math.max(max, d)
   }
-  let errFwd = 0
-  let maxFwd = 0
-  for (let i = 0; i < n; i++) {
-    const d = Math.abs(subsA[i].length - subsB[i].length)
-    errFwd += d
-    maxFwd = Math.max(maxFwd, d)
-  }
-  const reverseB = errRev <= errFwd
-  return {
-    reverseB,
-    totalMismatchMm: reverseB ? errRev : errFwd,
-    maxSegmentMismatchMm: reverseB ? maxRev : maxFwd,
-  }
+  return { reverseB, totalMismatchMm: total, maxSegmentMismatchMm: max }
+}
+
+/** +1: Kontur im Uhrzeigersinn der Zeichenfläche (y nach unten). Spiegelung kehrt das Vorzeichen um. */
+export function contourWindingSign(piece: PatternPiece): 1 | -1 {
+  let area = signedAreaCurves(getCurvesForSeamEdge(piece))
+  if (piece.transform?.mirrored) area = -area
+  return area < 0 ? -1 : 1
 }
 
 /**
@@ -519,10 +515,9 @@ export function getSubSegments(
   const notchesOnEdge = getNotchesOnEdge(piece, curveIndices, curvs)
   const startArc = range ? notchesOnEdge.find((n) => n.notchId === range.startNotchId)?.arcLength : undefined
   const endArc = range ? notchesOnEdge.find((n) => n.notchId === range.endNotchId)?.arcLength : undefined
-  const hasRange =
-    startArc != null && endArc != null && endArc > startArc + 1e-9
-  const rangeStart = hasRange ? startArc : 0
-  const rangeEnd = hasRange ? endArc : totalLen
+  const hasRange = startArc != null && endArc != null && Math.abs(endArc - startArc) > 1e-9
+  const rangeStart = hasRange ? Math.min(startArc, endArc) : 0
+  const rangeEnd = hasRange ? Math.max(startArc, endArc) : totalLen
   const notchPositions = notchesOnEdge
     .map((n) => n.arcLength)
     .filter((L) => L > rangeStart + 1e-9 && L < rangeEnd - 1e-9)
@@ -768,6 +763,44 @@ export type NotchRoleRange = { startNotchId: string; endNotchId: string }
 export type NotchBoundaryRange = { startNotchId?: string; endNotchId?: string }
 
 /**
+ * Laufrichtung Nahtanfang → Nahtende entlang der Kante.
+ * +1 mit der Kontur, −1 gegen die Kontur. null, wenn keine eindeutige Range vorliegt.
+ */
+export function seamRangeWalkSign(
+  piece: PatternPiece,
+  curveIndices: number[],
+  range?: NotchRoleRange | null,
+): 1 | -1 | null {
+  if (!range?.startNotchId || !range.endNotchId || curveIndices.length === 0) return null
+  const all = getNotchesOnEdge(piece, curveIndices)
+  const start = all.find((n) => n.notchId === range.startNotchId)
+  const end = all.find((n) => n.notchId === range.endNotchId)
+  if (!start || !end) return null
+  const d = end.arcLength - start.arcLength
+  if (Math.abs(d) <= 1e-9) return null
+  return d > 0 ? 1 : -1
+}
+
+/**
+ * Ob Kante B beim Vergleich umzukehren ist, damit beide Nähte im selben Uhrzeigersinn laufen.
+ * Liegt Nahtanfang/Nahtende fest, gilt diese Nährichtung. Sonst der Umlaufsinn der Kontur
+ * (gleiche Windung = gleiche Indexrichtung, gespiegelte Kontur = gegenläufig).
+ */
+export function seamComparisonReverseB(
+  pieceA: PatternPiece,
+  curveIndicesA: number[],
+  rangeA: NotchRoleRange | null | undefined,
+  pieceB: PatternPiece,
+  curveIndicesB: number[],
+  rangeB: NotchRoleRange | null | undefined,
+): boolean {
+  const dirA = seamRangeWalkSign(pieceA, curveIndicesA, rangeA)
+  const dirB = seamRangeWalkSign(pieceB, curveIndicesB, rangeB)
+  if (dirA != null || dirB != null) return (dirA ?? 1) !== (dirB ?? 1)
+  return contourWindingSign(pieceA) !== contourWindingSign(pieceB)
+}
+
+/**
  * Leitet auf einer Kante ein eindeutiges Segment aus Rollen-Notches ab.
  * `beides` zählt als Start und Ende.
  */
@@ -866,8 +899,10 @@ export function getNotchesOnEdgeInRange(
   if (!range) return all
   const iStart = all.findIndex((n) => n.notchId === range.startNotchId)
   const iEnd = all.findIndex((n) => n.notchId === range.endNotchId)
-  if (iStart < 0 || iEnd < 0 || iStart >= iEnd) return all
-  return all.filter((_, i) => i > iStart && i < iEnd)
+  if (iStart < 0 || iEnd < 0 || iStart === iEnd) return all
+  const lo = Math.min(iStart, iEnd)
+  const hi = Math.max(iStart, iEnd)
+  return all.filter((_, i) => i > lo && i < hi)
 }
 
 /** Länge eines Teilsegments zwischen zwei Notches auf derselben Kante (Master-Kontur). */
@@ -882,10 +917,13 @@ export function edgeLengthInNotchRange(
   const all = getNotchesOnEdge(piece, curveIndices, curves)
   const start = range.startNotchId ? all.find((n) => n.notchId === range.startNotchId) : null
   const end = range.endNotchId ? all.find((n) => n.notchId === range.endNotchId) : null
-  if (start && end && end.arcLength > start.arcLength) return end.arcLength - start.arcLength
+  if (start && end) {
+    const d = Math.abs(end.arcLength - start.arcLength)
+    if (d > 1e-9) return d
+    return total
+  }
   if (start && !end) return Math.max(0, total - start.arcLength)
   if (!start && end) return Math.max(0, end.arcLength)
-  if (start && end && end.arcLength <= start.arcLength) return total
   return total
 }
 
@@ -914,9 +952,11 @@ export function getEdgeCurvesInNotchRange(
   const totalLen = edgeTotalLength(piece, curveIndices, curvs)
   const start = range.startNotchId ? all.find((n) => n.notchId === range.startNotchId) : null
   const end = range.endNotchId ? all.find((n) => n.notchId === range.endNotchId) : null
-  const startArc = start ? start.arcLength : 0
-  const endArc = end ? end.arcLength : totalLen
-  if (endArc <= startArc) {
+  const rawStart = start ? start.arcLength : 0
+  const rawEnd = end ? end.arcLength : totalLen
+  const startArc = Math.min(rawStart, rawEnd)
+  const endArc = Math.max(rawStart, rawEnd)
+  if (endArc <= startArc + 1e-9) {
     return curveIndices.map((ci) => curvs[ci]).filter(Boolean)
   }
 
