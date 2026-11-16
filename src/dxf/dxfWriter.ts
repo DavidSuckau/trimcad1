@@ -1,4 +1,9 @@
-import type { Workspace } from '../types/model'
+import type { Notch, PatternPiece, Workspace } from '../types/model'
+import { getNotchPositionAndAngle } from '../geometry/notchOnCurve'
+import {
+  getNotchPositionAndAngleOnInternalLine,
+  isNotchOnInternalLine,
+} from '../geometry/notchOnInternalLine'
 import {
   EOL, fmt,
   curveToPolylinePoints, applyTransform, closeContour,
@@ -14,7 +19,49 @@ import {
  * Format:    AC1009 (AutoCAD R12 ASCII)
  * Einheiten: $INSUNITS = 5 (Millimeter)
  * Entities:  Nur POLYLINE + VERTEX + SEQEND
+ * Layer:     CUT = Schnittkontur, NOTCH = alle Kerben (Schnitt und intern)
  */
+
+const NOTCH_LAYER = 'NOTCH'
+
+function resolvedNotch(piece: PatternPiece, notch: Notch): Notch {
+  if (isNotchOnInternalLine(notch)) {
+    const onLine = getNotchPositionAndAngleOnInternalLine(notch, piece.internalLines)
+    if (!onLine) return notch
+    return { ...notch, position: onLine.position, angle: onLine.angle }
+  }
+  const onCut = getNotchPositionAndAngle(notch, piece.cutLine, piece.seamLine)
+  return { ...notch, position: onCut.position, angle: onCut.angle }
+}
+
+/** Kerben-Geometrie in Teilkoordinaten, offen, eine Polylinie pro Kerbe. */
+function notchLocalPoints(notch: Notch): Pt[] {
+  const rad = (notch.angle * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const w2 = (notch.width ?? 6) / 2
+  const d = notch.depth
+  const p = notch.position
+  if (notch.type === 'v') {
+    return [
+      { x: p.x - w2 * sin, y: p.y + w2 * cos },
+      { x: p.x + d * cos, y: p.y + d * sin },
+      { x: p.x + w2 * sin, y: p.y - w2 * cos },
+    ]
+  }
+  if (notch.type === 'double') {
+    return [
+      { x: p.x - w2 * sin, y: p.y + w2 * cos },
+      { x: p.x - w2 * sin + d * cos, y: p.y + w2 * cos + d * sin },
+      { x: p.x + w2 * sin + d * cos, y: p.y - w2 * cos + d * sin },
+      { x: p.x + w2 * sin, y: p.y - w2 * cos },
+    ]
+  }
+  return [
+    { x: p.x, y: p.y },
+    { x: p.x + d * cos, y: p.y + d * sin },
+  ]
+}
 
 function dxfPolyline(layer: string, points: Pt[], t: { x: number; y: number; rotation: number; mirrored: boolean }, closed: boolean, scale: number): string {
   if (points.length < 2) return ''
@@ -52,6 +99,10 @@ export function exportWorkspaceToDxfR12(workspace: Workspace, scale = 1): string
     const contour = getExportContour(piece)
     const pts = curveToPolylinePoints(contour)
     out.push(dxfPolyline('CUT', pts, piece.transform, true, scale))
+    for (const notch of piece.notches) {
+      const local = notchLocalPoints(resolvedNotch(piece, notch))
+      out.push(dxfPolyline(NOTCH_LAYER, local, piece.transform, false, scale))
+    }
   }
 
   out.push('0' + EOL + 'ENDSEC' + EOL + '0' + EOL + 'EOF' + EOL)

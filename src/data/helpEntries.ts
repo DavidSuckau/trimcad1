@@ -278,7 +278,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Datei',
     name: 'DXF exportieren (einfach)',
-    description: 'Arbeitsfläche als einfache DXF-Datei exportieren.',
+    description: 'Arbeitsfläche als einfache DXF-Datei exportieren. Schnitt auf Layer CUT, alle Kerben zusätzlich auf Layer NOTCH.',
     access: 'Menü Datei → Exportieren → DXF (einfach)',
     shortcut: undefined,
   },
