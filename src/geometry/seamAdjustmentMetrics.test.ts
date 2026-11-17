@@ -61,6 +61,25 @@ describe('getSeamAssignmentDisplayMetrics', () => {
     expect(metrics?.notchCountB).toBe(1)
   })
 
+  it('gesetzter Startpunkt dreht die Messrichtung der zweiten Kante', () => {
+    const pieceA = linePiece('A', 100, [
+      { id: 'a1', position: { x: 20, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      { id: 'a2', position: { x: 50, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+    ])
+    const pieceB = linePiece('B', 100, [
+      { id: 'b1', position: { x: 20, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+      { id: 'b2', position: { x: 50, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },
+    ])
+    const metrics = getSeamAssignmentDisplayMetrics(
+      { ...assignment, measureDirA: 1, measureDirB: -1 },
+      pieceA,
+      pieceB,
+    )
+    expect(metrics?.subPairing?.reverseB).toBe(true)
+    expect(metrics?.subDiffs?.[0].lenA).toBeCloseTo(20, 1)
+    expect(metrics?.subDiffs?.[0].lenB).toBeCloseTo(50, 1)
+  })
+
   it('Subsegment-Längen stimmen mit getSubSegments überein', () => {
     const pieceA = linePiece('A', 100, [
       { id: 'a1', position: { x: 25, y: 0 }, angle: 90, type: 'single', depth: 4, width: 6 },

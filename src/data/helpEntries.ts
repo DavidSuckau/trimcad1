@@ -237,6 +237,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
   },
   {
     category: 'Werkzeuge',
+    name: 'Fächern',
+    description:
+      'Einen Bereich aus einem Teil nehmen und die Öffnung wieder schließen. Zuerst den Drehpunkt anklicken (dort laufen die beiden Linien zusammen), dann die Öffnung, die liegen bleibt, dann die Öffnung, die auf die erste zudreht. Der Bereich zwischen den Linien fällt weg, das Teil ist danach wieder eine Kontur. Escape oder Abbrechen beendet den Modus.',
+    access: 'Genau ein Teil auswählen → Symbolleiste links oder Menü Bearbeiten → Fächern',
+  },
+  {
+    category: 'Werkzeuge',
     name: '90° drehen',
     description:
       'Ausgewählte Teile um 90° im Uhrzeigersinn drehen (um Pivot). Laufrichtungspfeil und Teilename bleiben in Weltausrichtung stehen und drehen nicht mit.',
@@ -339,7 +346,8 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     category: 'Naht',
     name: 'Nahtzuordnung',
-    description: 'Zwei Kanten verschiedener Teile als zusammengehörige Naht zuordnen (erste Kante, dann zweite Kante anklicken).',
+    description:
+      'Zwei Kanten verschiedener Teile als zusammengehörige Naht zuordnen. Nach dem Start den Startpunkt (Ecke) auf dem ersten Teil anklicken, dann den Startpunkt auf dem zweiten Teil. Der Pfeil am Startpunkt zeigt, in welcher Richtung gemessen wird.',
     access: 'Menü Naht → Nahtzuordnung',
     shortcut: undefined,
   },

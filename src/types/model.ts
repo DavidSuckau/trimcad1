@@ -265,6 +265,17 @@ export const SEAM_ASSIGNMENT_KIND_IDS = [
 ] as const
 export type SeamAssignmentKindId = (typeof SEAM_ASSIGNMENT_KIND_IDS)[number]
 
+/** Messrichtung einer Nahtkante: +1 mit dem Kurvenindex, −1 dagegen. */
+export type SeamMeasureDir = 1 | -1
+
+/** Erste Kante während „Nahtzuordnung (zwei Teile)“, inkl. angeklicktem Startpunkt. */
+export type PendingSeamAssignmentPick = {
+  pieceId: string
+  curveIndices: number[]
+  clickedCurve: number
+  measureDir: SeamMeasureDir
+}
+
 export const SEAM_ASSIGNMENT_KIND_LABELS: Record<SeamAssignmentKindId, string> = {
   schluessel: 'Schliessnaht / Standardnaht',
   saum: 'Saumnaht',
@@ -284,12 +295,20 @@ export type SeamAssignment = {
    * Keine Indizes der abgeleiteten cutLine, wenn Master = seamLine; kein 1:1-Segment-Mapping seam↔cut.
    */
   curveIndicesA: number[]
-  /** Vom Nutzer angeklickter curveIndex – definiert die Nährichtung auf Kante A */
+  /** Vom Nutzer angeklickter curveIndex auf Kante A */
   clickedCurveA: number
+  /**
+   * Messrichtung auf Kante A, festgelegt durch den angeklickten Startpunkt.
+   * +1 vom ersten Eckpunkt mit dem Kurvenindex, −1 vom letzten Eckpunkt dagegen.
+   * Fehlt bei älteren Zuordnungen → Richtung aus Umlauf bzw. Nahtanfang/Nahtende.
+   */
+  measureDirA?: SeamMeasureDir
   pieceIdB: string
   /** Wie curveIndicesA: Master-Kontur des anderen Teils */
   curveIndicesB: number[]
   clickedCurveB: number
+  /** Wie measureDirA, für Kante B. */
+  measureDirB?: SeamMeasureDir
   /** Optional: explizites Segment auf Kante A zwischen Notches (inkl. Rolle `beides`). */
   notchRangeA?: { startNotchId: string; endNotchId: string }
   /** Optional: explizites Segment auf Kante B zwischen Notches (inkl. Rolle `beides`). */

@@ -65,7 +65,7 @@ export type TrimTexProjectFileV1 = {
   canvasVertexPointUiScale: number
   /** 0.75–1.75: Schriftgröße für Beschriftungen auf Teilen. */
   uiTextScale: number
-  /** Drehpunkt, Drehring und Drehgriff am ausgewählten Teil (Standard: an). */
+  /** Drehpunkt, Drehring und Drehgriff am ausgewählten Teil (Standard: aus). */
   showPivotRotationUi: boolean
   notchSettings: ProjectNotchSetting[]
   imageDigitizeSession: TrimTexProjectImageSession | null
@@ -369,6 +369,10 @@ function normalizeSeamNotchRange(raw: unknown): { startNotchId: string; endNotch
   return { startNotchId: o.startNotchId, endNotchId: o.endNotchId }
 }
 
+function normalizeMeasureDir(raw: unknown): 1 | -1 | undefined {
+  return raw === 1 || raw === -1 ? raw : undefined
+}
+
 function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
   if (!Array.isArray(raw)) return []
   const out: SeamAssignment[] = []
@@ -395,6 +399,8 @@ function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
     }
     const notchRangeA = normalizeSeamNotchRange(o.notchRangeA)
     const notchRangeB = normalizeSeamNotchRange(o.notchRangeB)
+    const measureDirA = normalizeMeasureDir(o.measureDirA)
+    const measureDirB = normalizeMeasureDir(o.measureDirB)
     const curveIndicesA = Array.isArray(o.curveIndicesA)
       ? o.curveIndicesA.filter((n): n is number => typeof n === 'number')
       : []
@@ -406,6 +412,7 @@ function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
         pieceIdA: o.pieceIdA,
         curveIndicesA,
         clickedCurveA: o.clickedCurveA,
+        ...(measureDirA ? { measureDirA } : {}),
         pieceIdB,
         curveIndicesB: [],
         clickedCurveB: 0,
@@ -429,9 +436,11 @@ function normalizeSeamAssignments(raw: unknown): SeamAssignment[] {
       pieceIdA: o.pieceIdA,
       curveIndicesA,
       clickedCurveA: o.clickedCurveA,
+      ...(measureDirA ? { measureDirA } : {}),
       pieceIdB: o.pieceIdB,
       curveIndicesB: o.curveIndicesB.filter((n): n is number => typeof n === 'number'),
       clickedCurveB: o.clickedCurveB,
+      ...(measureDirB ? { measureDirB } : {}),
       ...(notchRangeA ? { notchRangeA } : {}),
       ...(notchRangeB ? { notchRangeB } : {}),
       ...(orderNumber !== undefined ? { orderNumber } : {}),
@@ -672,7 +681,7 @@ export function parseTrimTexProjectJson(json: string): ParseProjectResult {
     return Math.min(1.75, Math.max(0.75, n))
   }
   const uiTextScale = clampText(o.uiTextScale, 1)
-  const showPivotRotationUi = o.showPivotRotationUi === false ? false : true
+  const showPivotRotationUi = o.showPivotRotationUi === true
 
   let imageDigitizeSession: TrimTexProjectImageSession | null = null
   if (o.imageDigitizeSession !== undefined && o.imageDigitizeSession !== null) {

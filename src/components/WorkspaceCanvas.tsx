@@ -70,6 +70,9 @@ import {
   resolvedSeamAssignmentCurveIndices,
   edgeTotalLength,
   masterSoftVertexIndexSet,
+  seamStartFromClick,
+  measureArrowOnCurves,
+  effectiveSeamMeasureDirs,
 } from '../geometry/seamUtils'
 import { dragTriggersSeamAdjustmentCheck } from '../geometry/seamAdjustmentCheck'
 import { buildSeamPruefOverlayEntries } from '../geometry/seamPruefOverlayModel'
@@ -79,6 +82,7 @@ import {
   getDisplayedMasterCurves,
   getSharpMasterCurves,
 } from '../geometry/vertexMaster'
+import { faechernHitFromLocal, planFaechern, type FaechernHit } from '../geometry/faechern'
 import { vertexPositionOnClosedMaster, validateCornerRound, ROUND_CORNER_MIN_RADIUS_MM, ROUND_CORNER_MAX_RADIUS_MM, applyCornerRoundings } from '../geometry/cornerRounding'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
@@ -809,6 +813,8 @@ const SEAM_HIT_MM = 28
 /** Trefferradius in Bildschirm-px (Radius); wird über `worldHitRadiusFromScreenPx` in Welt-mm umgerechnet. */
 const VERTEX_HIT_RADIUS_PX = 8
 const VERTEX_HIT_SEAM_RADIUS_PX = 10
+/** Treffer um die Ecke, die als Startpunkt der Nahtmessung gilt. */
+const SEAM_START_HIT_PX = 16
 const POINT_ON_CURVE_HIT_RADIUS_PX = 10
 const POINT_INSERT_HIT_RADIUS_PX = 14
 /** Kerbe: gleiche Toleranz wie Hover zum Verschieben/Löschen. */
@@ -2363,6 +2369,96 @@ const PieceGroup = memo(function PieceGroup({
   )
 })
 
+function seamDisplayCurves(piece: PatternPiece, indices: number[]): Curve[] {
+  if (piece.seamAllowanceMm != null && piece.seamLine.length >= 3) {
+    const fromSeam = getSeamEdgeCurves(piece, indices)
+    if (fromSeam.length > 0) return fromSeam
+  }
+  const master = getCurvesForSeamEdge(piece)
+  return indices.map((ci) => master[ci]).filter((c): c is Curve => c != null)
+}
+
+function curvesToWorldPathD(piece: PatternPiece, curves: Curve[]): string {
+  let d = ''
+  for (const seg of curves) {
+    const ws = pieceLocalToWorld(seg.start, piece)
+    const we = pieceLocalToWorld(seg.end, piece)
+    if (seg.type === 'line') {
+      d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
+    } else {
+      const wc1 = pieceLocalToWorld(seg.cp1, piece)
+      const wc2 = pieceLocalToWorld(seg.cp2, piece)
+      d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
+    }
+  }
+  return d
+}
+
+/** Startpunkt und Pfeil in Messrichtung, in Weltkoordinaten. */
+function SeamRunArrowMark({ origin, tip, color }: { origin: Point; tip: Point; color: string }) {
+  const dx = tip.x - origin.x
+  const dy = tip.y - origin.y
+  const len = Math.hypot(dx, dy)
+  if (len < 0.4) return null
+  const ux = dx / len
+  const uy = dy / len
+  const head = Math.min(4.2, len * 0.42)
+  const wing = head * 0.62
+  const base = { x: tip.x - ux * head, y: tip.y - uy * head }
+  const w1 = { x: base.x + -uy * wing, y: base.y + ux * wing }
+  const w2 = { x: base.x - -uy * wing, y: base.y - ux * wing }
+  return (
+    <g pointerEvents="none">
+      <circle cx={origin.x} cy={origin.y} r={1.7} fill="#fff" stroke={color} strokeWidth={0.7} />
+      <line
+        x1={origin.x}
+        y1={origin.y}
+        x2={base.x}
+        y2={base.y}
+        stroke={color}
+        strokeWidth={0.9}
+        strokeLinecap="round"
+      />
+      <path d={`M ${w1.x} ${w1.y} L ${tip.x} ${tip.y} L ${w2.x} ${w2.y} Z`} fill={color} />
+    </g>
+  )
+}
+
+function SeamEdgeDirectionMark({
+  piece,
+  curveIndices,
+  measureDir,
+  color,
+  showIdleEnds,
+}: {
+  piece: PatternPiece
+  curveIndices: number[]
+  measureDir: 1 | -1 | null
+  color: string
+  /** Beide Ecken markieren, solange noch kein Startpunkt in Reichweite ist. */
+  showIdleEnds?: boolean
+}) {
+  const curves = seamDisplayCurves(piece, curveIndices)
+  if (curves.length === 0) return null
+  const first = pieceLocalToWorld(curves[0]!.start, piece)
+  const last = pieceLocalToWorld(curves[curves.length - 1]!.end, piece)
+  const arrow =
+    measureDir === 1 || measureDir === -1 ? measureArrowOnCurves(curves, measureDir, 16) : null
+  const origin = arrow ? pieceLocalToWorld(arrow.origin, piece) : null
+  const tip = arrow ? pieceLocalToWorld(arrow.tip, piece) : null
+  return (
+    <g pointerEvents="none">
+      {showIdleEnds && !arrow && (
+        <>
+          <circle cx={first.x} cy={first.y} r={1.35} fill="#fff" stroke={color} strokeWidth={0.45} />
+          <circle cx={last.x} cy={last.y} r={1.35} fill="#fff" stroke={color} strokeWidth={0.45} />
+        </>
+      )}
+      {origin && tip && <SeamRunArrowMark origin={origin} tip={tip} color={color} />}
+    </g>
+  )
+}
+
 export function WorkspaceCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -2409,6 +2505,9 @@ export function WorkspaceCanvas() {
     setHorizontalLevelPickingActive,
     pieceSymmetryState,
     setPieceSymmetryState,
+    faechernState,
+    setFaechernState,
+    applyFaechern,
     applyPieceSymmetry,
     clearPieceSymmetry,
     alignPieceEdgeHorizontal,
@@ -2560,6 +2659,9 @@ export function WorkspaceCanvas() {
       setHorizontalLevelPickingActive: s.setHorizontalLevelPickingActive,
       pieceSymmetryState: s.pieceSymmetryState,
       setPieceSymmetryState: s.setPieceSymmetryState,
+      faechernState: s.faechernState,
+      setFaechernState: s.setFaechernState,
+      applyFaechern: s.applyFaechern,
       applyPieceSymmetry: s.applyPieceSymmetry,
       clearPieceSymmetry: s.clearPieceSymmetry,
       alignPieceEdgeHorizontal: s.alignPieceEdgeHorizontal,
@@ -2697,6 +2799,7 @@ export function WorkspaceCanvas() {
   } | null>(null)
   /** Weltpunkt für Vorschau Linie 2. Spiegelpunkt (Symmetrie-Modus). */
   const [symmetryHoverWorld, setSymmetryHoverWorld] = useState<Point | null>(null)
+  const [faechernHover, setFaechernHover] = useState<FaechernHit | null>(null)
   /** Symmetrie: gerade Master-Kante als Achse (wie Wasserwaage). */
   const [hoveredSymmetryEdge, setHoveredSymmetryEdgeRaw] = useState<{
     pieceId: string
@@ -2930,6 +3033,7 @@ export function WorkspaceCanvas() {
   const [hoveredSeamForNahtzuordnung, setHoveredSeamForNahtzuordnungRaw] = useState<{
     pieceId: string
     curveIndices: number[]
+    measureDir?: 1 | -1
   } | null>(null)
   const setHoveredSeamForNahtzuordnung = useMemo(
     () => withStableSetState(setHoveredSeamForNahtzuordnungRaw, shallowEqualHover),
@@ -3463,6 +3567,17 @@ export function WorkspaceCanvas() {
   }, [pieceSymmetryState, selectedPieceIds, setPieceSymmetryState])
 
   useEffect(() => {
+    if (faechernState && (selectedPieceIds.length !== 1 || selectedPieceIds[0] !== faechernState.pieceId)) {
+      setFaechernState(null)
+      setFaechernHover(null)
+    }
+  }, [faechernState, selectedPieceIds, setFaechernState])
+
+  useEffect(() => {
+    if (!faechernState) setFaechernHover(null)
+  }, [faechernState])
+
+  useEffect(() => {
     if (!pieceSymmetryState) {
       setSymmetryHoverWorld(null)
       setHoveredSymmetryEdge(null)
@@ -3478,6 +3593,8 @@ export function WorkspaceCanvas() {
       setPieceSymmetryState(null)
       setSymmetryHoverWorld(null)
       setFlipByEdgeActive(false)
+      setFaechernState(null)
+      setFaechernHover(null)
       setNahtzuordnungMode('idle')
       setPendingNahtzuordnungFirst(null)
       cancelNahtTrimVertexPick()
@@ -3496,6 +3613,7 @@ export function WorkspaceCanvas() {
     setPendingNahtzugabeClick,
     setEdgeSeamPickingActive,
     setPieceSymmetryState,
+    setFaechernState,
     setNahtzuordnungMode,
     setPendingNahtzuordnungFirst,
     setRulerMode,
@@ -3613,6 +3731,10 @@ export function WorkspaceCanvas() {
           setHoveredSymmetryInternalIdx(null)
           setFlipByEdgeActive(false)
         }
+        if (faechernState) {
+          setFaechernState(null)
+          setFaechernHover(null)
+        }
         if (nahtTrimPickCutVertexActive) cancelNahtTrimVertexPick()
         return
       }
@@ -3646,6 +3768,44 @@ export function WorkspaceCanvas() {
       const layoutOnly = !contourEditEnabled
       if (!layoutOnly && imageScaleCalibration) {
         addImageScaleCalibrationPoint(world)
+        return
+      }
+      if (faechernState) {
+        if (!contourEditEnabled) {
+          setToastMessage('warn:Layout-Modus: Unten „Kontur bearbeiten“ einschalten.')
+          return
+        }
+        const piece = pieces.find((x) => x.id === faechernState.pieceId)
+        if (!piece || selectedPieceIds[0] !== faechernState.pieceId) {
+          setFaechernState(null)
+          return
+        }
+        const local = worldToPieceLocal(world, piece)
+        const hitMm = Math.max(4, 10 / Math.max(view.zoom, 0.2))
+        const hit = faechernHitFromLocal(getSharpMasterCurves(piece), local, hitMm)
+        if (!hit) {
+          setToastMessage('info:Den Punkt auf der Kontur des Teils anklicken.')
+          return
+        }
+        const far = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+          Math.hypot(a.x - b.x, a.y - b.y) >= 1.5
+        if (!faechernState.pivot) {
+          setFaechernState({ ...faechernState, pivot: hit })
+          return
+        }
+        if (!far(hit.point, faechernState.pivot.point)) {
+          setToastMessage('info:Die Öffnung nicht auf den Drehpunkt setzen.')
+          return
+        }
+        if (!faechernState.openingA) {
+          setFaechernState({ ...faechernState, openingA: hit })
+          return
+        }
+        if (!far(hit.point, faechernState.openingA.point)) {
+          setToastMessage('info:Die zweite Öffnung auf einen anderen Punkt setzen.')
+          return
+        }
+        applyFaechern(piece.id, faechernState.pivot, faechernState.openingA, hit)
         return
       }
       const sym = pieceSymmetryState
@@ -3855,7 +4015,13 @@ export function WorkspaceCanvas() {
       }
       if (!layoutOnly && (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second')) {
         // Nahtzuordnung: Klick immer auf seamLine (wenn vorhanden), sonst cutLine. cutLine-Indices für Logik.
-        let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
+        let best: {
+          pieceId: string
+          curveIndex: number
+          distance: number
+          piece: PatternPiece
+          local: Point
+        } | null = null
         for (const p of pieces) {
           if (!p.cutLine || p.cutLine.length === 0) continue
           // Master-Kontur für SeamAssignment-Indices: seamLine nur wenn Nahtzugabe aktiv (seamAllowanceMm != null),
@@ -3885,22 +4051,43 @@ export function WorkspaceCanvas() {
             cutCurveIndex = nearestCut.curveIndex
           }
           if (!best || nearest.distance < best.distance) {
-            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
+            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p, local }
           }
         }
         if (best) {
           const range = getCornerRange(best.piece, best.curveIndex)
+          const ctnStart = containerRef.current
+          const svgStart = svgRef.current
+          const startHitMm = ctnStart
+            ? clampPointHitWorldMm(
+                worldHitRadiusFromScreenPx(SEAM_START_HIT_PX * canvasVertexPointUiScale, view, svgStart, ctnStart),
+              )
+            : 8
+          const start = seamStartFromClick(best.piece, range, best.local)
+          if (!start || start.distanceMm > startHitMm) {
+            setToastMessage('info:Den Startpunkt anklicken: die Ecke, von der auf diesem Teil gemessen wird.')
+            return
+          }
           if (nahtzuordnungMode === 'first') {
-            setPendingNahtzuordnungFirst({ pieceId: best.pieceId, curveIndices: range, clickedCurve: best.curveIndex })
+            setPendingNahtzuordnungFirst({
+              pieceId: best.pieceId,
+              curveIndices: range,
+              clickedCurve: best.curveIndex,
+              measureDir: start.measureDir,
+            })
             setNahtzuordnungMode('second')
-          } else if (pendingNahtzuordnungFirst && best.pieceId !== pendingNahtzuordnungFirst.pieceId) {
+          } else if (pendingNahtzuordnungFirst && best.pieceId === pendingNahtzuordnungFirst.pieceId) {
+            setToastMessage('info:Den Startpunkt auf dem anderen Teil anklicken.')
+          } else if (pendingNahtzuordnungFirst) {
             addSeamAssignment(
               pendingNahtzuordnungFirst.pieceId,
               pendingNahtzuordnungFirst.curveIndices,
               pendingNahtzuordnungFirst.clickedCurve,
+              pendingNahtzuordnungFirst.measureDir,
               best.pieceId,
               range,
-              best.curveIndex
+              best.curveIndex,
+              start.measureDir,
             )
           }
           return
@@ -5142,6 +5329,7 @@ export function WorkspaceCanvas() {
       tool,
       view.panX,
       view.panY,
+      view.zoom,
       pieces,
       selectedPieceIds,
       imageDigitizeSession,
@@ -5225,6 +5413,9 @@ export function WorkspaceCanvas() {
       addImageScaleCalibrationPoint,
       lineLengthEditor,
       symmetryHoverWorld,
+      faechernState,
+      setFaechernState,
+      applyFaechern,
     ]
   )
 
@@ -5246,6 +5437,7 @@ export function WorkspaceCanvas() {
       edgeSeamPickingActive,
       horizontalLevelPickingActive,
       pieceSymmetryState,
+      faechernActive: faechernState != null,
       showPivotRotationUi,
       performanceMode,
     })
@@ -5261,6 +5453,11 @@ export function WorkspaceCanvas() {
       const hoverVertexSeamHitMm = ctnM
         ? clampPointHitWorldMm(
             worldHitRadiusFromScreenPx(VERTEX_HIT_SEAM_RADIUS_PX * canvasVertexPointUiScale, view, svgM, ctnM),
+          )
+        : 8
+      const seamStartHitMm = ctnM
+        ? clampPointHitWorldMm(
+            worldHitRadiusFromScreenPx(SEAM_START_HIT_PX * canvasVertexPointUiScale, view, svgM, ctnM),
           )
         : 8
       const hoverCurveMidHitMm = ctnM
@@ -5368,7 +5565,13 @@ export function WorkspaceCanvas() {
         setHoveredSeamForNahtzuordnung(null)
       } else if (nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') {
         const world = worldImg
-        let best: { pieceId: string; curveIndex: number; distance: number; piece: PatternPiece } | null = null
+        let best: {
+          pieceId: string
+          curveIndex: number
+          distance: number
+          piece: PatternPiece
+          local: Point
+        } | null = null
         for (const p of pieces) {
           if (!p.cutLine?.length) continue
           const local = worldToPieceLocal(world, p)
@@ -5391,12 +5594,18 @@ export function WorkspaceCanvas() {
             cutCurveIndex = nearestCut.curveIndex
           }
           if (!best || nearest.distance < best.distance) {
-            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p }
+            best = { pieceId: p.id, curveIndex: cutCurveIndex, distance: nearest.distance, piece: p, local }
           }
         }
         if (best) {
           const range = getCornerRange(best.piece, best.curveIndex)
-          setHoveredSeamForNahtzuordnung({ pieceId: best.pieceId, curveIndices: range })
+          const start = seamStartFromClick(best.piece, range, best.local)
+          const near = start != null && start.distanceMm <= seamStartHitMm
+          setHoveredSeamForNahtzuordnung({
+            pieceId: best.pieceId,
+            curveIndices: range,
+            ...(near && start ? { measureDir: start.measureDir } : {}),
+          })
         } else {
           setHoveredSeamForNahtzuordnung(null)
         }
@@ -6148,6 +6357,16 @@ export function WorkspaceCanvas() {
       } else if (!(lineLengthEditor?.mode === 'draw' && lineLengthEditor.drawTarget === 'symmetryAxis')) {
         setSymmetryHoverWorld(null)
       }
+      if (faechernState) {
+        const piece = pieces.find((p) => p.id === faechernState.pieceId)
+        if (piece) {
+          const local = worldToPieceLocal(worldSym, piece)
+          const hitMm = Math.max(4, 10 / Math.max(view.zoom, 0.2))
+          setFaechernHover(faechernHitFromLocal(getSharpMasterCurves(piece), local, hitMm))
+        } else {
+          setFaechernHover(null)
+        }
+      }
 
       if (dragging?.kind === 'workspaceNote') {
         const world = toWorld(e.clientX, e.clientY)
@@ -6531,6 +6750,8 @@ export function WorkspaceCanvas() {
       horizontalLevelPickingActive,
       selectedPieceIds,
       pieceSymmetryState,
+      faechernState,
+      setFaechernHover,
       setSymmetryHoverWorld,
       setHoveredSymmetryEdge,
       setHoveredSymmetryInternalIdx,
@@ -7010,6 +7231,7 @@ export function WorkspaceCanvas() {
           edgeAllowancePopover ||
           horizontalLevelPickingActive ||
           pieceSymmetryState ||
+          faechernState ||
           nahtTrimPickCutVertexActive)
       ) {
         e.preventDefault()
@@ -7023,6 +7245,8 @@ export function WorkspaceCanvas() {
         setHoveredSymmetryEdge(null)
         setHoveredSymmetryInternalIdx(null)
         setFlipByEdgeActive(false)
+        setFaechernState(null)
+        setFaechernHover(null)
         cancelNahtTrimVertexPick()
         return
       }
@@ -10271,38 +10495,59 @@ export function WorkspaceCanvas() {
               />
             )
           })()}
-          {(nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') && hoveredSeamForNahtzuordnung && (() => {
+          {(nahtzuordnungMode === 'first' || nahtzuordnungMode === 'second') &&
+            hoveredSeamForNahtzuordnung &&
+            hoveredSeamForNahtzuordnung.pieceId !== pendingNahtzuordnungFirst?.pieceId &&
+            (() => {
             const piece = pieces.find((p) => p.id === hoveredSeamForNahtzuordnung.pieceId)
             if (!piece?.cutLine?.length) return null
             const indices = hoveredSeamForNahtzuordnung.curveIndices
-            const master = getCurvesForSeamEdge(piece)
-            const curves = piece.seamAllowanceMm != null && piece.seamLine.length >= 3
-              ? getSeamEdgeCurves(piece, indices)
-              : indices.map((ci) => master[ci]).filter(Boolean)
-            let d = ''
-            for (const seg of curves) {
-              if (!seg) continue
-              const ws = pieceLocalToWorld(seg.start, piece)
-              const we = pieceLocalToWorld(seg.end, piece)
-              if (seg.type === 'line') {
-                d += `M ${ws.x} ${ws.y} L ${we.x} ${we.y} `
-              } else {
-                const wc1 = pieceLocalToWorld(seg.cp1, piece)
-                const wc2 = pieceLocalToWorld(seg.cp2, piece)
-                d += `M ${ws.x} ${ws.y} C ${wc1.x} ${wc1.y} ${wc2.x} ${wc2.y} ${we.x} ${we.y} `
-              }
-            }
+            const curves = seamDisplayCurves(piece, indices)
+            const d = curvesToWorldPathD(piece, curves)
             if (!d) return null
             return (
-              <path
-                key="nahtzuordnung-hover"
-                d={d}
-                fill="none"
-                stroke={T.seamAssignment.hoverStroke}
-                strokeWidth={T.seamAssignment.hoverWidth}
-                strokeOpacity={0.9}
-                pointerEvents="none"
-              />
+              <g key="nahtzuordnung-hover">
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={T.seamAssignment.hoverStroke}
+                  strokeWidth={T.seamAssignment.hoverWidth}
+                  strokeOpacity={0.9}
+                  pointerEvents="none"
+                />
+                <SeamEdgeDirectionMark
+                  piece={piece}
+                  curveIndices={indices}
+                  measureDir={hoveredSeamForNahtzuordnung.measureDir ?? null}
+                  color={T.seamAssignment.hoverStroke}
+                  showIdleEnds
+                />
+              </g>
+            )
+          })()}
+          {nahtzuordnungMode === 'second' && pendingNahtzuordnungFirst && (() => {
+            const piece = pieces.find((p) => p.id === pendingNahtzuordnungFirst.pieceId)
+            if (!piece?.cutLine?.length) return null
+            const indices = pendingNahtzuordnungFirst.curveIndices
+            const d = curvesToWorldPathD(piece, seamDisplayCurves(piece, indices))
+            if (!d) return null
+            return (
+              <g key="nahtzuordnung-pending">
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={T.seamAssignment.hoverStroke}
+                  strokeWidth={T.seamAssignment.hoverWidth}
+                  strokeOpacity={0.9}
+                  pointerEvents="none"
+                />
+                <SeamEdgeDirectionMark
+                  piece={piece}
+                  curveIndices={indices}
+                  measureDir={pendingNahtzuordnungFirst.measureDir}
+                  color={T.seamAssignment.hoverStroke}
+                />
+              </g>
             )
           })()}
           {edgeSeamPickingActive && hoveredEdgePicking && (() => {
@@ -10515,6 +10760,60 @@ export function WorkspaceCanvas() {
                 />
               )
             })()}
+          {faechernState && (() => {
+            const piece = pieces.find((p) => p.id === faechernState.pieceId)
+            if (!piece) return null
+            const w = (p: { x: number; y: number }) => pieceLocalToWorld(p, piece)
+            const line = (a: { x: number; y: number }, b: { x: number; y: number }, key: string) => {
+              const wa = w(a)
+              const wb = w(b)
+              return (
+                <line
+                  key={key}
+                  x1={wa.x}
+                  y1={wa.y}
+                  x2={wb.x}
+                  y2={wb.y}
+                  stroke="#dc2626"
+                  strokeWidth={0.7}
+                  pointerEvents="none"
+                />
+              )
+            }
+            const dots: { x: number; y: number }[] = []
+            if (faechernState.pivot) dots.push(faechernState.pivot.point)
+            if (faechernState.openingA) dots.push(faechernState.openingA.point)
+            if (faechernHover) dots.push(faechernHover.point)
+            let wedgeD = ''
+            if (faechernState.pivot && faechernState.openingA && faechernHover) {
+              const plan = planFaechern(
+                getSharpMasterCurves(piece),
+                faechernState.pivot,
+                faechernState.openingA,
+                faechernHover,
+              )
+              if (plan.ok && plan.plan.wedge.length >= 3) {
+                wedgeD = plan.plan.wedge
+                  .map((p, i) => {
+                    const q = w(p)
+                    return `${i === 0 ? 'M' : 'L'} ${q.x} ${q.y}`
+                  })
+                  .join(' ')
+                wedgeD += ' Z'
+              }
+            }
+            return (
+              <g key="faechern-preview" pointerEvents="none">
+                {wedgeD && <path d={wedgeD} fill="rgba(220,38,38,0.28)" stroke="#dc2626" strokeWidth={0.4} />}
+                {faechernState.pivot && faechernState.openingA && line(faechernState.pivot.point, faechernState.openingA.point, 'faechern-a')}
+                {faechernState.pivot && faechernHover && line(faechernState.pivot.point, faechernHover.point, 'faechern-b')}
+                {dots.map((p, i) => {
+                  const q = w(p)
+                  return <circle key={`faechern-dot-${i}`} cx={q.x} cy={q.y} r={1.6} fill={i === 0 ? '#111' : '#16a34a'} />
+                })}
+              </g>
+            )
+          })()}
           {pieceSymmetryState && selectedPieceIds[0] === pieceSymmetryState.pieceId && (() => {
             const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
             if (!piece || !pieceSymmetryState.axisA) return null
@@ -10846,6 +11145,25 @@ export function WorkspaceCanvas() {
                     Leertaste: Nummer, Nahtart, Länge angleichen · Klick auf Δ: Länge angleichen ·
                     Backspace/Entf: Zuordnung löschen
                   </title>
+                  {(() => {
+                    const dirs = effectiveSeamMeasureDirs(a, pieceA, pieceB)
+                    return (
+                      <>
+                        <SeamEdgeDirectionMark
+                          piece={pieceA}
+                          curveIndices={resolvedSeamAssignmentCurveIndices(pieceA, a.curveIndicesA)}
+                          measureDir={dirs.dirA}
+                          color={T.seamAssignment.connector}
+                        />
+                        <SeamEdgeDirectionMark
+                          piece={pieceB}
+                          curveIndices={resolvedSeamAssignmentCurveIndices(pieceB, a.curveIndicesB)}
+                          measureDir={dirs.dirB}
+                          color={T.seamAssignment.connector}
+                        />
+                      </>
+                    )
+                  })()}
                   {/* Unsichtbare breite Linie für Hover-/Trefferfläche */}
                   <line x1={midA.x} y1={midA.y} x2={midB.x} y2={midB.y} stroke="transparent" strokeWidth={14} />
                   <line
@@ -12303,6 +12621,54 @@ export function WorkspaceCanvas() {
               border: 'none',
               color: '#fff',
               padding: '2px 10px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontSize: fs(12),
+            }}
+          >
+            Abbrechen
+          </button>
+        </div>
+      )}
+      {faechernState && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 48,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#7f1d1d',
+            color: '#fff',
+            padding: '6px 18px',
+            borderRadius: 6,
+            fontSize: fs(13),
+            fontFamily: 'sans-serif',
+            zIndex: 3000,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            maxWidth: 'min(96vw, 760px)',
+          }}
+        >
+          <span>
+            {!faechernState.pivot
+              ? 'Fächern: Drehpunkt anklicken. Dort laufen die beiden Linien zusammen.'
+              : !faechernState.openingA
+                ? 'Erste Öffnung anklicken. Diese Kante bleibt liegen.'
+                : 'Zweite Öffnung anklicken. Diese Seite dreht zu, der Bereich dazwischen fällt weg.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setFaechernState(null)
+              setFaechernHover(null)
+            }}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: '1px solid rgba(255,255,255,0.35)',
+              color: '#fff',
+              padding: '4px 10px',
               borderRadius: 4,
               cursor: 'pointer',
               fontSize: fs(12),

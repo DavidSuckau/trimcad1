@@ -11,6 +11,8 @@ import type {
   Notch,
   Drill,
   SeamAssignment,
+  SeamMeasureDir,
+  PendingSeamAssignmentPick,
   SeamAssignmentKindId,
   DigitizeNode,
   DigitizeState,
@@ -53,7 +55,7 @@ import {
   getCurvesForSeamEdge,
   resolvedSeamAssignmentCurveIndices,
   bestSeamSubSegmentPairing,
-  seamComparisonReverseB,
+  seamAssignmentMeasureReverse,
   buildNotchTargetArcPositionsFromSubLengths,
   materializeNotchAtEdgeArcLengthExact,
   deriveNotchRoleRangeOnEdge,
@@ -89,9 +91,11 @@ import {
   countEasePairsForAssignment,
   EASE_DEFAULT_SPACING_MM,
   suggestEaseRelativeTs,
+  stripAllEaseNotchesLinkedToAssignments,
   stripEaseNotchesForAssignment,
   type EaseSuggestion,
 } from '../geometry/easeNotch'
+import { applyFaechernToPiece, type FaechernHit, type FaechernState } from '../geometry/faechern'
 import { isEaseNotch } from '../geometry/notchPurpose'
 import {
   remapInternalSeamAssignmentsAfterInternalLineRemove,
@@ -545,9 +549,14 @@ type Store = {
   horizontalLevelPickingActive: boolean
   /** Zwei Punkte Spiegelachse, dann Seitenwahl für symmetrische Kontur. */
   pieceSymmetryState: PieceSymmetryUiState
+  /**
+   * Fächern: Drehpunkt, dann erste Öffnung (bleibt), dann zweite Öffnung (dreht zu).
+   * Der Bereich zwischen den Linien wird entfernt, die Kontur schließt sich.
+   */
+  faechernState: FaechernState | null
   /** Nahtzuordnung: zwei Teile oder Einzelnaht auf interner Linie */
   nahtzuordnungMode: 'idle' | 'first' | 'second' | 'internal'
-  pendingNahtzuordnungFirst: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null
+  pendingNahtzuordnungFirst: PendingSeamAssignmentPick | null
   /** Manuell „Naht trimmen“: nach Menüwahl Ecke an der Schnittkontur anklicken. */
   nahtTrimPickCutVertexActive: boolean
   /** Modus für manuellen Eck-Trim auf der Außenkontur. */
@@ -683,8 +692,11 @@ type Store = {
   setEdgeSeamPickingActive: (v: boolean) => void
   setHorizontalLevelPickingActive: (v: boolean) => void
   setPieceSymmetryState: (v: PieceSymmetryUiState) => void
+  setFaechernState: (v: FaechernState | null) => void
+  /** Keil zwischen Drehpunkt und zwei Öffnungen entfernen und die zweite Seite zudrehen. */
+  applyFaechern: (pieceId: string, pivot: FaechernHit, openingA: FaechernHit, openingB: FaechernHit) => void
   setNahtzuordnungMode: (v: 'idle' | 'first' | 'second' | 'internal') => void
-  setPendingNahtzuordnungFirst: (v: { pieceId: string; curveIndices: number[]; clickedCurve: number } | null) => void
+  setPendingNahtzuordnungFirst: (v: PendingSeamAssignmentPick | null) => void
   setShowSettingsModal: (v: boolean) => void
   setShowStuecklisteModal: (v: boolean) => void
   setShowMaterialCatalogModal: (v: boolean) => void
@@ -726,7 +738,16 @@ type Store = {
   setToastMessage: (v: string | null) => void
   updateNotchSetting: (index: number, upd: Partial<NotchSetting>) => void
   setActiveNotchPresetIndex: (index: number) => void
-  addSeamAssignment: (pieceIdA: string, curveIndicesA: number[], clickedCurveA: number, pieceIdB: string, curveIndicesB: number[], clickedCurveB: number) => void
+  addSeamAssignment: (
+    pieceIdA: string,
+    curveIndicesA: number[],
+    clickedCurveA: number,
+    measureDirA: SeamMeasureDir,
+    pieceIdB: string,
+    curveIndicesB: number[],
+    clickedCurveB: number,
+    measureDirB: SeamMeasureDir,
+  ) => void
   /** Einzelnaht auf interner Linie (ein Teil, kein Partner). */
   addInternalSeamAssignment: (
     pieceId: string,
@@ -1179,6 +1200,7 @@ export const useStore = create<Store>()(
   edgeSeamPickingActive: false,
   horizontalLevelPickingActive: false,
   pieceSymmetryState: null,
+  faechernState: null,
   nahtzuordnungMode: 'idle',
   pendingNahtzuordnungFirst: null,
   nahtTrimPickCutVertexActive: false,
@@ -1208,7 +1230,7 @@ export const useStore = create<Store>()(
   canvasDigitizeUiScale: 1,
   canvasVertexPointUiScale: 1,
   uiTextScale: 1,
-  showPivotRotationUi: true,
+  showPivotRotationUi: false,
   toastMessage: null,
   seamAdjustmentDialog: null,
   seamAdjustmentHoverPieceId: null,
@@ -1817,6 +1839,7 @@ export const useStore = create<Store>()(
   setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
   setHorizontalLevelPickingActive: (v) => set({ horizontalLevelPickingActive: v }),
   setPieceSymmetryState: (v) => set({ pieceSymmetryState: v }),
+  setFaechernState: (v) => set({ faechernState: v }),
   setNahtzuordnungMode: (v) =>
     set({
       nahtzuordnungMode: v,
@@ -1969,7 +1992,7 @@ export const useStore = create<Store>()(
       const clamped = Math.max(0, Math.min(max, Math.floor(index)))
       return { activeNotchPresetIndex: clamped }
     }),
-  addSeamAssignment: (pieceIdA, curveIndicesA, clickedCurveA, pieceIdB, curveIndicesB, clickedCurveB) => {
+  addSeamAssignment: (pieceIdA, curveIndicesA, clickedCurveA, measureDirA, pieceIdB, curveIndicesB, clickedCurveB, measureDirB) => {
     const newId = generateId()
     const afterGet = get()
     const pieceA0 = afterGet.workspace.pieces.find((p) => p.id === pieceIdA)
@@ -1990,9 +2013,11 @@ export const useStore = create<Store>()(
             pieceIdA,
             curveIndicesA: normA,
             clickedCurveA,
+            measureDirA,
             pieceIdB,
             curveIndicesB: normB,
             clickedCurveB,
+            measureDirB,
             notchRangeA,
             notchRangeB,
           },
@@ -2472,7 +2497,8 @@ export const useStore = create<Store>()(
 
     const refSubs = getSubSegments(refPiece, refIndices, undefined, refRange)
     const tgtSubs = getSubSegments(tgtPiece, tgtIndices, undefined, tgtRange)
-    const reverseOrientation = seamComparisonReverseB(
+    const reverseOrientation = seamAssignmentMeasureReverse(
+      a,
       refPiece,
       refIndices,
       refRange,
@@ -4884,6 +4910,39 @@ export const useStore = create<Store>()(
       }
     }),
 
+  applyFaechern: (pieceId, pivot, openingA, openingB) =>
+    set((s) => {
+      const facingBlock = facingGeometryEditBlocked(s.workspace.pieces, pieceId)
+      if (facingBlock) return facingBlock
+      const piece = s.workspace.pieces.find((p) => p.id === pieceId)
+      if (!piece) return { toastMessage: 'warn:Teil nicht gefunden.' }
+      const r = applyFaechernToPiece(piece, pivot, openingA, openingB)
+      if (!r.ok) return { toastMessage: `warn:${r.message}` }
+      const removedIds = new Set(
+        (s.workspace.seamAssignments ?? [])
+          .filter((a) => a.pieceIdA === pieceId || a.pieceIdB === pieceId)
+          .map((a) => a.id),
+      )
+      let pieces = s.workspace.pieces.map((p) => (p.id === pieceId ? r.piece : p))
+      pieces = stripAllEaseNotchesLinkedToAssignments(pieces, removedIds)
+      const ack = { ...s.seamAdjustmentAcknowledged }
+      for (const id of removedIds) delete ack[id]
+      const droppedLinks = removedIds.size > 0
+      return {
+        workspace: {
+          ...s.workspace,
+          pieces: syncLinkedPiecesFromParents(pieces),
+          seamAssignments: (s.workspace.seamAssignments ?? []).filter((a) => !removedIds.has(a.id)),
+          profileAssignments: (s.workspace.profileAssignments ?? []).filter((a) => a.pieceId !== pieceId),
+        },
+        seamAdjustmentAcknowledged: ack,
+        faechernState: null,
+        toastMessage: droppedLinks
+          ? 'success:Bereich entfernt und Öffnung geschlossen. Nahtzuordnungen an diesem Teil wurden gelöst.'
+          : 'success:Bereich entfernt und Öffnung geschlossen.',
+      }
+    }),
+
   clearPieceSymmetry: (pieceId) => {
     const piece = get().workspace.pieces.find((p) => p.id === pieceId)
     if (!piece) {
@@ -5098,6 +5157,7 @@ export const useStore = create<Store>()(
       edgeSeamPickingActive: false,
       horizontalLevelPickingActive: false,
       pieceSymmetryState: null,
+      faechernState: null,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       nahtTrimPickCutVertexActive: false,
@@ -5382,7 +5442,7 @@ export const useStore = create<Store>()(
         typeof project.canvasVertexPointUiScale === 'number' ? project.canvasVertexPointUiScale : 1,
       ),
       uiTextScale: clampUiTextScale(typeof project.uiTextScale === 'number' ? project.uiTextScale : 1),
-      showPivotRotationUi: project.showPivotRotationUi === false ? false : true,
+      showPivotRotationUi: project.showPivotRotationUi === true,
       notchSettings,
       activeNotchPresetIndex: 0,
       imageDigitizeSession: project.imageDigitizeSession,
@@ -5399,6 +5459,7 @@ export const useStore = create<Store>()(
       edgeSeamPickingActive: false,
       horizontalLevelPickingActive: false,
       pieceSymmetryState: null,
+      faechernState: null,
       nahtzuordnungMode: 'idle',
       pendingNahtzuordnungFirst: null,
       nahtTrimPickCutVertexActive: false,

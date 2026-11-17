@@ -16,7 +16,7 @@ import {
   getNotchesOnEdge,
   materializeNotchAtEdgeArcLength,
   resolvedSeamAssignmentCurveIndices,
-  seamComparisonReverseB,
+  seamAssignmentMeasureReverse,
 } from './seamUtils'
 
 export { isEaseNotch, isPassNotch } from './notchPurpose'
@@ -92,7 +92,15 @@ export function resolveEaseReverseB(
 ): boolean {
   const idxA = resolvedSeamAssignmentCurveIndices(pieceA, assignment.curveIndicesA)
   const idxB = resolvedSeamAssignmentCurveIndices(pieceB, assignment.curveIndicesB)
-  return seamComparisonReverseB(pieceA, idxA, assignment.notchRangeA, pieceB, idxB, assignment.notchRangeB)
+  return seamAssignmentMeasureReverse(
+    assignment,
+    pieceA,
+    idxA,
+    assignment.notchRangeA,
+    pieceB,
+    idxB,
+    assignment.notchRangeB,
+  )
 }
 
 /**

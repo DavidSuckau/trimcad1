@@ -19,6 +19,7 @@ export type HoverHitContext = {
   edgeSeamPickingActive: boolean
   horizontalLevelPickingActive: boolean
   pieceSymmetryState: unknown | null
+  faechernActive: boolean
   showPivotRotationUi: boolean
   performanceMode: boolean
 }
@@ -52,6 +53,11 @@ export function hoverHitKindsAllowed(ctx: HoverHitContext): Set<HoverHitKind> {
 
   if (ctx.pieceSymmetryState != null) {
     kinds.add('symmetry')
+    kinds.add('piece')
+    return kinds
+  }
+
+  if (ctx.faechernActive) {
     kinds.add('piece')
     return kinds
   }

@@ -6,7 +6,7 @@ import {
   getNotchesOnEdgeInRange,
   getSubSegments,
   resolvedSeamAssignmentCurveIndices,
-  seamComparisonReverseB,
+  seamAssignmentMeasureReverse,
   type SeamSubSegmentPairing,
 } from './seamUtils'
 
@@ -56,7 +56,15 @@ export function seamAdjustmentFingerprint(
     subsB: subsB.map((s) => roundMm(s.length)),
     arcsA: notchesA.map((n) => roundMm(n.arcLength)),
     arcsB: notchesB.map((n) => roundMm(n.arcLength)),
-    rev: seamComparisonReverseB(pieceA, idxA, assignment.notchRangeA, pieceB, idxB, assignment.notchRangeB),
+    rev: seamAssignmentMeasureReverse(
+      assignment,
+      pieceA,
+      idxA,
+      assignment.notchRangeA,
+      pieceB,
+      idxB,
+      assignment.notchRangeB,
+    ),
   })
 }
 
@@ -111,7 +119,15 @@ export function evaluateSeamAdjustment(
   const pairing = bestSeamSubSegmentPairing(
     subsA,
     subsB,
-    seamComparisonReverseB(pieceA, idxA, assignment.notchRangeA, pieceB, idxB, assignment.notchRangeB),
+    seamAssignmentMeasureReverse(
+      assignment,
+      pieceA,
+      idxA,
+      assignment.notchRangeA,
+      pieceB,
+      idxB,
+      assignment.notchRangeB,
+    ),
   )
 
   if (!pairing || subsA.length < 2) {
@@ -183,7 +199,15 @@ export function getSeamAssignmentDisplayMetrics(
   const subPairing = bestSeamSubSegmentPairing(
     subsA,
     subsB,
-    seamComparisonReverseB(pieceA, idxA, assignment.notchRangeA, pieceB, idxB, assignment.notchRangeB),
+    seamAssignmentMeasureReverse(
+      assignment,
+      pieceA,
+      idxA,
+      assignment.notchRangeA,
+      pieceB,
+      idxB,
+      assignment.notchRangeB,
+    ),
   )
 
   let subDiffs: { lenA: number; lenB: number; midA: Point; midB: Point }[] | null = null

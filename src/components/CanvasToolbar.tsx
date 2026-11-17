@@ -46,6 +46,9 @@ export const CanvasToolbar: React.FC = () => {
     setHorizontalLevelPickingActive,
     pieceSymmetryState,
     setPieceSymmetryState,
+    faechernState,
+    setFaechernState,
+    setNahtzuordnungMode,
     selectedPieceIds,
   } = useStore(
     useShallow((s) => ({
@@ -63,6 +66,9 @@ export const CanvasToolbar: React.FC = () => {
       setHorizontalLevelPickingActive: s.setHorizontalLevelPickingActive,
       pieceSymmetryState: s.pieceSymmetryState,
       setPieceSymmetryState: s.setPieceSymmetryState,
+      faechernState: s.faechernState,
+      setFaechernState: s.setFaechernState,
+      setNahtzuordnungMode: s.setNahtzuordnungMode,
       selectedPieceIds: s.selectedPieceIds,
     })),
   )
@@ -84,6 +90,7 @@ export const CanvasToolbar: React.FC = () => {
       setEdgeSeamPickingActive(false)
       setHorizontalLevelPickingActive(false)
       setPieceSymmetryState(null)
+      setFaechernState(null)
       setPendingNahtzugabeClick(true)
     }
   }
@@ -97,6 +104,7 @@ export const CanvasToolbar: React.FC = () => {
       setPendingNahtzugabeClick(false)
       setHorizontalLevelPickingActive(false)
       setPieceSymmetryState(null)
+      setFaechernState(null)
       setEdgeSeamPickingActive(true)
     }
   }
@@ -108,6 +116,7 @@ export const CanvasToolbar: React.FC = () => {
     if (next) {
       setHorizontalLevelPickingActive(false)
       setPieceSymmetryState(null)
+      setFaechernState(null)
     }
   }
 
@@ -122,6 +131,7 @@ export const CanvasToolbar: React.FC = () => {
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
       setPieceSymmetryState(null)
+      setFaechernState(null)
       setHorizontalLevelPickingActive(true)
     }
   }
@@ -137,7 +147,25 @@ export const CanvasToolbar: React.FC = () => {
       setPendingNahtzugabeClick(false)
       setEdgeSeamPickingActive(false)
       setHorizontalLevelPickingActive(false)
+      setFaechernState(null)
       setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'chooseMethod' })
+    }
+  }
+
+  const handleFaechern = () => {
+    if (selectedPieceIds.length !== 1) return
+    if (!guardContourEdit()) return
+    if (faechernState) {
+      setFaechernState(null)
+    } else {
+      setTool('select')
+      setRulerMode(false)
+      setPendingNahtzugabeClick(false)
+      setEdgeSeamPickingActive(false)
+      setHorizontalLevelPickingActive(false)
+      setPieceSymmetryState(null)
+      setNahtzuordnungMode('idle')
+      setFaechernState({ pieceId: selectedPieceIds[0], pivot: null, openingA: null })
     }
   }
 
@@ -147,7 +175,8 @@ export const CanvasToolbar: React.FC = () => {
     !pendingNahtzugabeClick &&
     !edgeSeamPickingActive &&
     !horizontalLevelPickingActive &&
-    !pieceSymmetryState
+    !pieceSymmetryState &&
+    !faechernState
   const dim = layoutOnly ? ' canvas-tool-btn--layout-only' : ''
 
   return (
@@ -399,6 +428,20 @@ export const CanvasToolbar: React.FC = () => {
           <circle cx="10" cy="10.5" r="2.2" fill="currentColor" stroke="none" opacity={0.35} />
           <circle cx="10" cy="10.5" r="1.1" fill="currentColor" stroke="none" />
           <path d="M3.5 5h13" opacity={0.55} />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`canvas-tool-btn${faechernState ? ' active' : ''}${dim}`}
+        title="Fächern: Bereich zwischen zwei Linien entfernen und die Öffnung schließen"
+        disabled={selectedPieceIds.length !== 1}
+        onClick={handleFaechern}
+      >
+        <svg {...iconProps}>
+          <circle cx="15.2" cy="10" r="1.35" fill="currentColor" stroke="none" />
+          <path d="M15.2 10L4.2 5.2" />
+          <path d="M15.2 10L4.2 14.8" />
+          <path d="M15.2 10L4.2 6.6L4.2 13.4Z" fill="currentColor" stroke="none" opacity={0.28} />
         </svg>
       </button>
       <button

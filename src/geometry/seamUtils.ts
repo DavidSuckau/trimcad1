@@ -1,4 +1,4 @@
-import type { PatternPiece, Point, Curve, Notch } from '../types/model'
+import type { PatternPiece, Point, Curve, Notch, SeamAssignment, SeamMeasureDir } from '../types/model'
 import { curveSegmentArcLength, bezierAt, pointAtPathLength, pathLengthAt, totalPathLength, outwardNormalAngleAt, signedAreaCurves } from './curveToPath'
 import { nearestCurveIndexAndPoint } from './nearestOnCurve'
 import { getNotchCurveIndexAndT, getNotchPositionAndAngle, extractCurvePortion, materializeNotchAnchorsOnCutLine } from './notchOnCurve'
@@ -798,6 +798,111 @@ export function seamComparisonReverseB(
   const dirB = seamRangeWalkSign(pieceB, curveIndicesB, rangeB)
   if (dirA != null || dirB != null) return (dirA ?? 1) !== (dirB ?? 1)
   return contourWindingSign(pieceA) !== contourWindingSign(pieceB)
+}
+
+function measureDirForPiece(
+  assignment: Pick<SeamAssignment, 'pieceIdA' | 'pieceIdB' | 'measureDirA' | 'measureDirB'>,
+  pieceId: string,
+): SeamMeasureDir | null {
+  if (pieceId === assignment.pieceIdA && (assignment.measureDirA === 1 || assignment.measureDirA === -1)) {
+    return assignment.measureDirA
+  }
+  if (pieceId === assignment.pieceIdB && (assignment.measureDirB === 1 || assignment.measureDirB === -1)) {
+    return assignment.measureDirB
+  }
+  return null
+}
+
+/**
+ * Ob die zweite Kante beim Vergleich umzukehren ist.
+ * Stehen auf beiden Seiten Startpunkte (`measureDir`), gilt diese Messrichtung.
+ * Sonst Nahtanfang/Nahtende bzw. der Umlaufsinn.
+ */
+export function seamAssignmentMeasureReverse(
+  assignment: Pick<SeamAssignment, 'pieceIdA' | 'pieceIdB' | 'measureDirA' | 'measureDirB'>,
+  pieceFirst: PatternPiece,
+  indicesFirst: number[],
+  rangeFirst: NotchRoleRange | null | undefined,
+  pieceSecond: PatternPiece,
+  indicesSecond: number[],
+  rangeSecond: NotchRoleRange | null | undefined,
+): boolean {
+  const d1 = measureDirForPiece(assignment, pieceFirst.id)
+  const d2 = measureDirForPiece(assignment, pieceSecond.id)
+  if (d1 != null && d2 != null) return d1 !== d2
+  return seamComparisonReverseB(pieceFirst, indicesFirst, rangeFirst, pieceSecond, indicesSecond, rangeSecond)
+}
+
+/**
+ * Anzuzeigende Messrichtung. Ohne gesetzte Startpunkte: A mit dem Kurvenindex,
+ * B dagegen, wenn der Vergleich B umkehrt.
+ */
+export function effectiveSeamMeasureDirs(
+  assignment: SeamAssignment,
+  pieceA: PatternPiece,
+  pieceB: PatternPiece,
+): { dirA: SeamMeasureDir; dirB: SeamMeasureDir } {
+  const dA = measureDirForPiece(assignment, pieceA.id)
+  const dB = measureDirForPiece(assignment, pieceB.id)
+  if (dA != null && dB != null) return { dirA: dA, dirB: dB }
+  const idxA = resolvedSeamAssignmentCurveIndices(pieceA, assignment.curveIndicesA)
+  const idxB = resolvedSeamAssignmentCurveIndices(pieceB, assignment.curveIndicesB)
+  const rev = seamComparisonReverseB(pieceA, idxA, assignment.notchRangeA, pieceB, idxB, assignment.notchRangeB)
+  return { dirA: dA ?? 1, dirB: dB ?? (rev ? -1 : 1) }
+}
+
+/**
+ * Startpunkt einer Eck-zu-Eck-Kante: der Endpunkt, der näher am Klick liegt.
+ * +1 = erster Eckpunkt (mit Kurvenindex), −1 = letzter Eckpunkt.
+ */
+export function seamStartFromClick(
+  piece: PatternPiece,
+  curveIndices: number[],
+  clickLocal: Point,
+): { measureDir: SeamMeasureDir; startVi: number; distanceMm: number } | null {
+  const curves = getCurvesForSeamEdge(piece)
+  const n = curves.length
+  if (n < 2 || curveIndices.length === 0) return null
+  const firstVi = curveIndices[0]!
+  const lastVi = (curveIndices[curveIndices.length - 1]! + 1) % n
+  if (firstVi === lastVi) return null
+  const p0 = vertexPositionOnClosedCurves(curves, firstVi)
+  const p1 = vertexPositionOnClosedCurves(curves, lastVi)
+  const d0 = Math.hypot(clickLocal.x - p0.x, clickLocal.y - p0.y)
+  const d1 = Math.hypot(clickLocal.x - p1.x, clickLocal.y - p1.y)
+  if (d0 <= d1) return { measureDir: 1, startVi: firstVi, distanceMm: d0 }
+  return { measureDir: -1, startVi: lastVi, distanceMm: d1 }
+}
+
+function reverseCurvesForMeasure(curves: Curve[]): Curve[] {
+  const out: Curve[] = []
+  for (let i = curves.length - 1; i >= 0; i--) {
+    const c = curves[i]!
+    if (c.type === 'line') {
+      out.push({ type: 'line', start: c.end, end: c.start })
+    } else {
+      out.push({ type: 'bezier', start: c.end, end: c.start, cp1: c.cp2, cp2: c.cp1 })
+    }
+  }
+  return out
+}
+
+/** Pfeil vom Startpunkt ein Stück entlang der Messrichtung (Teilkoordinaten). */
+export function measureArrowOnCurves(
+  curves: Curve[],
+  measureDir: SeamMeasureDir,
+  lengthMm = 16,
+): { origin: Point; tip: Point } | null {
+  if (curves.length === 0) return null
+  const directed = measureDir === -1 ? reverseCurvesForMeasure(curves) : curves
+  const total = totalPathLength(directed)
+  if (total < 0.5) return null
+  const origin = directed[0]!.start
+  const len = Math.min(Math.max(4, lengthMm), total * 0.45)
+  const at = pointAtPathLength(directed, Math.max(0.8, len))
+  if (!at) return null
+  if (Math.hypot(at.point.x - origin.x, at.point.y - origin.y) < 0.4) return null
+  return { origin, tip: at.point }
 }
 
 /**

@@ -65,7 +65,9 @@ function assignmentGeometryEqual(a: SeamAssignment, b: SeamAssignment): boolean 
     sameNumArr(a.curveIndicesA, b.curveIndicesA) &&
     sameNumArr(a.curveIndicesB, b.curveIndicesB) &&
     sameNotchRange(a.notchRangeA, b.notchRangeA) &&
-    sameNotchRange(a.notchRangeB, b.notchRangeB)
+    sameNotchRange(a.notchRangeB, b.notchRangeB) &&
+    a.measureDirA === b.measureDirA &&
+    a.measureDirB === b.measureDirB
   )
 }
 

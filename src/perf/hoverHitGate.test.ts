@@ -9,6 +9,7 @@ function ctx(over: Partial<HoverHitContext> = {}): HoverHitContext {
     edgeSeamPickingActive: false,
     horizontalLevelPickingActive: false,
     pieceSymmetryState: null,
+    faechernActive: false,
     showPivotRotationUi: false,
     performanceMode: false,
     ...over,

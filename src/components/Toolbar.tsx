@@ -131,6 +131,8 @@ export function Toolbar() {
     contourEditEnabled,
     pieceSymmetryState,
     setPieceSymmetryState,
+    faechernState,
+    setFaechernState,
   } = useStore(
     useShallow((s) => ({
       tool: s.tool,
@@ -194,6 +196,8 @@ export function Toolbar() {
       contourEditEnabled: s.contourEditEnabled,
       pieceSymmetryState: s.pieceSymmetryState,
       setPieceSymmetryState: s.setPieceSymmetryState,
+      faechernState: s.faechernState,
+      setFaechernState: s.setFaechernState,
     })),
   )
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
@@ -948,6 +952,37 @@ export function Toolbar() {
               <li>
                 <button
                   type="button"
+                  className={`menubar-dropdown-btn${faechernState ? ' active' : ''}`}
+                  disabled={selectedPieceIds.length !== 1}
+                  title="Bereich zwischen zwei Linien entfernen und die Öffnung um den Drehpunkt schließen"
+                  onClick={() => {
+                    if (selectedPieceIds.length !== 1) return
+                    if (!contourEditEnabled) {
+                      setToastMessage('warn:Layout-Modus: Unten „Kontur bearbeiten“ einschalten.')
+                      closeMenu()
+                      return
+                    }
+                    if (faechernState) {
+                      setFaechernState(null)
+                    } else {
+                      setTool('select')
+                      setRulerMode(false)
+                      setPendingNahtzugabeClick(false)
+                      setEdgeSeamPickingActive(false)
+                      setHorizontalLevelPickingActive(false)
+                      setPieceSymmetryState(null)
+                      setNahtzuordnungMode('idle')
+                      setFaechernState({ pieceId: selectedPieceIds[0], pivot: null, openingA: null })
+                    }
+                    closeMenu()
+                  }}
+                >
+                  Fächern
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
                   className={`menubar-dropdown-btn${pieceSymmetryState ? ' active' : ''}`}
                   disabled={selectedPieceIds.length !== 1}
                   onClick={() => {
@@ -965,6 +1000,7 @@ export function Toolbar() {
                       setPendingNahtzugabeClick(false)
                       setEdgeSeamPickingActive(false)
                       setHorizontalLevelPickingActive(false)
+                      setFaechernState(null)
                       setPieceSymmetryState({ pieceId: selectedPieceIds[0], phase: 'chooseMethod' })
                     }
                     closeMenu()
@@ -1352,9 +1388,9 @@ export function Toolbar() {
         {nahtzuordnungMode !== 'idle' && (
           <span className="nahtzuordnung-hint">
             {nahtzuordnungMode === 'first'
-              ? 'Erste Kante anklicken (Konturlinie eines Teils)'
+              ? 'Startpunkt auf dem ersten Teil anklicken (Ecke, von der gemessen wird)'
               : nahtzuordnungMode === 'second'
-                ? 'Zweite Kante anklicken (anderes Teil)'
+                ? 'Startpunkt auf dem zweiten Teil anklicken — der Pfeil zeigt die Messrichtung'
                 : 'Interne Linie anklicken (Saum, Deco, Steppung …)'}
             <button
               type="button"
