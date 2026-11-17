@@ -539,6 +539,8 @@ type Store = {
   rulerLine: { start: Point; end: Point } | null
   pendingNahtzugabeClick: boolean
   nahtzugabeDialogPieceId: string | null
+  /** Millimeter im offenen Nahtzugabe-Dialog, für die blasse Schnittvorschau. */
+  nahtzugabeDraftMm: number | null
   /** Dialog „Teil-Eigenschaften“ (Name, Flächenfüllung). */
   piecePropertiesDialogPieceId: string | null
   /** Dialog Dickenkorrektur (Abwicklung an Materialdicke). */
@@ -687,6 +689,7 @@ type Store = {
   setRulerLine: (v: { start: Point; end: Point } | null) => void
   setPendingNahtzugabeClick: (v: boolean) => void
   setNahtzugabeDialogPieceId: (v: string | null) => void
+  setNahtzugabeDraftMm: (v: number | null) => void
   setPiecePropertiesDialogPieceId: (v: string | null) => void
   setThicknessCorrectionDialogPieceId: (v: string | null) => void
   setEdgeSeamPickingActive: (v: boolean) => void
@@ -1195,6 +1198,7 @@ export const useStore = create<Store>()(
   rulerLine: null,
   pendingNahtzugabeClick: false,
   nahtzugabeDialogPieceId: null,
+  nahtzugabeDraftMm: null,
   piecePropertiesDialogPieceId: null,
   thicknessCorrectionDialogPieceId: null,
   edgeSeamPickingActive: false,
@@ -1833,7 +1837,9 @@ export const useStore = create<Store>()(
   setRulerMode: (v) => set({ rulerMode: v }),
   setRulerLine: (v) => set({ rulerLine: v }),
   setPendingNahtzugabeClick: (v) => set({ pendingNahtzugabeClick: v }),
-  setNahtzugabeDialogPieceId: (v) => set({ nahtzugabeDialogPieceId: v }),
+  setNahtzugabeDialogPieceId: (v) =>
+    set({ nahtzugabeDialogPieceId: v, ...(v == null ? { nahtzugabeDraftMm: null } : {}) }),
+  setNahtzugabeDraftMm: (v) => set({ nahtzugabeDraftMm: v }),
   setPiecePropertiesDialogPieceId: (v) => set({ piecePropertiesDialogPieceId: v }),
   setThicknessCorrectionDialogPieceId: (v) => set({ thicknessCorrectionDialogPieceId: v }),
   setEdgeSeamPickingActive: (v) => set({ edgeSeamPickingActive: v }),
@@ -5152,6 +5158,7 @@ export const useStore = create<Store>()(
       digitizeState: null,
       pendingNahtzugabeClick: false,
       nahtzugabeDialogPieceId: null,
+      nahtzugabeDraftMm: null,
       piecePropertiesDialogPieceId: null,
       thicknessCorrectionDialogPieceId: null,
       edgeSeamPickingActive: false,
@@ -5454,6 +5461,7 @@ export const useStore = create<Store>()(
       digitizeState: null,
       pendingNahtzugabeClick: false,
       nahtzugabeDialogPieceId: null,
+      nahtzugabeDraftMm: null,
       piecePropertiesDialogPieceId: null,
       thicknessCorrectionDialogPieceId: null,
       edgeSeamPickingActive: false,

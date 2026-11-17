@@ -133,6 +133,7 @@ export function Toolbar() {
     setPieceSymmetryState,
     faechernState,
     setFaechernState,
+    setNahtzugabeDraftMm,
   } = useStore(
     useShallow((s) => ({
       tool: s.tool,
@@ -198,9 +199,15 @@ export function Toolbar() {
       setPieceSymmetryState: s.setPieceSymmetryState,
       faechernState: s.faechernState,
       setFaechernState: s.setFaechernState,
+      setNahtzugabeDraftMm: s.setNahtzugabeDraftMm,
     })),
   )
   const [nahtzugabeMm, setNahtzugabeMm] = useState('8')
+  useEffect(() => {
+    if (!nahtzugabeDialogPieceId) return
+    const mm = parseFloat(nahtzugabeMm)
+    setNahtzugabeDraftMm(Number.isFinite(mm) ? mm : null)
+  }, [nahtzugabeDialogPieceId, nahtzugabeMm, setNahtzugabeDraftMm])
   const { view } = workspace
   const [openMenu, setOpenMenu] = useState<MenuId>(null)
   const [erzeugenSubmenu, setErzeugenSubmenu] = useState<'interne-elemente' | 'konfigurator' | null>(null)
@@ -1518,7 +1525,7 @@ export function Toolbar() {
               </p>
             )}
             <p className="nahtzugabe-dialog-hint">
-              Die bestehende Kontur wird zur Nahtlinie; die CutLine (Schnittlinie) wird um diesen Abstand nach außen hinzugefügt.
+              Die bestehende Kontur wird zur Nahtlinie; die Schnittlinie wird um diesen Abstand nach außen gelegt. Die blasse Linie auf dem Teil ist die Vorschau. Abbrechen verwirft sie.
             </p>
             <label className="nahtzugabe-dialog-label">
               <span>Nahtzugabe (mm)</span>

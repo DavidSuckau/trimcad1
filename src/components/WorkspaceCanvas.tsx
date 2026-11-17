@@ -82,7 +82,9 @@ import {
   getDisplayedMasterCurves,
   getSharpMasterCurves,
 } from '../geometry/vertexMaster'
-import { faechernHitFromLocal, planFaechern, type FaechernHit } from '../geometry/faechern'
+import { applyFaechernToPiece, faechernHitFromLocal, planFaechern, type FaechernHit } from '../geometry/faechern'
+import { applyPieceSymmetryToPiece } from '../symmetry/applyPieceSymmetryToPiece'
+import { deriveCutLineForPiece } from '../geometry/deriveCutLineForPiece'
 import { vertexPositionOnClosedMaster, validateCornerRound, ROUND_CORNER_MIN_RADIUS_MM, ROUND_CORNER_MAX_RADIUS_MM, applyCornerRoundings } from '../geometry/cornerRounding'
 import { getCutLineContourMeasurements } from '../geometry/contourMeasurements'
 import { enumerateEdges, getAllowanceForCurveIndex } from '../geometry/edgeEnumeration'
@@ -2378,6 +2380,24 @@ function seamDisplayCurves(piece: PatternPiece, indices: number[]): Curve[] {
   return indices.map((ci) => master[ci]).filter((c): c is Curve => c != null)
 }
 
+function closedCurvesWorldPathD(piece: PatternPiece, curves: Curve[]): string {
+  if (curves.length === 0) return ''
+  const parts: string[] = []
+  curves.forEach((seg, i) => {
+    const ws = pieceLocalToWorld(seg.start, piece)
+    const we = pieceLocalToWorld(seg.end, piece)
+    if (i === 0) parts.push(`M ${ws.x} ${ws.y}`)
+    if (seg.type === 'line') parts.push(`L ${we.x} ${we.y}`)
+    else {
+      const c1 = pieceLocalToWorld(seg.cp1, piece)
+      const c2 = pieceLocalToWorld(seg.cp2, piece)
+      parts.push(`C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${we.x} ${we.y}`)
+    }
+  })
+  parts.push('Z')
+  return parts.join(' ')
+}
+
 function curvesToWorldPathD(piece: PatternPiece, curves: Curve[]): string {
   let d = ''
   for (const seg of curves) {
@@ -2508,6 +2528,8 @@ export function WorkspaceCanvas() {
     faechernState,
     setFaechernState,
     applyFaechern,
+    nahtzugabeDialogPieceId,
+    nahtzugabeDraftMm,
     applyPieceSymmetry,
     clearPieceSymmetry,
     alignPieceEdgeHorizontal,
@@ -2662,6 +2684,8 @@ export function WorkspaceCanvas() {
       faechernState: s.faechernState,
       setFaechernState: s.setFaechernState,
       applyFaechern: s.applyFaechern,
+      nahtzugabeDialogPieceId: s.nahtzugabeDialogPieceId,
+      nahtzugabeDraftMm: s.nahtzugabeDraftMm,
       applyPieceSymmetry: s.applyPieceSymmetry,
       clearPieceSymmetry: s.clearPieceSymmetry,
       alignPieceEdgeHorizontal: s.alignPieceEdgeHorizontal,
@@ -2800,6 +2824,11 @@ export function WorkspaceCanvas() {
   /** Weltpunkt für Vorschau Linie 2. Spiegelpunkt (Symmetrie-Modus). */
   const [symmetryHoverWorld, setSymmetryHoverWorld] = useState<Point | null>(null)
   const [faechernHover, setFaechernHover] = useState<FaechernHit | null>(null)
+  const [faechernArmed, setFaechernArmed] = useState(false)
+  const faechernCommitRef = useRef<FaechernHit | null>(null)
+  const [symmetryPreviewSide, setSymmetryPreviewSide] = useState<'left' | 'right' | null>(null)
+  const [symmetryArmed, setSymmetryArmed] = useState(false)
+  const symmetryCommitRef = useRef<'left' | 'right' | null>(null)
   /** Symmetrie: gerade Master-Kante als Achse (wie Wasserwaage). */
   const [hoveredSymmetryEdge, setHoveredSymmetryEdgeRaw] = useState<{
     pieceId: string
@@ -3574,10 +3603,19 @@ export function WorkspaceCanvas() {
   }, [faechernState, selectedPieceIds, setFaechernState])
 
   useEffect(() => {
-    if (!faechernState) setFaechernHover(null)
+    if (!faechernState) {
+      faechernCommitRef.current = null
+      setFaechernArmed(false)
+      setFaechernHover(null)
+    }
   }, [faechernState])
 
   useEffect(() => {
+    if (pieceSymmetryState?.phase !== 'pickSide') {
+      symmetryCommitRef.current = null
+      setSymmetryArmed(false)
+      setSymmetryPreviewSide(null)
+    }
     if (!pieceSymmetryState) {
       setSymmetryHoverWorld(null)
       setHoveredSymmetryEdge(null)
@@ -3805,7 +3843,10 @@ export function WorkspaceCanvas() {
           setToastMessage('info:Die zweite Öffnung auf einen anderen Punkt setzen.')
           return
         }
-        applyFaechern(piece.id, faechernState.pivot, faechernState.openingA, hit)
+        faechernCommitRef.current = hit
+        setFaechernArmed(true)
+        setFaechernHover(hit)
+        ;(e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId)
         return
       }
       const sym = pieceSymmetryState
@@ -3898,16 +3939,15 @@ export function WorkspaceCanvas() {
           return
         } else if (sym.phase === 'pickSide' && sym.axisA && sym.axisB) {
           const c = crossZ(sym.axisA, sym.axisB, local)
-          if (Math.abs(c) < 1e-4) {
-            setToastMessage('warn:Bitte links oder rechts der Spiegelachse klicken.')
+          if (!isPointInsidePiece(local, piece) || Math.abs(c) < 1e-4) {
+            setToastMessage('warn:Die Seite im Teil gedrückt halten. Wegziehen bricht ab.')
             return
           }
           const keepSide = c >= 0 ? 'left' : 'right'
-          applyPieceSymmetry(sym.pieceId, sym.axisA, sym.axisB, keepSide)
-          setPieceSymmetryState(null)
-          setSymmetryHoverWorld(null)
-          setHoveredSymmetryEdge(null)
-          setHoveredSymmetryInternalIdx(null)
+          symmetryCommitRef.current = keepSide
+          setSymmetryPreviewSide(keepSide)
+          setSymmetryArmed(true)
+          ;(e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId)
           return
         }
         // chooseMethod / fehlgeschlagene Kante oder interne Linie: nicht in normale Bearbeitung fallen
@@ -6362,9 +6402,47 @@ export function WorkspaceCanvas() {
         if (piece) {
           const local = worldToPieceLocal(worldSym, piece)
           const hitMm = Math.max(4, 10 / Math.max(view.zoom, 0.2))
-          setFaechernHover(faechernHitFromLocal(getSharpMasterCurves(piece), local, hitMm))
+          const hit = faechernHitFromLocal(getSharpMasterCurves(piece), local, hitMm)
+          const farEnough = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y) >= 1.5
+          const usable =
+            hit != null &&
+            (!faechernState.pivot || farEnough(hit.point, faechernState.pivot.point)) &&
+            (!faechernState.openingA || farEnough(hit.point, faechernState.openingA.point))
+          if (faechernCommitRef.current) {
+            if (usable && hit) {
+              faechernCommitRef.current = hit
+              setFaechernHover(hit)
+            } else {
+              faechernCommitRef.current = null
+              setFaechernArmed(false)
+              setFaechernHover(hit)
+            }
+          } else {
+            setFaechernHover(hit)
+          }
         } else {
           setFaechernHover(null)
+        }
+      }
+      if (pieceSymmetryState?.phase === 'pickSide' && pieceSymmetryState.axisA && pieceSymmetryState.axisB) {
+        const piece = pieces.find((p) => p.id === pieceSymmetryState.pieceId)
+        if (piece) {
+          const local = worldToPieceLocal(worldSym, piece)
+          const c = crossZ(pieceSymmetryState.axisA, pieceSymmetryState.axisB, local)
+          const side =
+            isPointInsidePiece(local, piece) && Math.abs(c) >= 1e-4
+              ? c >= 0
+                ? 'left'
+                : 'right'
+              : null
+          setSymmetryPreviewSide((prev) => (prev === side ? prev : side))
+          if (symmetryCommitRef.current) {
+            if (side) symmetryCommitRef.current = side
+            else {
+              symmetryCommitRef.current = null
+              setSymmetryArmed(false)
+            }
+          }
         }
       }
 
@@ -7245,6 +7323,11 @@ export function WorkspaceCanvas() {
         setHoveredSymmetryEdge(null)
         setHoveredSymmetryInternalIdx(null)
         setFlipByEdgeActive(false)
+        faechernCommitRef.current = null
+        symmetryCommitRef.current = null
+        setFaechernArmed(false)
+        setSymmetryArmed(false)
+        setSymmetryPreviewSide(null)
         setFaechernState(null)
         setFaechernHover(null)
         cancelNahtTrimVertexPick()
@@ -7711,6 +7794,46 @@ export function WorkspaceCanvas() {
       } else {
         return
       }
+    }
+    if (faechernCommitRef.current || symmetryCommitRef.current) {
+      const armedFaechern = faechernCommitRef.current
+      const armedSymmetry = symmetryCommitRef.current
+      faechernCommitRef.current = null
+      symmetryCommitRef.current = null
+      setFaechernArmed(false)
+      setSymmetryArmed(false)
+      if (!_e) return
+      const worldUp = toWorld(_e.clientX, _e.clientY)
+      const st = useStore.getState()
+      if (armedFaechern && st.faechernState?.pivot && st.faechernState.openingA) {
+        const piece = st.workspace.pieces.find((p) => p.id === st.faechernState!.pieceId)
+        if (!piece) return
+        const local = worldToPieceLocal(worldUp, piece)
+        const hitMm = Math.max(4, 10 / Math.max(st.workspace.view.zoom, 0.2))
+        const hit = faechernHitFromLocal(getSharpMasterCurves(piece), local, hitMm)
+        const apart = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y) >= 1.5
+        if (
+          hit &&
+          apart(hit.point, st.faechernState.pivot.point) &&
+          apart(hit.point, st.faechernState.openingA.point)
+        ) {
+          st.applyFaechern(piece.id, st.faechernState.pivot, st.faechernState.openingA, hit)
+        }
+        return
+      }
+      const sym = st.pieceSymmetryState
+      if (armedSymmetry && sym?.phase === 'pickSide' && sym.axisA && sym.axisB) {
+        const piece = st.workspace.pieces.find((p) => p.id === sym.pieceId)
+        if (!piece) return
+        const local = worldToPieceLocal(worldUp, piece)
+        const c = crossZ(sym.axisA, sym.axisB, local)
+        if (isPointInsidePiece(local, piece) && Math.abs(c) >= 1e-4) {
+          st.applyPieceSymmetry(sym.pieceId, sym.axisA, sym.axisB, c >= 0 ? 'left' : 'right')
+          st.setPieceSymmetryState(null)
+        }
+        return
+      }
+      return
     }
     if (dragging?.kind === 'digitizeDrag') {
       finishDigitizeDrag()
@@ -10785,12 +10908,14 @@ export function WorkspaceCanvas() {
             if (faechernState.openingA) dots.push(faechernState.openingA.point)
             if (faechernHover) dots.push(faechernHover.point)
             let wedgeD = ''
-            if (faechernState.pivot && faechernState.openingA && faechernHover) {
+            let ghostD = ''
+            const previewHit = faechernArmed && faechernCommitRef.current ? faechernCommitRef.current : faechernHover
+            if (faechernState.pivot && faechernState.openingA && previewHit) {
               const plan = planFaechern(
                 getSharpMasterCurves(piece),
                 faechernState.pivot,
                 faechernState.openingA,
-                faechernHover,
+                previewHit,
               )
               if (plan.ok && plan.plan.wedge.length >= 3) {
                 wedgeD = plan.plan.wedge
@@ -10801,9 +10926,25 @@ export function WorkspaceCanvas() {
                   .join(' ')
                 wedgeD += ' Z'
               }
+              const closed = applyFaechernToPiece(
+                piece,
+                faechernState.pivot,
+                faechernState.openingA,
+                previewHit,
+              )
+              if (closed.ok) ghostD = closedCurvesWorldPathD(piece, closed.piece.cutLine)
             }
             return (
               <g key="faechern-preview" pointerEvents="none">
+                {ghostD && (
+                  <path
+                    d={ghostD}
+                    fill={faechernArmed ? 'rgba(15,118,110,0.22)' : 'rgba(15,118,110,0.12)'}
+                    stroke="#0f766e"
+                    strokeWidth={faechernArmed ? 1.1 : 0.8}
+                    strokeDasharray={faechernArmed ? undefined : '4 3'}
+                  />
+                )}
                 {wedgeD && <path d={wedgeD} fill="rgba(220,38,38,0.28)" stroke="#dc2626" strokeWidth={0.4} />}
                 {faechernState.pivot && faechernState.openingA && line(faechernState.pivot.point, faechernState.openingA.point, 'faechern-a')}
                 {faechernState.pivot && faechernHover && line(faechernState.pivot.point, faechernHover.point, 'faechern-b')}
@@ -10822,22 +10963,37 @@ export function WorkspaceCanvas() {
               const a = pieceSymmetryState.axisA
               const b = pieceSymmetryState.axisB
               const clipped = symmetryAxisClippedToPieceBounds(a, b, piece.cutLine)
-              if (!clipped) return null
-              const w1 = pieceLocalToWorld(clipped.p1, piece)
-              const w2 = pieceLocalToWorld(clipped.p2, piece)
+              const w1 = clipped ? pieceLocalToWorld(clipped.p1, piece) : null
+              const w2 = clipped ? pieceLocalToWorld(clipped.p2, piece) : null
+              let ghostD = ''
+              if (symmetryPreviewSide) {
+                const preview = applyPieceSymmetryToPiece(piece, a, b, symmetryPreviewSide)
+                if (preview.ok) ghostD = closedCurvesWorldPathD(piece, preview.piece.cutLine)
+              }
               return (
-                <line
-                  key="piece-symmetry-axis"
-                  x1={w1.x}
-                  y1={w1.y}
-                  x2={w2.x}
-                  y2={w2.y}
-                  stroke="#0d9488"
-                  strokeWidth={1.15}
-                  strokeDasharray="6 4"
-                  pointerEvents="none"
-                  opacity={0.9}
-                />
+                <g key="piece-symmetry-preview" pointerEvents="none">
+                  {ghostD && (
+                    <path
+                      d={ghostD}
+                      fill={symmetryArmed ? 'rgba(13,148,136,0.22)' : 'rgba(13,148,136,0.12)'}
+                      stroke="#0f766e"
+                      strokeWidth={symmetryArmed ? 1.1 : 0.8}
+                      strokeDasharray={symmetryArmed ? undefined : '4 3'}
+                    />
+                  )}
+                  {w1 && w2 && (
+                    <line
+                      x1={w1.x}
+                      y1={w1.y}
+                      x2={w2.x}
+                      y2={w2.y}
+                      stroke="#0d9488"
+                      strokeWidth={1.15}
+                      strokeDasharray="6 4"
+                      opacity={0.9}
+                    />
+                  )}
+                </g>
               )
             }
             if (pieceSymmetryState.phase === 'axisB' && symmetryHoverWorld) {
@@ -10860,6 +11016,35 @@ export function WorkspaceCanvas() {
             }
             return null
           })()}
+          {nahtzugabeDialogPieceId != null &&
+            nahtzugabeDraftMm != null &&
+            nahtzugabeDraftMm >= 0.5 &&
+            nahtzugabeDraftMm <= 50 &&
+            (() => {
+              const piece = pieces.find((p) => p.id === nahtzugabeDialogPieceId)
+              if (!piece) return null
+              const source = piece.seamLine.length >= 3 ? piece.seamLine : piece.cutLine
+              if (source.length < 3) return null
+              const derived = deriveCutLineForPiece(
+                { ...piece, seamAllowanceMm: nahtzugabeDraftMm },
+                source,
+                nahtzugabeDraftMm,
+              )
+              if (!derived.ok) return null
+              const d = closedCurvesWorldPathD(piece, derived.cutLine)
+              if (!d) return null
+              return (
+                <path
+                  key="nahtzugabe-preview"
+                  d={d}
+                  fill="rgba(37,99,235,0.12)"
+                  stroke="#2563eb"
+                  strokeWidth={0.8}
+                  strokeDasharray="4 3"
+                  pointerEvents="none"
+                />
+              )
+            })()}
           {horizontalLevelPickingActive && hoveredHorizontalLevelEdge && (() => {
             const piece = pieces.find((p) => p.id === hoveredHorizontalLevelEdge.pieceId)
             if (!piece) return null
@@ -12656,11 +12841,15 @@ export function WorkspaceCanvas() {
               ? 'Fächern: Drehpunkt anklicken. Dort laufen die beiden Linien zusammen.'
               : !faechernState.openingA
                 ? 'Erste Öffnung anklicken. Diese Kante bleibt liegen.'
-                : 'Zweite Öffnung anklicken. Diese Seite dreht zu, der Bereich dazwischen fällt weg.'}
+                : faechernArmed
+                  ? 'Loslassen übernimmt die blasse Kontur. Wegziehen bricht ab.'
+                  : 'Die blasse Kontur ist das Ergebnis. Gedrückt halten und loslassen übernimmt, wegziehen bricht ab.'}
           </span>
           <button
             type="button"
             onClick={() => {
+              faechernCommitRef.current = null
+              setFaechernArmed(false)
               setFaechernState(null)
               setFaechernHover(null)
             }}
@@ -12772,12 +12961,17 @@ export function WorkspaceCanvas() {
           )}
           {pieceSymmetryState.phase === 'pickSide' && (
             <span>
-              Seite anklicken, die als Vorlage behalten werden soll (die andere Hälfte wird gespiegelt).
+              {symmetryArmed
+                ? 'Loslassen übernimmt die blasse Kontur. Wegziehen bricht ab.'
+                : 'Die blasse Kontur zeigt die Spiegelung. Gedrückt halten und loslassen übernimmt, wegziehen bricht ab.'}
             </span>
           )}
           <button
             type="button"
             onClick={() => {
+              symmetryCommitRef.current = null
+              setSymmetryArmed(false)
+              setSymmetryPreviewSide(null)
               setPieceSymmetryState(null)
               setSymmetryHoverWorld(null)
               setHoveredSymmetryEdge(null)
