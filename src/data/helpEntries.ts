@@ -347,7 +347,7 @@ export const HELP_ENTRIES: HelpEntry[] = [
     category: 'Naht',
     name: 'Nahtzuordnung',
     description:
-      'Zwei Kanten verschiedener Teile als zusammengehörige Naht zuordnen. Nach dem Start den Startpunkt (Ecke) auf dem ersten Teil anklicken, dann den Startpunkt auf dem zweiten Teil. Der Pfeil am Startpunkt zeigt, in welcher Richtung gemessen wird.',
+      'Zwei Kanten verschiedener Teile als zusammengehörige Naht zuordnen. Nach dem Start den Startpunkt (Ecke) auf dem ersten Teil anklicken, dann den Startpunkt auf dem zweiten Teil. Der Pfeil am Startpunkt zeigt, in welcher Richtung gemessen wird. Anfang und Ende werden so abgeschnitten, dass die Ecken aufeinander liegen, wenn man die Teile auf der Naht deckt. Die Nahtzugabe bleibt parallel zur Naht.',
     access: 'Menü Naht → Nahtzuordnung',
     shortcut: undefined,
   },

@@ -2046,7 +2046,7 @@ export const useStore = create<Store>()(
           pieces: trimmedPieces,
         },
         toastMessage:
-          'success:Naht-Ecken: Überstehende Miter-Spitzen an der Schnittkontur zur Zuordnung angeglichen (Nahtlinie und parallele Nahtzugabe unverändert).',
+          'success:Naht-Ecken: Anfang und Ende liegen auf der anderen Ecke. Die Nahtzugabe bleibt parallel zur Naht.',
       }))
     }
     // Direkt nach dem Zuordnen denselben zentralen Check wie nach Drag-Ende ausführen,

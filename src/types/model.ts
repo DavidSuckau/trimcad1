@@ -390,7 +390,7 @@ export type Workspace = {
   /** Nahtzuordnungen (welche Naht an welcher zusammennähen). Nur für die Ansicht, nicht DXF-Export. */
   seamAssignments: SeamAssignment[]
   /**
-   * true (default): Bei Nahtzuordnung werden überstehende Miter-Ecken an beiden Teilen automatisch angeglichen.
+   * true (default): Bei Nahtzuordnung wird die überstehende Ecke an Anfang und Ende der Naht abgeschnitten. Die Nahtzugabe bleibt parallel.
    * false: Keine automatische Eck-Anpassung.
    */
   autoAdjustSeamAssignmentCorners?: boolean
