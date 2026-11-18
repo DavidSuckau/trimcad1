@@ -3717,13 +3717,11 @@ export const useStore = create<Store>()(
       const LINE_SPLIT_MIN_MM = 0.5
       let toastMessage: string | null = null
       let manualSeamTrimReset = false
-      const workspaceInsert = {
-        workspace: {
-          ...s.workspace,
-          // Bei Master-Kontur-Splits (cutLine oder seamLine) müssen die SeamAssignment-Indizes remapped werden.
-          // getCurvesForSeamEdge erwartet Master-Indizes, und `curveIndex` ist auf genau dieser Master-Kontur angegeben.
-          seamAssignments: adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex),
-          pieces: syncLinkedPiecesFromParents(s.workspace.pieces.map((p) => {
+      let didDeriveCutLineFromSeam = false
+      // Bei Master-Kontur-Splits (cutLine oder seamLine) müssen die SeamAssignment-Indizes remapped werden.
+      // getCurvesForSeamEdge erwartet Master-Indizes, und `curveIndex` ist auf genau dieser Master-Kontur angegeben.
+      const seamAssignments = adjustSeamAfterInsert(s.workspace.seamAssignments, pieceId, curveIndex)
+      const mappedPieces = s.workspace.pieces.map((p) => {
             if (p.id !== pieceId) return p
             const mappedInsert = mapCurveEditForSymmetry(p, curveIndex, point)
             const editCurveIndex = mappedInsert.curveIndex
@@ -3793,6 +3791,7 @@ export const useStore = create<Store>()(
                 toastMessage = `warn:${derived.message}`
                 return p
               }
+              didDeriveCutLineFromSeam = true
               const cutLine = derived.cutLine
               const notches = resyncNotchesAfterCutLineRebuilt(p.notches, p.cutLine, cutLine)
               const insertedOnSeam = newMaster[editCurveIndex].end
@@ -3853,7 +3852,18 @@ export const useStore = create<Store>()(
               insertedVertexIndex,
               insertedPoint
             )
-          })),
+      })
+      const piecesAfterTrim =
+        didDeriveCutLineFromSeam && seamAssignments.length > 0
+          ? reapplySeamAssignmentCutTrimsForAllPieces(mappedPieces, seamAssignments, {
+              enabled: s.workspace.autoAdjustSeamAssignmentCorners !== false,
+            }).pieces
+          : mappedPieces
+      const workspaceInsert = {
+        workspace: {
+          ...s.workspace,
+          seamAssignments,
+          pieces: syncLinkedPiecesFromParents(piecesAfterTrim),
         },
       }
       const mergedInsertToast = mergeWarnToasts(

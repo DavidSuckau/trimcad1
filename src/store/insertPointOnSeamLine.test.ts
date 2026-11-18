@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useStore } from './useStore'
 import { edgeTotalLength, masterSoftVertexIndexSet, resolvedSeamAssignmentCurveIndices } from '../geometry/seamUtils'
-import type { Workspace, Curve } from '../types/model'
+import { deriveCutLineFromSeamWithValidation } from '../geometry/offset'
+import { applySeamAssignmentCutTrim } from '../geometry/seamAssignmentCutTrim'
+import type { Workspace, Curve, PatternPiece } from '../types/model'
 
 function square(size: number): Curve[] {
   return [
@@ -164,6 +166,93 @@ describe('insertPointOnCutLine (seam master)', () => {
     const notchAfter = p1After.notches.find((n) => n.id === 'n1')!
     expect(notchAfter.vertexIndex).toBeUndefined()
     expect(notchAfter.sNormalized).toBeDefined()
+  })
+
+  it('behält die abgeschnittene Nahtecke, wenn danach ein Punkt auf die Naht gesetzt wird', () => {
+    const sa = 10
+    const sharpSeam: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 80 } },
+      { type: 'line', start: { x: 100, y: 80 }, end: { x: 36, y: 80 } },
+      { type: 'line', start: { x: 36, y: 80 }, end: { x: 0, y: 0 } },
+    ]
+    const squareSeam: Curve[] = [
+      { type: 'line', start: { x: 0, y: 0 }, end: { x: 100, y: 0 } },
+      { type: 'line', start: { x: 100, y: 0 }, end: { x: 100, y: 80 } },
+      { type: 'line', start: { x: 100, y: 80 }, end: { x: 0, y: 80 } },
+      { type: 'line', start: { x: 0, y: 80 }, end: { x: 0, y: 0 } },
+    ]
+    const withCut = (id: string, seam: Curve[]): PatternPiece => {
+      const derived = deriveCutLineFromSeamWithValidation(seam, sa)
+      if (!derived.ok) throw new Error(derived.message)
+      return {
+        id,
+        number: id,
+        name: id,
+        cutLine: derived.cutLine,
+        seamLine: seam,
+        seamAllowanceMm: sa,
+        notches: [],
+        drills: [],
+        grainLine: null,
+        internalLines: [],
+        internalCircles: [],
+        layer: 'CUT',
+        transform: { x: 0, y: 0, rotation: 0, mirrored: false },
+        softVertices: [],
+        fillInterior: true,
+        material: '',
+        bomQuantity: 1,
+      }
+    }
+    const trimmed = applySeamAssignmentCutTrim(withCut('sharp', sharpSeam), withCut('square', squareSeam), [0], [0], {
+      measureDirA: 1,
+      measureDirB: 1,
+    })
+    expect(trimmed).not.toBeNull()
+    const leftOf = (piece: PatternPiece) => {
+      let left = Infinity
+      for (const c of piece.cutLine) {
+        if (c.type !== 'line') continue
+        if (Math.abs(c.start.y - -sa) < 0.6 && Math.abs(c.end.y - -sa) < 0.6 && Math.abs(c.end.y - c.start.y) < 0.4) {
+          left = Math.min(left, c.start.x, c.end.x)
+        }
+      }
+      return left
+    }
+    const leftBefore = leftOf(trimmed!.pieceA)
+    expect(leftBefore).toBeCloseTo(-sa, 0)
+
+    useStore.setState({
+      workspace: {
+        id: 'ws-corner-survives-point',
+        name: 'Test',
+        pieces: [trimmed!.pieceA, trimmed!.pieceB],
+        view: { zoom: 1, panX: 0, panY: 0 },
+        seamAssignments: [
+          {
+            id: 'a1',
+            pieceIdA: 'sharp',
+            curveIndicesA: [0],
+            clickedCurveA: 0,
+            measureDirA: 1,
+            pieceIdB: 'square',
+            curveIndicesB: [0],
+            clickedCurveB: 0,
+            measureDirB: 1,
+          },
+        ],
+        autoAdjustSeamAssignmentCorners: true,
+      },
+      selectedPieceIds: ['sharp'],
+    })
+
+    const inserted = useStore.getState().insertPointOnCutLine('sharp', 0, { x: 50, y: 0 }, 0.5)
+    expect(inserted).toBe(true)
+    const sharp = useStore.getState().workspace.pieces.find((p) => p.id === 'sharp')!
+    expect(sharp.seamLine.length).toBe(5)
+    expect(leftOf(sharp)).toBeCloseTo(-sa, 0)
+    expect(leftOf(sharp)).toBeGreaterThan(leftBefore - 1)
   })
 
 })
